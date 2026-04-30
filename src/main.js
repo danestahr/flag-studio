@@ -2,7 +2,7 @@ import './style.css';
 import { S, _dragLogoId, setDragLogoId } from './state.js';
 import { FLAGS, COLORS } from './data.js';
 import { getFlag, applyColors, makeSvg, renderInto } from './render.js';
-import { saveDraft as supabaseSaveDraft } from './supabase.js';
+import { saveDraft as supabaseSaveDraft, listDrafts, loadOrder, uploadLogo, loadLogosForOrder, deleteLogo } from './supabase.js';
 
 // ── NAV ───────────────────────────────────────────────────
 function currentStep() {
@@ -124,33 +124,55 @@ window.cApply = function (z) {
 };
 
 // ── STEP 3 ────────────────────────────────────────────────
-window.handleUpload = function (e) {
-  Array.from(e.target.files).forEach(file => {
-    const r = new FileReader();
-    r.onload = ev => {
-      const id = 'l' + Date.now() + Math.random().toString(36).slice(2, 5);
-      S.library.push({ id, name: file.name.replace(/\.[^.]+$/, ''), src: ev.target.result });
-      renderLib();
-      syncSidebar();
-    };
-    r.readAsDataURL(file);
-  });
+window.handleUpload = async function (e) {
+  const files = Array.from(e.target.files);
   e.target.value = '';
+
+  for (const file of files) {
+    // Show a local preview immediately while uploading
+    const localSrc = await new Promise(res => {
+      const r = new FileReader();
+      r.onload = ev => res(ev.target.result);
+      r.readAsDataURL(file);
+    });
+    const tempId = 'tmp-' + Date.now();
+    S.library.push({ id: tempId, name: file.name.replace(/\.[^.]+$/, ''), src: localSrc, uploading: true });
+    renderLib();
+    syncSidebar();
+
+    try {
+      // Ensure we have an order to attach the logo to
+      if (!S.orderId) {
+        S.orderId = await supabaseSaveDraft(S);
+        await renderDraftsList();
+      }
+      const logo = await uploadLogo(S.orderId, file);
+      // Replace temp entry with the persisted one
+      const idx = S.library.findIndex(l => l.id === tempId);
+      if (idx !== -1) S.library[idx] = logo;
+    } catch (err) {
+      console.error('Logo upload failed', err);
+      S.library = S.library.filter(l => l.id !== tempId);
+    }
+    renderLib();
+    syncSidebar();
+  }
 };
 
 function renderLib() {
   const g = document.getElementById('libGrid');
   if (!S.library.length) { g.innerHTML = '<div class="lib-empty">No logos yet</div>'; return; }
   g.innerHTML = S.library.map(l => `
-    <div class="lib-item" id="li-${l.id}" draggable="true"
+    <div class="lib-item ${l.uploading ? 'uploading' : ''}" id="li-${l.id}" draggable="${!l.uploading}"
       ondragstart="dragStart(event,'${l.id}')" ondragend="dragEnd('${l.id}')">
       <img src="${l.src}" alt="${l.name}">
-      <div class="lib-item-name">${l.name}</div>
-      <button class="lib-del" onclick="delLogo('${l.id}')">×</button>
+      <div class="lib-item-name">${l.uploading ? '↑ uploading…' : l.name}</div>
+      ${l.uploading ? '' : `<button class="lib-del" onclick="delLogo('${l.id}')">×</button>`}
     </div>`).join('');
 }
 
-window.delLogo = function (id) {
+window.delLogo = async function (id) {
+  const logo = S.library.find(l => l.id === id);
   S.library = S.library.filter(l => l.id !== id);
   [S.baseAssignment, ...S.variations.map(v => v.assignment)].forEach(a => {
     Object.keys(a).forEach(z => { if (a[z] === id) delete a[z]; });
@@ -158,6 +180,9 @@ window.delLogo = function (id) {
   renderLib();
   renderDropZones('baseWrap', 'baseSvg', S.baseAssignment);
   syncSidebar();
+  if (logo?.storagePath) {
+    try { await deleteLogo(logo.storagePath, logo.id); } catch (err) { console.error('Storage delete failed', err); }
+  }
 };
 
 window.dragStart = function (e, id) {
@@ -456,11 +481,85 @@ window.saveDraft = async function () {
     S.orderId = id;
     status.textContent = 'Saved';
     setTimeout(() => { status.textContent = ''; }, 3000);
+    await renderDraftsList();
   } catch (err) {
     console.error(err);
     status.textContent = 'Save failed';
   } finally {
     btn.disabled = false;
+  }
+};
+
+// ── PROJECT NAME ──────────────────────────────────────────
+window.setEventName = function (val) { S.eventName = val; };
+
+// ── NEW PROJECT ───────────────────────────────────────────
+window.newProject = function () {
+  S.orderId = null;
+  S.eventName = '';
+  S.flagId = null;
+  S.colors = {};
+  S.library = [];
+  S.baseAssignment = {};
+  S.variations = [];
+  S.activeVarId = null;
+  S.gIndex = 0;
+  document.getElementById('eventNameInput').value = '';
+  document.querySelectorAll('.draft-item').forEach(el => el.classList.remove('active'));
+  goStep(1);
+  syncSidebar();
+};
+
+// ── DRAFTS LIST ───────────────────────────────────────────
+async function renderDraftsList() {
+  const container = document.getElementById('draftsList');
+  try {
+    const drafts = await listDrafts();
+    if (!drafts.length) {
+      container.innerHTML = '<div style="font-size:13px;color:var(--gray-400)">No drafts yet</div>';
+      return;
+    }
+    container.innerHTML = drafts.map(d => {
+      const name = d.event_name || 'Untitled';
+      const date = new Date(d.updated_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      const style = d.flag_id ? d.flag_id.charAt(0).toUpperCase() + d.flag_id.slice(1) : '—';
+      const isActive = d.id === S.orderId;
+      return `<div class="draft-item ${isActive ? 'active' : ''}" onclick="openDraft('${d.id}')">
+        <div class="draft-name">${name}</div>
+        <div class="draft-meta">${style} · ${date}</div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    console.error(err);
+    container.innerHTML = '<div style="font-size:13px;color:var(--gray-400)">Could not load drafts</div>';
+  }
+}
+
+window.openDraft = async function (id) {
+  try {
+    const order = await loadOrder(id);
+    S.orderId = order.id;
+    S.eventName = order.event_name || '';
+    S.flagId = order.flag_id;
+    S.colors = order.colors || {};
+    S.variations = (order.variations || []).map(v => ({ ...v, assignment: {} }));
+    S.activeVarId = S.variations[0]?.id || null;
+    S.library = await loadLogosForOrder(order.id);
+    S.baseAssignment = {};
+    S.gIndex = 0;
+    document.getElementById('eventNameInput').value = S.eventName;
+    document.querySelectorAll('.draft-item').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.draft-item').forEach(el => {
+      if (el.getAttribute('onclick')?.includes(id)) el.classList.add('active');
+    });
+    goStep(1);
+    syncSidebar();
+    document.getElementById('s1next').disabled = !S.flagId;
+    document.getElementById('s1hint').textContent = S.flagId ? '' : 'Select a style to continue';
+    if (S.flagId) document.getElementById('fc-' + S.flagId)?.classList.add('selected');
+  } catch (err) {
+    console.error(err);
+    alert('Could not load draft');
   }
 };
 
@@ -487,3 +586,4 @@ function syncSidebar() {
 
 // ── INIT ──────────────────────────────────────────────────
 renderFlagGrid();
+renderDraftsList();

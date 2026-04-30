@@ -1,8 +1,9 @@
 export const S = {
   orderId: null,
+  eventName: '',
   flagId: null,
   colors: {},
-  library: [],        // [{id, name, src}]
+  library: [],        // [{id, name, src, storagePath?}]
   baseAssignment: {}, // {zoneId: logoId}
   variations: [],     // [{id, name, assignment: {zoneId: logoId}}]
   activeVarId: null,

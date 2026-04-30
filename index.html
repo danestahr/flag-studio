@@ -18,6 +18,12 @@
 
 <div class="layout">
   <aside class="sidebar">
+    <div style="padding:1.25rem 1.5rem 0">
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin-bottom:6px">Project name</div>
+      <input id="eventNameInput" class="hexin" style="width:100%;height:36px" placeholder="e.g. Ascot 2026 Final"
+        oninput="setEventName(this.value)">
+    </div>
+    <div class="sdivider" style="margin:.75rem 1.5rem"></div>
     <div class="steps-nav">
       <div class="step-item active" data-step="1" onclick="tryGoStep(1)">
         <div class="step-num"><span>1</span></div>
@@ -55,6 +61,12 @@
     <div style="padding:0 1.5rem 1.5rem;display:flex;flex-direction:column;gap:8px">
       <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()" style="width:100%;justify-content:center">Save draft</button>
       <div id="saveStatus" style="font-size:12px;color:var(--gray-400);text-align:center;min-height:16px"></div>
+      <button class="btn sm" onclick="newProject()" style="width:100%;justify-content:center">+ New project</button>
+    </div>
+    <div class="sdivider" style="margin:0 1.5rem"></div>
+    <div style="padding:1rem 1.5rem 1.5rem;display:flex;flex-direction:column;gap:8px">
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin-bottom:2px">Saved drafts</div>
+      <div id="draftsList"><div style="font-size:13px;color:var(--gray-400)">Loading…</div></div>
     </div>
   </aside>
 

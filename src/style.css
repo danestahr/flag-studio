@@ -116,6 +116,8 @@ input[type=file] { display:none; }
 .lib-item-name { position:absolute; bottom:0; left:0; right:0; font-size:10px; background:rgba(0,0,0,.55); color:white; text-align:center; padding:2px 4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .lib-del { position:absolute; top:3px; right:3px; width:18px; height:18px; background:rgba(0,0,0,.5); color:white; border:none; border-radius:50%; font-size:11px; cursor:pointer; display:none; align-items:center; justify-content:center; }
 .lib-item:hover .lib-del { display:flex; }
+.lib-item.uploading { opacity:.6; cursor:default; }
+.lib-item.uploading .lib-item-name { background:rgba(26,74,46,.7); }
 .lib-empty { font-size:13px; color:var(--gray-400); text-align:center; padding:.5rem 0; grid-column:span 2; }
 
 .canvas-panel { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; }
@@ -189,3 +191,10 @@ input[type=file] { display:none; }
 .quote-btn { width:100%; padding:13px; background:var(--green); color:white; border:none; border-radius:var(--r); font-family:'DM Sans',sans-serif; font-size:14px; font-weight:500; cursor:pointer; transition:background .15s; }
 .quote-btn:hover { background:var(--green-light); }
 .exp-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+
+/* Drafts list */
+.draft-item { display:flex; flex-direction:column; gap:2px; padding:8px 10px; border-radius:var(--r); cursor:pointer; border:1.5px solid var(--gray-100); background:var(--white); transition:border-color .15s; }
+.draft-item:hover { border-color:var(--gray-400); }
+.draft-item.active { border-color:var(--green); }
+.draft-name { font-size:13px; font-weight:500; color:var(--black); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.draft-meta { font-size:11px; color:var(--gray-400); }
