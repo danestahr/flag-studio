@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flag Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --black: #111110; --white: #FAFAF8;
+  --gray-50: #F5F5F2; --gray-100: #E8E8E4; --gray-200: #D0D0CA;
+  --gray-400: #9A9A92; --gray-600: #5A5A54;
+  --green: #1A4A2E; --green-light: #2D7A4A; --gold: #C8972A;
+  --r: 10px; --rl: 16px;
+}
+body { font-family:'DM Sans',sans-serif; background:var(--gray-50); color:var(--black); min-height:100vh; font-size:15px; line-height:1.6; }
+
+header { background:var(--green); padding:0 2.5rem; height:64px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
+.logo { font-family:'DM Serif Display',serif; color:var(--white); font-size:20px; display:flex; align-items:center; gap:10px; }
+.logo-mark { width:28px; height:21px; background:var(--gold); border-radius:2px; position:relative; }
+.logo-mark::before { content:''; position:absolute; top:0; left:0; right:0; height:5px; background:var(--green-light); border-radius:2px 2px 0 0; }
+.header-sub { color:rgba(255,255,255,.45); font-size:13px; font-weight:300; }
+
+.layout { display:grid; grid-template-columns:300px 1fr; min-height:calc(100vh - 64px); }
+.sidebar { background:var(--white); border-right:1px solid var(--gray-100); display:flex; flex-direction:column; position:sticky; top:64px; height:calc(100vh - 64px); overflow-y:auto; }
+.main { padding:2rem 2.5rem; display:flex; flex-direction:column; gap:1.5rem; }
+
+.steps-nav { padding:1.5rem 1.5rem 0; display:flex; flex-direction:column; gap:2px; }
+.step-item { display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:var(--r); cursor:pointer; transition:background .15s; }
+.step-item:not(.active):not(.done):hover { background:var(--gray-50); }
+.step-item.active { background:var(--gray-50); }
+.step-num { width:28px; height:28px; border-radius:50%; border:1.5px solid var(--gray-200); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:500; color:var(--gray-400); flex-shrink:0; transition:all .2s; }
+.step-item.active .step-num { background:var(--green); border-color:var(--green); color:white; }
+.step-item.done .step-num { background:var(--green-light); border-color:var(--green-light); color:white; font-size:10px; }
+.step-item.done .step-num::before { content:'✓'; }
+.step-item.done .step-num span { display:none; }
+.step-label { font-size:14px; font-weight:500; color:var(--gray-600); }
+.step-item.active .step-label { color:var(--black); }
+.step-item.done .step-label { color:var(--gray-400); }
+.step-desc { font-size:12px; color:var(--gray-400); line-height:1.3; }
+.sdivider { height:1px; background:var(--gray-100); margin:1rem 1.5rem; }
+.ssummary { padding:0 1.5rem 1.5rem; flex:1; }
+.stitle { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.08em; color:var(--gray-400); margin-bottom:10px; }
+.srow { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--gray-100); font-size:13px; }
+.srow:last-child { border-bottom:none; }
+.skey { color:var(--gray-600); }
+.sval { display:flex; align-items:center; gap:6px; font-weight:500; }
+.dot { width:11px; height:11px; border-radius:50%; border:1px solid rgba(0,0,0,.1); flex-shrink:0; }
+
+.panel { display:none; }
+.panel.visible { display:flex; flex-direction:column; gap:1.5rem; }
+.ptitle { font-family:'DM Serif Display',serif; font-size:26px; margin-bottom:4px; }
+.psub { font-size:14px; color:var(--gray-600); }
+
+.btn { padding:9px 22px; border-radius:var(--r); font-size:14px; font-weight:500; cursor:pointer; border:1.5px solid var(--gray-200); background:transparent; color:var(--black); font-family:'DM Sans',sans-serif; transition:background .15s, border-color .15s; display:inline-flex; align-items:center; gap:6px; }
+.btn:hover { background:var(--gray-50); border-color:var(--gray-400); }
+.btn.primary { background:var(--green); color:white; border-color:var(--green); }
+.btn.primary:hover { background:var(--green-light); }
+.btn.sm { padding:6px 14px; font-size:13px; }
+.btn:disabled { opacity:.35; cursor:default; pointer-events:none; }
+.arow { display:flex; justify-content:space-between; align-items:center; padding-top:.5rem; }
+
+/* Step 1 */
+.flag-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
+.flag-card { background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--rl); padding:16px; cursor:pointer; transition:border-color .15s, transform .15s; display:flex; flex-direction:column; gap:10px; }
+.flag-card:hover { border-color:var(--gray-400); transform:translateY(-1px); }
+.flag-card.selected { border-color:var(--green); border-width:2px; }
+.flag-card-preview { width:100%; aspect-ratio:4/3; background:var(--gray-50); border-radius:6px; overflow:hidden; }
+.flag-card-preview svg { width:100%; height:100%; }
+.flag-card-name { font-size:13px; font-weight:500; }
+.flag-card.selected .flag-card-name { color:var(--green); }
+.flag-card-zones { font-size:12px; color:var(--gray-400); }
+
+/* Step 2 */
+.color-layout { display:grid; grid-template-columns:1fr 1fr; gap:2rem; align-items:start; }
+.zlabel { font-size:12px; font-weight:500; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-600); margin-bottom:10px; }
+.swatch-grid { display:flex; flex-wrap:wrap; gap:8px; }
+.swatch { width:36px; height:36px; border-radius:50%; cursor:pointer; border:2.5px solid transparent; transition:transform .1s, box-shadow .15s; }
+.swatch:hover { transform:scale(1.12); }
+.swatch.sel { box-shadow:0 0 0 2px var(--white), 0 0 0 4px var(--green); transform:scale(1.08); }
+.swatch.ws { box-shadow:inset 0 0 0 1px var(--gray-200); }
+.swatch.ws.sel { box-shadow:inset 0 0 0 1px var(--gray-200), 0 0 0 2px var(--white), 0 0 0 4px var(--green); }
+.ppanel { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.5rem; display:flex; flex-direction:column; gap:10px; position:sticky; top:calc(64px + 2rem); }
+.plabel { font-size:12px; color:var(--gray-400); }
+.pbox { width:100%; aspect-ratio:4/3; background:var(--gray-50); border-radius:8px; overflow:hidden; }
+.pbox svg { width:100%; height:100%; display:block; }
+.csw-wrap { position:relative; display:inline-block; }
+.csw { width:36px; height:36px; border-radius:50%; cursor:pointer; background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red); overflow:hidden; position:relative; transition:transform .1s, box-shadow .15s; }
+.csw::after { content:'+'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:15px; color:white; text-shadow:0 0 4px rgba(0,0,0,.6); background:rgba(0,0,0,.12); }
+.csw:hover { transform:scale(1.12); }
+.csw.sel { box-shadow:0 0 0 2px var(--white), 0 0 0 4px var(--green); }
+.cpop { display:none; position:absolute; bottom:calc(100% + 10px); left:50%; transform:translateX(-50%); background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:14px; box-shadow:0 8px 32px rgba(0,0,0,.12); z-index:300; width:200px; flex-direction:column; gap:10px; }
+.cpop.open { display:flex; }
+.cpop::after { content:''; position:absolute; top:100%; left:50%; transform:translateX(-50%); border:6px solid transparent; border-top-color:var(--white); }
+.cpop-lbl { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-400); }
+.cpop-prev { width:100%; height:36px; border-radius:var(--r); border:1px solid var(--gray-100); }
+.cpop-row { display:flex; gap:8px; align-items:center; }
+input[type=color] { width:34px; height:34px; border:none; border-radius:50%; padding:2px; cursor:pointer; background:none; flex-shrink:0; }
+input[type=color]::-webkit-color-swatch-wrapper { padding:0; border-radius:50%; }
+input[type=color]::-webkit-color-swatch { border:none; border-radius:50%; }
+.hexin { flex:1; height:34px; border:1px solid var(--gray-200); border-radius:var(--r); padding:0 10px; font-size:13px; font-family:'DM Sans',sans-serif; color:var(--black); background:var(--white); outline:none; }
+.hexin:focus { border-color:var(--green); }
+.cpop-apply { width:100%; padding:8px; background:var(--green); color:white; border:none; border-radius:var(--r); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; cursor:pointer; }
+.cpop-apply:hover { background:var(--green-light); }
+input[type=range] { -webkit-appearance:none; appearance:none; width:100%; height:4px; background:var(--gray-200); border-radius:2px; outline:none; cursor:pointer; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:17px; height:17px; border-radius:50%; background:var(--green); border:2px solid white; box-shadow:0 1px 4px rgba(0,0,0,.2); cursor:pointer; }
+
+/* Step 3 — library + zones */
+.s3layout { display:grid; grid-template-columns:260px 1fr; gap:1.5rem; align-items:start; }
+.lib-panel { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; display:flex; flex-direction:column; gap:1rem; position:sticky; top:calc(64px + 2rem); }
+.lib-title { font-size:12px; font-weight:500; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-600); }
+.upload-zone { border:2px dashed var(--gray-200); border-radius:var(--r); padding:1.5rem 1rem; text-align:center; cursor:pointer; transition:border-color .15s, background .15s; }
+.upload-zone:hover { border-color:var(--green-light); background:#f0f7f3; }
+.uicon { font-size:24px; margin-bottom:6px; color:var(--gray-400); }
+.utitle { font-size:13px; font-weight:500; margin-bottom:2px; }
+.usub { font-size:12px; color:var(--gray-400); }
+input[type=file] { display:none; }
+.lib-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.lib-item { position:relative; border:1.5px solid var(--gray-100); border-radius:8px; overflow:hidden; aspect-ratio:1; cursor:grab; transition:border-color .15s, transform .1s; background:var(--gray-50); }
+.lib-item:hover { border-color:var(--gray-400); transform:scale(1.04); }
+.lib-item.dragging { opacity:.4; }
+.lib-item img { width:100%; height:100%; object-fit:contain; display:block; pointer-events:none; padding:6px; }
+.lib-item-name { position:absolute; bottom:0; left:0; right:0; font-size:10px; background:rgba(0,0,0,.55); color:white; text-align:center; padding:2px 4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lib-del { position:absolute; top:3px; right:3px; width:18px; height:18px; background:rgba(0,0,0,.5); color:white; border:none; border-radius:50%; font-size:11px; cursor:pointer; display:none; align-items:center; justify-content:center; }
+.lib-item:hover .lib-del { display:flex; }
+.lib-empty { font-size:13px; color:var(--gray-400); text-align:center; padding:.5rem 0; grid-column:span 2; }
+
+.canvas-panel { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; }
+.canvas-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; }
+.canvas-label { font-size:12px; font-weight:500; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-600); }
+.canvas-hint { font-size:12px; color:var(--gray-400); }
+.flag-wrap { width:100%; aspect-ratio:4/3; position:relative; border-radius:8px; overflow:hidden; background:var(--gray-50); }
+.flag-wrap svg.bsvg { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+.dzone { position:absolute; border:2px dashed rgba(255,255,255,.7); border-radius:6px; cursor:default; transition:background .15s, border-color .15s; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; }
+.dzone.has-logo { border-color:transparent; background:transparent; }
+.dzone.drag-over { background:rgba(255,255,255,.25); border-color:white; }
+.dz-lbl { font-size:11px; font-weight:500; color:rgba(255,255,255,.9); text-shadow:0 1px 3px rgba(0,0,0,.5); pointer-events:none; text-align:center; padding:0 4px; }
+.dz-icon { font-size:18px; color:rgba(255,255,255,.8); pointer-events:none; }
+.dzone.has-logo .dz-lbl, .dzone.has-logo .dz-icon { display:none; }
+.placed-img { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain; pointer-events:none; padding:8%; }
+.dz-clr { position:absolute; top:4px; right:4px; width:20px; height:20px; background:rgba(0,0,0,.55); color:white; border:none; border-radius:50%; font-size:12px; cursor:pointer; display:none; align-items:center; justify-content:center; z-index:10; }
+.dzone.has-logo:hover .dz-clr { display:flex; }
+
+/* Step 4 — Variations */
+.s4layout { display:grid; grid-template-columns:1fr 270px; gap:1.5rem; align-items:start; }
+.var-canvas-panel { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; }
+.var-strip-wrap { margin-bottom:1rem; }
+.var-strip-label { font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-400); margin-bottom:8px; }
+.var-strip { display:flex; gap:8px; flex-wrap:wrap; }
+.var-lib-item { width:52px; height:52px; border:1.5px solid var(--gray-100); border-radius:8px; overflow:hidden; cursor:grab; background:var(--gray-50); flex-shrink:0; transition:border-color .15s; }
+.var-lib-item:hover { border-color:var(--gray-400); }
+.var-lib-item img { width:100%; height:100%; object-fit:contain; padding:5px; pointer-events:none; }
+.var-list-panel { display:flex; flex-direction:column; gap:1rem; }
+.var-list-title { font-size:12px; font-weight:500; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-600); }
+.var-list { display:flex; flex-direction:column; gap:8px; max-height:calc(100vh - 300px); overflow-y:auto; }
+.var-card { background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--r); padding:10px 12px; cursor:pointer; transition:border-color .15s; display:grid; grid-template-columns:1fr auto; align-items:center; gap:8px; }
+.var-card:hover { border-color:var(--gray-400); }
+.var-card.active { border-color:var(--green); border-width:2px; }
+.var-card-left { display:flex; align-items:center; gap:10px; }
+.vthumb { width:56px; height:42px; border-radius:4px; overflow:hidden; background:var(--gray-50); flex-shrink:0; }
+.vthumb svg { width:100%; height:100%; display:block; }
+.vname { font-size:13px; font-weight:500; font-family:'DM Sans',sans-serif; border:none; outline:none; background:transparent; color:var(--black); width:100%; cursor:text; min-width:0; }
+.vname:focus { background:var(--gray-50); border-radius:4px; padding:2px 4px; }
+.var-btns { display:flex; gap:4px; flex-shrink:0; }
+.vbtn { width:26px; height:26px; border:1px solid var(--gray-200); border-radius:6px; background:transparent; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:12px; transition:background .1s; flex-shrink:0; }
+.vbtn:hover { background:var(--gray-50); }
+.vbtn:disabled { opacity:.35; cursor:default; }
+.add-var { width:100%; padding:10px; border:1.5px dashed var(--gray-200); border-radius:var(--r); background:transparent; font-family:'DM Sans',sans-serif; font-size:13px; color:var(--gray-600); cursor:pointer; transition:border-color .15s, background .15s; }
+.add-var:hover { border-color:var(--green-light); background:#f0f7f3; color:var(--green); }
+
+/* Step 5 — Gallery */
+.s5layout { display:grid; grid-template-columns:1fr 280px; gap:1.5rem; align-items:start; }
+.gallery-stage { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); overflow:hidden; position:relative; }
+.gflag { width:100%; aspect-ratio:4/3; }
+.gflag svg { width:100%; height:100%; display:block; }
+.gnav { position:absolute; top:50%; transform:translateY(-50%); display:flex; justify-content:space-between; width:100%; padding:0 1rem; pointer-events:none; }
+.garrow { pointer-events:all; width:44px; height:44px; border-radius:50%; background:rgba(255,255,255,.92); border:1px solid var(--gray-200); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:18px; transition:background .15s, transform .1s; box-shadow:0 2px 8px rgba(0,0,0,.1); }
+.garrow:hover { background:white; transform:scale(1.08); }
+.garrow:disabled { opacity:.3; cursor:default; pointer-events:none; }
+.gcaption { position:absolute; bottom:0; left:0; right:0; padding:1rem 1.5rem; background:linear-gradient(transparent,rgba(0,0,0,.5)); display:flex; justify-content:space-between; align-items:flex-end; }
+.gname { font-family:'DM Serif Display',serif; font-size:22px; color:white; }
+.gcounter { font-size:13px; color:rgba(255,255,255,.7); }
+.gstrip { display:flex; gap:10px; overflow-x:auto; padding-bottom:4px; margin-top:1rem; }
+.gstrip::-webkit-scrollbar { height:4px; }
+.gstrip::-webkit-scrollbar-thumb { background:var(--gray-200); border-radius:2px; }
+.gthumb { width:120px; height:90px; border-radius:8px; overflow:hidden; cursor:pointer; border:2px solid transparent; transition:border-color .15s, transform .1s; flex-shrink:0; background:var(--gray-50); }
+.gthumb:hover { transform:scale(1.04); }
+.gthumb.active { border-color:var(--green); }
+.gthumb svg { width:100%; height:100%; display:block; }
+.review-card { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; display:flex; flex-direction:column; gap:1rem; }
+.rc-title { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.08em; color:var(--gray-400); }
+.drow { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--gray-100); font-size:13px; }
+.drow:last-child { border-bottom:none; }
+.dkey { color:var(--gray-600); }
+.dval { display:flex; align-items:center; gap:5px; font-weight:500; }
+.quote-btn { width:100%; padding:13px; background:var(--green); color:white; border:none; border-radius:var(--r); font-family:'DM Sans',sans-serif; font-size:14px; font-weight:500; cursor:pointer; transition:background .15s; }
+.quote-btn:hover { background:var(--green-light); }
+.exp-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><div class="logo-mark"></div>Flag Studio</div>
+  <span class="header-sub">Tournament flag configurator</span>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="steps-nav">
+      <div class="step-item active" data-step="1" onclick="tryGoStep(1)">
+        <div class="step-num"><span>1</span></div>
+        <div><div class="step-label">Design style</div><div class="step-desc">Choose flag layout</div></div>
+      </div>
+      <div class="step-item" data-step="2" onclick="tryGoStep(2)">
+        <div class="step-num"><span>2</span></div>
+        <div><div class="step-label">Colors</div><div class="step-desc">Master color scheme</div></div>
+      </div>
+      <div class="step-item" data-step="3" onclick="tryGoStep(3)">
+        <div class="step-num"><span>3</span></div>
+        <div><div class="step-label">Logo library</div><div class="step-desc">Upload logos</div></div>
+      </div>
+      <div class="step-item" data-step="4" onclick="tryGoStep(4)">
+        <div class="step-num"><span>4</span></div>
+        <div><div class="step-label">Variations</div><div class="step-desc">Build combinations</div></div>
+      </div>
+      <div class="step-item" data-step="5" onclick="tryGoStep(5)">
+        <div class="step-num"><span>5</span></div>
+        <div><div class="step-label">Gallery &amp; export</div><div class="step-desc">Review &amp; download</div></div>
+      </div>
+    </div>
+    <div class="sdivider"></div>
+    <div class="ssummary">
+      <div class="stitle">Master</div>
+      <div class="srow"><span class="skey">Style</span><span class="sval" id="sumStyle" style="color:var(--gray-400)">—</span></div>
+      <div class="srow"><span class="skey">Field</span><span class="sval" id="sumP" style="color:var(--gray-400)">—</span></div>
+      <div class="srow"><span class="skey">Stripe</span><span class="sval" id="sumS" style="color:var(--gray-400)">—</span></div>
+      <div class="sdivider" style="margin:.75rem 0"></div>
+      <div class="stitle">Variations</div>
+      <div class="srow"><span class="skey">Count</span><span class="sval" id="sumVC" style="color:var(--gray-400)">—</span></div>
+      <div class="srow"><span class="skey">Logos</span><span class="sval" id="sumLC" style="color:var(--gray-400)">—</span></div>
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <!-- Step 1 -->
+    <div class="panel visible" id="panel-1">
+      <div><div class="ptitle">Choose a design style</div><div class="psub">Select the flag layout — this becomes your master template.</div></div>
+      <div class="flag-grid" id="flagGrid"></div>
+      <div class="arow">
+        <span style="font-size:13px;color:var(--gray-400)" id="s1hint">Select a style to continue</span>
+        <button class="btn primary" id="s1next" disabled onclick="goStep(2)">Next: Colors →</button>
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div class="panel" id="panel-2">
+      <div><div class="ptitle">Master colors</div><div class="psub">These colors apply to all variations.</div></div>
+      <div class="color-layout">
+        <div id="colorZones" style="display:flex;flex-direction:column;gap:1.5rem"></div>
+        <div class="ppanel">
+          <div class="plabel">Live preview</div>
+          <div class="pbox" id="colorPrev"></div>
+          <div style="font-size:13px;color:var(--gray-400)" id="colorPrevName"></div>
+        </div>
+      </div>
+      <div class="arow">
+        <button class="btn" onclick="goStep(1)">← Back</button>
+        <button class="btn primary" id="s2next" disabled onclick="goStep(3)">Next: Logos →</button>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div class="panel" id="panel-3">
+      <div><div class="ptitle">Logo library</div><div class="psub">Upload all logos you'll use across variations. Drag them into the zones on the flag to set a base assignment.</div></div>
+      <div class="s3layout">
+        <div class="lib-panel">
+          <div class="lib-title">Uploaded logos</div>
+          <div class="upload-zone" onclick="document.getElementById('libFile').click()">
+            <div class="uicon">↑</div>
+            <div class="utitle">Upload logos</div>
+            <div class="usub">PNG, SVG or JPG<br>Transparent bg recommended</div>
+          </div>
+          <input type="file" id="libFile" accept="image/*" multiple onchange="handleUpload(event)">
+          <div class="lib-grid" id="libGrid">
+            <div class="lib-empty">No logos yet</div>
+          </div>
+        </div>
+        <div class="canvas-panel">
+          <div class="canvas-top">
+            <span class="canvas-label">Base assignment</span>
+            <span class="canvas-hint">Drag from library into a zone</span>
+          </div>
+          <div class="flag-wrap" id="baseWrap">
+            <svg class="bsvg" id="baseSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
+        </div>
+      </div>
+      <div class="arow">
+        <button class="btn" onclick="goStep(2)">← Back</button>
+        <button class="btn primary" onclick="goStep(4)">Next: Variations →</button>
+      </div>
+    </div>
+
+    <!-- Step 4 -->
+    <div class="panel" id="panel-4">
+      <div><div class="ptitle">Variations</div><div class="psub">Each variation swaps logos on the same master. Select a variation, then drag logos from the library into zones.</div></div>
+      <div class="s4layout">
+        <div class="var-canvas-panel">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+            <span style="font-size:13px;font-weight:500" id="activeVarName">Variation 1</span>
+            <span style="font-size:12px;color:var(--gray-400)">Drag logos into zones</span>
+          </div>
+          <div class="var-strip-wrap">
+            <div class="var-strip-label">Logo library</div>
+            <div class="var-strip" id="varStrip"></div>
+          </div>
+          <div class="flag-wrap" id="varWrap">
+            <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
+        </div>
+        <div class="var-list-panel">
+          <div class="var-list-title">All variations</div>
+          <div class="var-list" id="varList"></div>
+          <button class="add-var" onclick="addVariation()">+ Add variation</button>
+        </div>
+      </div>
+      <div class="arow">
+        <button class="btn" onclick="goStep(3)">← Back</button>
+        <button class="btn primary" onclick="goStep(5)">Gallery →</button>
+      </div>
+    </div>
+
+    <!-- Step 5 -->
+    <div class="panel" id="panel-5">
+      <div><div class="ptitle">Gallery</div><div class="psub">Review all variations and export.</div></div>
+      <div class="s5layout">
+        <div>
+          <div class="gallery-stage">
+            <div class="gflag" id="gFlag"></div>
+            <div class="gnav">
+              <button class="garrow" id="gPrev" onclick="gNav(-1)">←</button>
+              <button class="garrow" id="gNext" onclick="gNav(1)">→</button>
+            </div>
+            <div class="gcaption">
+              <span class="gname" id="gName"></span>
+              <span class="gcounter" id="gCount"></span>
+            </div>
+          </div>
+          <div class="gstrip" id="gStrip"></div>
+        </div>
+        <div class="review-card">
+          <div class="rc-title">Details</div>
+          <div id="gDetails"></div>
+          <button class="quote-btn" onclick="submitQuote()">Request quote →</button>
+          <div class="exp-row">
+            <button class="btn sm" onclick="expSVG()">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>SVG
+            </button>
+            <button class="btn sm" id="expPng" onclick="expPNG()">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG
+            </button>
+          </div>
+          <button class="btn sm" style="width:100%;justify-content:center" onclick="expAllPNG()">Export all as PNG</button>
+        </div>
+      </div>
+      <div class="arow">
+        <button class="btn" onclick="goStep(4)">← Back</button>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+// ── DATA ──────────────────────────────────────────────────
+const COLORS = [
+  {hex:'#1A3A6B',name:'Navy'},{hex:'#C8102E',name:'Scarlet'},{hex:'#006747',name:'Masters Green'},
+  {hex:'#C8972A',name:'Gold'},{hex:'#111110',name:'Black'},{hex:'#FFFFFF',name:'White'},
+  {hex:'#6B2D8B',name:'Purple'},{hex:'#0072CE',name:'Royal Blue'},{hex:'#E87722',name:'Orange'},
+  {hex:'#8B0000',name:'Burgundy'},{hex:'#C0C0C0',name:'Silver'},{hex:'#E8D5A3',name:'Cream'},
+];
+
+// ── SVG CONTENT (real assets, viewBox 7519×4670) ──────────
+// Bleed marks are non-colorable guides. Color zones: zone-primary, zone-secondary.
+// Logo zone coords are in SVG units, inside bleed + stripe safe area, with 200px padding.
+
+const EDINBURGH_SVG = `<g id="Edinburgh">
+<rect id="zone-primary" y="1.00012" width="7519" height="4669" fill="#D9D9D9"/>
+<g id="zone-secondary">
+  <rect y="4210" width="7507" height="460" fill="#FC0101"/>
+  <rect x="5280" y="4662" width="4662" height="2227" transform="rotate(-90 5280 4662)" fill="#FC0101"/>
+  <rect y="1.00012" width="7507" height="460" fill="#FC0101"/>
+</g>
+<g id="Bleed">
+  <rect x="0.5" y="1.5" width="7518" height="309" fill="#9A9A9A" stroke="#9A9A9A"/>
+  <rect x="0.5" y="4669.5" width="4668" height="1205" transform="rotate(-90 0.5 4669.5)" fill="#9A9A9A" stroke="#9A9A9A"/>
+  <rect x="7209.5" y="4669.5" width="4668" height="309" transform="rotate(-90 7209.5 4669.5)" fill="#9A9A9A" stroke="#9A9A9A"/>
+  <rect x="0.5" y="4360.5" width="7518" height="309" fill="#9A9A9A" stroke="#9A9A9A"/>
+</g>
+</g>`;
+
+const ASCOT_SVG = `<g id="Ascot">
+<rect id="zone-primary" y="1.00037" width="7519" height="4669" fill="#D9D9D9"/>
+<g id="zone-secondary">
+  <rect y="4210" width="7507" height="460" fill="#FC0101"/>
+  <rect x="7060" y="4662" width="4662" height="459" transform="rotate(-90 7060 4662)" fill="#FC0101"/>
+  <rect y="4662" width="4662" height="4207" transform="rotate(-90 0 4662)" fill="#FC0101"/>
+  <rect y="1.00037" width="7507" height="460" fill="#FC0101"/>
+</g>
+<g id="Bleed">
+  <rect x="0.5" y="1.5" width="7518" height="309" fill="#9A9A9A" stroke="#9A9A9A"/>
+  <rect x="0.5" y="4669.5" width="4668" height="1205" transform="rotate(-90 0.5 4669.5)" fill="#9A9A9A" stroke="#9A9A9A"/>
+  <rect x="7209.5" y="4669.5" width="4668" height="309" transform="rotate(-90 7209.5 4669.5)" fill="#9A9A9A" stroke="#9A9A9A"/>
+  <rect x="0.5" y="4360.5" width="7518" height="309" fill="#9A9A9A" stroke="#9A9A9A"/>
+</g>
+</g>`;
+
+const PLAIN_SVG = `<g id="Plain">
+<rect id="zone-primary" x="0.000244141" width="7519" height="4669" fill="#D9D9D9"/>
+<g id="Bleed">
+  <rect x="0.5" y="0.5" width="7518" height="309" fill="#9A9A9A" stroke="#9A9A9A"/>
+  <rect x="0.5" y="4668.5" width="4668" height="1205" transform="rotate(-90 0.500244 4668.5)" fill="#9A9A9A" stroke="#9A9A9A"/>
+  <rect x="7209.5" y="4668.5" width="4668" height="309" transform="rotate(-90 7209.5 4668.5)" fill="#9A9A9A" stroke="#9A9A9A"/>
+  <rect x="0.5" y="4359.5" width="7518" height="309" fill="#9A9A9A" stroke="#9A9A9A"/>
+</g>
+</g>`;
+
+// Logo zones — single main zone per flag, inside bleed + stripes + 200px padding.
+// Edinburgh: field is left of right stripe (x=5280), inside left bleed (x=1206), top/bottom stripe inset (y=461/4210)
+// Ascot:     field is right of left panel (x≈4207), top/bottom stripe inset
+// Plain:     full field inside bleed
+
+const FLAGS = [
+  {
+    id: 'edinburgh', name: 'Edinburgh',
+    viewBox: '0 0 7519 4670',
+    colorZones: [
+      {id:'zone-primary',   label:'Field'},
+      {id:'zone-secondary', label:'Stripe border'},
+    ],
+    logoZones: [
+      { id:'lz-main', label:'Logo', x:1406, y:661, w:3654, h:3349 },
+    ],
+    svgContent: EDINBURGH_SVG,
+  },
+  {
+    id: 'ascot', name: 'Ascot',
+    viewBox: '0 0 7519 4670',
+    colorZones: [
+      {id:'zone-primary',   label:'Field'},
+      {id:'zone-secondary', label:'Stripe border'},
+    ],
+    logoZones: [
+      { id:'lz-main', label:'Logo', x:4407, y:661, w:2400, h:3349 },
+    ],
+    svgContent: ASCOT_SVG,
+  },
+  {
+    id: 'plain', name: 'Plain',
+    viewBox: '0 0 7519 4669',
+    colorZones: [
+      {id:'zone-primary', label:'Field'},
+    ],
+    logoZones: [
+      { id:'lz-main', label:'Logo', x:1406, y:660, w:5454, h:3349 },
+    ],
+    svgContent: PLAIN_SVG,
+  },
+];
+
+// ── STATE ──────────────────────────────────────────────────
+const S = {
+  flagId: null,
+  colors: {},
+  library: [],           // [{id,name,src}]
+  baseAssignment: {},    // {zoneId: logoId}
+  variations: [],        // [{id,name,assignment:{zoneId:logoId}}]
+  activeVarId: null,
+  gIndex: 0,
+};
+
+let _dragLogoId = null;
+
+// ── ROUTING ────────────────────────────────────────────────
+function tryGoStep(n) { if (n > currentStep()) return; goStep(n); }
+function currentStep() {
+  const panels = [...document.querySelectorAll('.panel')];
+  return panels.findIndex(p=>p.classList.contains('visible')) + 1;
+}
+function goStep(n) {
+  document.querySelectorAll('.panel').forEach((p,i)=>p.classList.toggle('visible',i===n-1));
+  document.querySelectorAll('.step-item').forEach((s,i)=>{
+    s.classList.remove('active','done');
+    if(i===n-1) s.classList.add('active');
+    else if(i<n-1) s.classList.add('done');
+  });
+  if(n===2) setupColors();
+  if(n===3) setupLibrary();
+  if(n===4) setupVariations();
+  if(n===5) setupGallery();
+  window.scrollTo(0,0);
+}
+
+// ── HELPERS ────────────────────────────────────────────────
+const getFlag = () => FLAGS.find(f=>f.id===S.flagId);
+
+function applyColors(svgEl, colors) {
+  Object.entries(colors).forEach(([zid,hex])=>{
+    const el = svgEl.querySelector('#'+zid); if(!el) return;
+    el.setAttribute('fill',hex);
+    el.querySelectorAll('rect,path,polygon,circle,ellipse').forEach(c=>c.setAttribute('fill',hex));
+  });
+}
+
+function makeSvg(assignment, w, h, flagOverride) {
+  const flag = flagOverride || getFlag(); if(!flag) return null;
+  const ns='http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns,'svg');
+  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4670');
+  svg.setAttribute('width',w); svg.setAttribute('height',h);
+  svg.setAttribute('xmlns',ns);
+  svg.innerHTML = flag.svgContent;
+  applyColors(svg, S.colors);
+  flag.logoZones.forEach(zone=>{
+    const lid = assignment[zone.id];
+    const logo = S.library.find(l=>l.id===lid);
+    if(!logo) return;
+    const img = document.createElementNS(ns,'image');
+    img.setAttribute('href',logo.src);
+    img.setAttribute('x',zone.x); img.setAttribute('y',zone.y);
+    img.setAttribute('width',zone.w); img.setAttribute('height',zone.h);
+    img.setAttribute('preserveAspectRatio','xMidYMid meet');
+    svg.appendChild(img);
+  });
+  return svg;
+}
+
+function renderInto(el, assignment) {
+  el.innerHTML='';
+  const svg = makeSvg(assignment,'100%','100%');
+  if(svg){svg.style.cssText='display:block;width:100%;height:100%';el.appendChild(svg);}
+}
+
+// ── STEP 1 ────────────────────────────────────────────────
+function renderFlagGrid() {
+  document.getElementById('flagGrid').innerHTML = FLAGS.map(f=>`
+    <div class="flag-card" id="fc-${f.id}" onclick="pickFlag('${f.id}')">
+      <div class="flag-card-preview"><svg viewBox="${f.viewBox||'0 0 7519 4670'}" preserveAspectRatio="xMidYMid meet">${f.svgContent}</svg></div>
+      <div><div class="flag-card-name">${f.name}</div><div class="flag-card-zones">${f.colorZones.map(z=>z.label).join(', ')}</div></div>
+    </div>`).join('');
+}
+function pickFlag(id) {
+  S.flagId=id; S.colors={};
+  document.querySelectorAll('.flag-card').forEach(c=>c.classList.remove('selected'));
+  document.getElementById('fc-'+id).classList.add('selected');
+  document.getElementById('s1next').disabled=false;
+  document.getElementById('s1hint').textContent='';
+  syncSidebar();
+}
+
+// ── STEP 2 ────────────────────────────────────────────────
+function setupColors() {
+  const flag=getFlag(); if(!flag) return;
+  document.getElementById('colorZones').innerHTML = flag.colorZones.map(z=>`
+    <div>
+      <div class="zlabel">${z.label}</div>
+      <div class="swatch-grid" id="sg-${z.id}">
+        ${COLORS.map(c=>`<div class="swatch ${c.hex==='#FFFFFF'?'ws':''} ${S.colors[z.id]===c.hex?'sel':''}"
+          style="background:${c.hex}" data-hex="${c.hex}" title="${c.name}"
+          onclick="pickColor('${z.id}','${c.hex}')"></div>`).join('')}
+        <div class="csw-wrap">
+          <div class="csw ${!COLORS.find(c=>c.hex===S.colors[z.id])&&S.colors[z.id]?'sel':''}"
+            id="csw-${z.id}" onclick="toggleCPop('${z.id}')"></div>
+          <div class="cpop" id="cpop-${z.id}">
+            <div class="cpop-lbl">Custom color</div>
+            <div class="cpop-prev" id="cprev-${z.id}" style="background:${S.colors[z.id]||'#1A4A2E'}"></div>
+            <div class="cpop-row">
+              <input type="color" id="cn-${z.id}" value="${S.colors[z.id]||'#1A4A2E'}" oninput="cSync('${z.id}',this.value)">
+              <input type="text" class="hexin" id="ch-${z.id}" value="${S.colors[z.id]||'#1A4A2E'}" maxlength="7" placeholder="#000000" oninput="cSyncN('${z.id}',this.value)">
+            </div>
+            <button class="cpop-apply" onclick="cApply('${z.id}')">Apply</button>
+          </div>
+        </div>
+      </div>
+    </div>`).join('');
+  document.getElementById('colorPrevName').textContent = flag.name;
+  refreshColorPrev(); checkColors();
+  document.addEventListener('click', closePops, {capture:true});
+}
+function pickColor(zid, hex) {
+  S.colors[zid]=hex;
+  document.querySelectorAll(`#sg-${zid} .swatch`).forEach(s=>s.classList.toggle('sel',s.dataset.hex===hex));
+  const cs=document.getElementById('csw-'+zid);
+  if(cs) cs.classList.toggle('sel',!COLORS.some(c=>c.hex===hex));
+  refreshColorPrev(); checkColors(); syncSidebar();
+}
+function refreshColorPrev() {
+  const flag=getFlag(); if(!flag) return;
+  const box=document.getElementById('colorPrev');
+  box.innerHTML=`<svg viewBox="${flag.viewBox||'0 0 7519 4670'}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${flag.svgContent}</svg>`;
+  applyColors(box.querySelector('svg'),S.colors);
+}
+function checkColors() {
+  const flag=getFlag(); if(!flag) return;
+  document.getElementById('s2next').disabled=!flag.colorZones.every(z=>S.colors[z.id]);
+}
+function toggleCPop(zid) {
+  const p=document.getElementById('cpop-'+zid), open=p.classList.contains('open');
+  document.querySelectorAll('.cpop').forEach(x=>x.classList.remove('open'));
+  if(!open) p.classList.add('open');
+}
+function closePops(e){if(!e.target.closest('.csw-wrap')) document.querySelectorAll('.cpop').forEach(x=>x.classList.remove('open'));}
+function cSync(z,h){document.getElementById('ch-'+z).value=h;document.getElementById('cprev-'+z).style.background=h;}
+function cSyncN(z,h){const c=h.startsWith('#')?h:'#'+h;if(/^#[0-9A-Fa-f]{6}$/.test(c)){document.getElementById('cn-'+z).value=c;document.getElementById('cprev-'+z).style.background=c;}}
+function cApply(z){
+  const h=document.getElementById('ch-'+z).value,c=h.startsWith('#')?h:'#'+h;
+  if(!/^#[0-9A-Fa-f]{6}$/.test(c)) return;
+  document.querySelectorAll(`#sg-${z} .swatch`).forEach(s=>s.classList.remove('sel'));
+  document.getElementById('csw-'+z).classList.add('sel');
+  document.getElementById('cpop-'+z).classList.remove('open');
+  pickColor(z,c);
+}
+
+// ── STEP 3 — Library + base ────────────────────────────────
+function handleUpload(e) {
+  Array.from(e.target.files).forEach(file=>{
+    const r=new FileReader();
+    r.onload=ev=>{
+      const id='l'+Date.now()+Math.random().toString(36).slice(2,5);
+      S.library.push({id,name:file.name.replace(/\.[^.]+$/,''),src:ev.target.result});
+      renderLib(); syncSidebar();
+    };
+    r.readAsDataURL(file);
+  });
+  e.target.value='';
+}
+
+function renderLib() {
+  const g=document.getElementById('libGrid');
+  if(!S.library.length){g.innerHTML='<div class="lib-empty">No logos yet</div>';return;}
+  g.innerHTML=S.library.map(l=>`
+    <div class="lib-item" id="li-${l.id}" draggable="true"
+      ondragstart="dragStart(event,'${l.id}')" ondragend="dragEnd('${l.id}')">
+      <img src="${l.src}" alt="${l.name}">
+      <div class="lib-item-name">${l.name}</div>
+      <button class="lib-del" onclick="delLogo('${l.id}')">×</button>
+    </div>`).join('');
+}
+
+function delLogo(id) {
+  S.library=S.library.filter(l=>l.id!==id);
+  [S.baseAssignment,...S.variations.map(v=>v.assignment)].forEach(a=>{
+    Object.keys(a).forEach(z=>{if(a[z]===id) delete a[z];});
+  });
+  renderLib(); renderDropZones('baseWrap','baseSvg',S.baseAssignment); syncSidebar();
+}
+
+function dragStart(e,id){_dragLogoId=id;e.dataTransfer.effectAllowed='copy';document.getElementById('li-'+id)?.classList.add('dragging');}
+function dragEnd(id){document.getElementById('li-'+id)?.classList.remove('dragging');}
+
+function setupLibrary() {
+  const flag=getFlag(); if(!flag) return;
+  const svg=document.getElementById('baseSvg');
+  svg.setAttribute('viewBox', flag.viewBox||'0 0 7519 4670');
+  svg.innerHTML=flag.svgContent; applyColors(svg,S.colors);
+  renderLib();
+  renderDropZones('baseWrap','baseSvg',S.baseAssignment);
+}
+
+function renderDropZones(wrapId, svgId, assignment) {
+  const flag=getFlag(); if(!flag) return;
+  const wrap=document.getElementById(wrapId);
+  wrap.querySelectorAll('.dzone').forEach(d=>d.remove());
+  const svg=document.getElementById(svgId);
+  svg.setAttribute('viewBox', flag.viewBox||'0 0 7519 4670');
+  svg.innerHTML=flag.svgContent; applyColors(svg,S.colors);
+  const cw=wrap.offsetWidth, ch=wrap.offsetHeight;
+
+  flag.logoZones.forEach(zone=>{
+    const lid=assignment[zone.id];
+    const logo=S.library.find(l=>l.id===lid);
+    const left=(zone.x/1000)*cw, top=(zone.y/750)*ch;
+    const width=(zone.w/1000)*cw, height=(zone.h/750)*ch;
+
+    const dz=document.createElement('div');
+    dz.className='dzone'+(logo?' has-logo':'');
+    dz.dataset.zoneId=zone.id;
+    dz.style.cssText=`left:${left}px;top:${top}px;width:${width}px;height:${height}px;`;
+
+    if(logo){
+      const img=document.createElement('img');
+      img.className='placed-img'; img.src=logo.src; img.alt=logo.name;
+      dz.appendChild(img);
+      const clr=document.createElement('button');
+      clr.className='dz-clr'; clr.textContent='×';
+      clr.onclick=ev=>{ev.stopPropagation();clearZone(wrapId,svgId,assignment,zone.id);};
+      dz.appendChild(clr);
+    } else {
+      dz.innerHTML=`<div class="dz-icon">+</div><div class="dz-lbl">${zone.label}</div>`;
+    }
+
+    dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over');});
+    dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
+    dz.addEventListener('drop',e=>{
+      e.preventDefault(); dz.classList.remove('drag-over');
+      if(!_dragLogoId) return;
+      assignment[zone.id]=_dragLogoId; _dragLogoId=null;
+      renderDropZones(wrapId,svgId,assignment);
+      if(wrapId==='varWrap') refreshVarThumbs();
+    });
+
+    wrap.appendChild(dz);
+  });
+}
+
+function clearZone(wrapId,svgId,assignment,zoneId){
+  delete assignment[zoneId];
+  renderDropZones(wrapId,svgId,assignment);
+  if(wrapId==='varWrap') refreshVarThumbs();
+}
+
+// ── STEP 4 — Variations ────────────────────────────────────
+function setupVariations() {
+  if(!S.variations.length){
+    S.variations.push({id:'v'+Date.now(),name:'Variation 1',assignment:{...S.baseAssignment}});
+  }
+  if(!S.activeVarId) S.activeVarId=S.variations[0].id;
+  renderVarList(); renderVarCanvas(); renderVarStrip();
+}
+
+function addVariation(){
+  const n=S.variations.length+1;
+  const nv={id:'v'+Date.now(),name:'Variation '+n,assignment:{}};
+  S.variations.push(nv); S.activeVarId=nv.id;
+  renderVarList(); renderVarCanvas(); syncSidebar();
+}
+function dupVar(id){
+  const src=S.variations.find(v=>v.id===id); if(!src) return;
+  const nv={id:'v'+Date.now(),name:src.name+' copy',assignment:{...src.assignment}};
+  S.variations.push(nv); S.activeVarId=nv.id;
+  renderVarList(); renderVarCanvas(); syncSidebar();
+}
+function delVar(id){
+  if(S.variations.length<=1) return;
+  S.variations=S.variations.filter(v=>v.id!==id);
+  if(S.activeVarId===id) S.activeVarId=S.variations[0].id;
+  renderVarList(); renderVarCanvas(); syncSidebar();
+}
+function selectVar(id){S.activeVarId=id;renderVarList();renderVarCanvas();}
+function renameVar(id,name){const v=S.variations.find(v=>v.id===id);if(v)v.name=name;if(S.activeVarId===id)document.getElementById('activeVarName').textContent=name;}
+
+function renderVarList(){
+  document.getElementById('varList').innerHTML=S.variations.map(v=>`
+    <div class="var-card ${v.id===S.activeVarId?'active':''}" onclick="selectVar('${v.id}')">
+      <div class="var-card-left">
+        <div class="vthumb" id="vt-${v.id}"></div>
+        <input class="vname" value="${v.name}" onclick="event.stopPropagation()"
+          onchange="renameVar('${v.id}',this.value)">
+      </div>
+      <div class="var-btns">
+        <button class="vbtn" title="Duplicate" onclick="event.stopPropagation();dupVar('${v.id}')">⧉</button>
+        <button class="vbtn" title="Delete" onclick="event.stopPropagation();delVar('${v.id}')" ${S.variations.length<=1?'disabled':''}>✕</button>
+      </div>
+    </div>`).join('');
+  refreshVarThumbs();
+}
+
+function refreshVarThumbs(){
+  S.variations.forEach(v=>{
+    const el=document.getElementById('vt-'+v.id); if(!el) return;
+    renderInto(el,v.assignment);
+  });
+}
+
+function renderVarCanvas(){
+  const v=S.variations.find(v=>v.id===S.activeVarId); if(!v) return;
+  document.getElementById('activeVarName').textContent=v.name;
+  const flag=getFlag(); if(!flag) return;
+  document.getElementById('varSvg').setAttribute('viewBox', flag.viewBox||'0 0 7519 4670');
+  document.getElementById('varSvg').innerHTML=flag.svgContent;
+  applyColors(document.getElementById('varSvg'),S.colors);
+  document.getElementById('varWrap').querySelectorAll('.dzone').forEach(d=>d.remove());
+  renderDropZones('varWrap','varSvg',v.assignment);
+}
+
+function renderVarStrip(){
+  const strip=document.getElementById('varStrip');
+  if(!S.library.length){
+    strip.innerHTML='<span style="font-size:13px;color:var(--gray-400)">Upload logos in step 3 first.</span>';
+    return;
+  }
+  strip.innerHTML=S.library.map(l=>`
+    <div class="var-lib-item" draggable="true" title="${l.name}"
+      ondragstart="dragStart(event,'${l.id}')" ondragend="dragEnd('${l.id}')">
+      <img src="${l.src}" alt="${l.name}">
+    </div>`).join('');
+}
+
+// ── STEP 5 — Gallery ──────────────────────────────────────
+function setupGallery(){
+  S.gIndex=0; renderGStrip(); renderGSlide();
+}
+
+function renderGStrip(){
+  document.getElementById('gStrip').innerHTML=S.variations.map((v,i)=>`
+    <div class="gthumb ${i===S.gIndex?'active':''}" id="gt-${i}" onclick="gGoTo(${i})">
+      <div id="gti-${i}" style="width:100%;height:100%"></div>
+    </div>`).join('');
+  S.variations.forEach((v,i)=>{const el=document.getElementById('gti-'+i);if(el) renderInto(el,v.assignment);});
+}
+
+function renderGSlide(){
+  const v=S.variations[S.gIndex]; if(!v) return;
+  const flag=getFlag();
+  renderInto(document.getElementById('gFlag'),v.assignment);
+  document.getElementById('gName').textContent=v.name;
+  document.getElementById('gCount').textContent=`${S.gIndex+1} / ${S.variations.length}`;
+  document.getElementById('gPrev').disabled=S.gIndex===0;
+  document.getElementById('gNext').disabled=S.gIndex===S.variations.length-1;
+  document.querySelectorAll('.gthumb').forEach((t,i)=>t.classList.toggle('active',i===S.gIndex));
+
+  const zoneRows=(flag?.logoZones||[]).map(z=>{
+    const lid=v.assignment[z.id];
+    const logo=S.library.find(l=>l.id===lid);
+    return `<div class="drow"><span class="dkey">${z.label}</span><span class="dval">
+      ${logo?`<img src="${logo.src}" style="width:20px;height:20px;object-fit:contain;border-radius:3px">${logo.name}`:'<span style="color:var(--gray-400)">Empty</span>'}
+    </span></div>`;
+  }).join('');
+  const colorRows=(flag?.colorZones||[]).map(z=>{
+    const hex=S.colors[z.id]||'#ccc';
+    const col=COLORS.find(c=>c.hex===hex);
+    return `<div class="drow"><span class="dkey">${z.label}</span><span class="dval"><span class="dot" style="background:${hex}"></span>${col?.name||hex}</span></div>`;
+  }).join('');
+  document.getElementById('gDetails').innerHTML=`
+    <div class="drow"><span class="dkey">Style</span><span class="dval">${flag?.name||'—'}</span></div>
+    ${colorRows}
+    ${zoneRows}`;
+}
+
+function gNav(d){S.gIndex=Math.max(0,Math.min(S.variations.length-1,S.gIndex+d));renderGSlide();}
+function gGoTo(i){S.gIndex=i;renderGSlide();}
+
+// ── EXPORT ────────────────────────────────────────────────
+function slug(s){return s.toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,'');}
+function dl(url,name){const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(()=>URL.revokeObjectURL(url),2000);}
+
+function expSVG(){
+  const v=S.variations[S.gIndex]; if(!v) return;
+  const svg=makeSvg(v.assignment,1000,750);
+  let str=new XMLSerializer().serializeToString(svg);
+  if(!str.startsWith('<?xml')) str='<?xml version="1.0" encoding="UTF-8"?>\n'+str;
+  dl(URL.createObjectURL(new Blob([str],{type:'image/svg+xml'})),slug(v.name)+'.svg');
+}
+
+function expPNG(){
+  const v=S.variations[S.gIndex]; if(!v) return;
+  const btn=document.getElementById('expPng');
+  btn.textContent='…'; btn.disabled=true;
+  svgToPng(v.assignment,2000,1500,url=>{
+    dl(url,slug(v.name)+'.png');
+    btn.innerHTML='<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG';
+    btn.disabled=false;
+  });
+}
+
+async function expAllPNG(){
+  for(let i=0;i<S.variations.length;i++){
+    const v=S.variations[i];
+    await new Promise(res=>svgToPng(v.assignment,2000,1500,url=>{dl(url,slug(v.name)+'.png');res();}));
+    await new Promise(r=>setTimeout(r,500));
+  }
+}
+
+function svgToPng(assignment,w,h,cb){
+  const svg=makeSvg(assignment,w,h);
+  let str=new XMLSerializer().serializeToString(svg);
+  if(!str.startsWith('<?xml')) str='<?xml version="1.0" encoding="UTF-8"?>\n'+str;
+  const url=URL.createObjectURL(new Blob([str],{type:'image/svg+xml'}));
+  const img=new Image();
+  img.onload=()=>{
+    const c=document.createElement('canvas');
+    c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);
+    URL.revokeObjectURL(url);
+    c.toBlob(b=>cb(URL.createObjectURL(b)),'image/png');
+  };
+  img.onerror=()=>{URL.revokeObjectURL(url);alert('PNG export failed — ensure logos are local file uploads.');};
+  img.src=url;
+}
+
+function submitQuote(){alert(`Quote submitted for ${S.variations.length} variation(s). Our team will follow up within 1 business day.`);}
+
+// ── SIDEBAR ───────────────────────────────────────────────
+function syncSidebar(){
+  const flag=getFlag();
+  document.getElementById('sumStyle').textContent=flag?.name||'—';
+  document.getElementById('sumStyle').style.color=flag?'var(--black)':'var(--gray-400)';
+  const z0 = flag?.colorZones[0];
+  const z1 = flag?.colorZones[1];
+  const h0=z0?S.colors[z0.id]:null, h1=z1?S.colors[z1.id]:null;
+  const c0=COLORS.find(c=>c.hex===h0), c1=COLORS.find(c=>c.hex===h1);
+  const sp=document.getElementById('sumP');
+  sp.innerHTML=h0?`<span class="dot" style="background:${h0}"></span>${c0?.name||h0}`:'—';
+  sp.style.color=h0?'var(--black)':'var(--gray-400)';
+  const ss=document.getElementById('sumS');
+  ss.innerHTML=h1?`<span class="dot" style="background:${h1}"></span>${c1?.name||h1}`:(z1?'—':'n/a');
+  ss.style.color=h1?'var(--black)':'var(--gray-400)';
+  document.getElementById('sumVC').textContent=S.variations.length||'—';
+  document.getElementById('sumVC').style.color=S.variations.length?'var(--black)':'var(--gray-400)';
+  document.getElementById('sumLC').textContent=S.library.length||'—';
+  document.getElementById('sumLC').style.color=S.library.length?'var(--black)':'var(--gray-400)';
+}
+
+// ── INIT ──────────────────────────────────────────────────
+renderFlagGrid();
+</script>
+</body>
+</html>
