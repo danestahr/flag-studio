@@ -25,10 +25,10 @@ export function applyColors(svgEl, colors) {
 export function makeSvg(assignment, w, h, face = 'front') {
   const flag = getFlag();
   if (!flag) return null;
-  const vbW = +((flag.viewBox || '0 0 7519 4670').split(' ')[2]);
+  const vbW = +((flag.viewBox || '0 0 7519 4669').split(' ')[2]);
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4670');
+  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
   svg.setAttribute('width', w);
   svg.setAttribute('height', h);
   svg.setAttribute('xmlns', ns);

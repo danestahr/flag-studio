@@ -45,13 +45,24 @@ export async function loadProject(projectId) {
 }
 
 export async function deleteProject(projectId) {
-  const { data: logos } = await supabase
+  const { data: logos, error: logoListErr } = await supabase
     .from('project_logos')
     .select('storage_path')
     .eq('project_id', projectId);
+  if (logoListErr) throw logoListErr;
+
   if (logos?.length) {
-    await supabase.storage.from('flag-logos').remove(logos.map(l => l.storage_path));
+    const { error: storageErr } = await supabase.storage
+      .from('flag-logos')
+      .remove(logos.map(l => l.storage_path));
+    if (storageErr) throw storageErr;
   }
+
+  for (const table of ['variation_feedback', 'order_intakes', 'flag_config', 'hole_sign_config', 'project_logos']) {
+    const { error } = await supabase.from(table).delete().eq('project_id', projectId);
+    if (error) throw error;
+  }
+
   const { error } = await supabase.from('projects').delete().eq('id', projectId);
   if (error) throw error;
 }

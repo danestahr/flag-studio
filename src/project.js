@@ -1,11 +1,12 @@
 import './landing.css';
-import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake, updateProject } from './supabase.js';
+import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake,
+         updateProject } from './supabase.js';
 
 const pid = new URLSearchParams(window.location.search).get('project');
 if (!pid) window.location.href = '/';
 
-const flagCard = document.getElementById('flagCard');
-const holeCard = document.getElementById('holeCard');
+const flagCard  = document.getElementById('flagCard');
+const holeCard  = document.getElementById('holeCard');
 flagCard.href = `/flags.html?project=${pid}`;
 holeCard.href = `/hole-signs.html?project=${pid}`;
 

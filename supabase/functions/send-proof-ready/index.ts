@@ -84,7 +84,10 @@ serve(async (req) => {
     let safeUrl: string;
     try {
       const u = new URL(payload.reviewUrl);
-      if (u.protocol !== 'https:') throw new Error('not https');
+      const isLocalhost = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+      if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isLocalhost)) {
+        throw new Error('not https');
+      }
       const token = u.searchParams.get('token');
       if (!token || !(await tokenExists(token))) {
         return new Response(JSON.stringify({ error: 'Invalid review link' }), { status: 403, headers: { ...CORS, 'Content-Type': 'application/json' } });

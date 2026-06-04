@@ -13,7 +13,7 @@ export const FLAGS = [
       { id: 'zone-primary',   label: 'Field' },
       { id: 'zone-secondary', label: 'Stripe border' },
     ],
-    svgContent: '', viewBox: '0 0 7519 4670', logoZones: [],
+    svgContent: '', viewBox: '0 0 7519 4669', logoZones: [],
   },
   {
     id: 'ascot', name: 'Ascot',
@@ -21,13 +21,13 @@ export const FLAGS = [
       { id: 'zone-primary',   label: 'Field' },
       { id: 'zone-secondary', label: 'Stripe border' },
     ],
-    svgContent: '', viewBox: '0 0 7519 4670', logoZones: [],
+    svgContent: '', viewBox: '0 0 7519 4669', logoZones: [],
   },
   {
     id: 'plain', name: 'Plain',
     colorZones: [
       { id: 'zone-primary', label: 'Field' },
     ],
-    svgContent: '', viewBox: '0 0 7519 4670', logoZones: [],
+    svgContent: '', viewBox: '0 0 7519 4669', logoZones: [],
   },
 ];

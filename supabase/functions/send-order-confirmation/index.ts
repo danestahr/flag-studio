@@ -20,14 +20,27 @@ function safeHex(h: unknown): string {
   return /^#[0-9A-Fa-f]{3,6}$/.test(String(h)) ? String(h) : '#cccccc';
 }
 
+interface Shipping {
+  addressLine1: string;
+  addressLine2?: string;
+  city: string;
+  stateProvince: string;
+  postalCode: string;
+  country: string;
+}
+
 interface OrderPayload {
   contactName: string;
   contactEmail: string;
   eventName: string;
   eventDate: string;
+  shipping?: Shipping;
   flagStyle: string;
   flagColors: Array<{ name: string; hex: string }>;
+  flagSetup?: string;
+  flagQty?: number;
   designNotes?: string;
+  logoFileNames?: string[];
   projectId: string;
 }
 
@@ -37,13 +50,57 @@ function formatDate(iso: string): string {
   return new Date(+y, +m - 1, +d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
+function formatShipping(s: Shipping | undefined): string {
+  if (!s) return '';
+  const lines = [
+    s.addressLine1,
+    s.addressLine2 || '',
+    [s.city, s.stateProvince, s.postalCode].filter(Boolean).join(', '),
+    s.country === 'CA' ? 'Canada' : 'USA',
+  ].filter(Boolean);
+  return lines.map(esc).join('<br>');
+}
+
+function formatSetup(s: string | undefined): string {
+  if (s === 'different') return 'Different front &amp; back';
+  if (s === 'same') return 'Same front &amp; back';
+  return '';
+}
+
 function buildHtml(p: OrderPayload): string {
+  const row = (label: string, value: string, opts: { mono?: boolean; vtop?: boolean } = {}) =>
+    `<tr><td style="padding:8px 0;color:#666;border-top:1px solid #f0f0f0;${opts.vtop ? 'vertical-align:top;' : ''}">${label}</td><td style="padding:8px 0 8px 16px;border-top:1px solid #f0f0f0;${opts.mono ? "font-family:'SF Mono',Menlo,monospace;font-size:13px;" : ''}">${value}</td></tr>`;
+
   const colorRows = p.flagColors.map(c =>
-    `<tr><td style="padding:4px 0;color:#666;">Color</td><td style="padding:4px 0 4px 16px;">
-      <span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${safeHex(c.hex)};vertical-align:middle;margin-right:6px;border:1px solid #ddd;"></span>
-      ${esc(c.name)} (${safeHex(c.hex)})
-    </td></tr>`
+    row('Color', `<span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${safeHex(c.hex)};vertical-align:middle;margin-right:6px;border:1px solid #ddd;"></span>${esc(c.name)} (${safeHex(c.hex)})`)
   ).join('');
+
+  const shippingHtml = p.shipping
+    ? row('Ship to', formatShipping(p.shipping), { vtop: true })
+    : '';
+
+  const setupHtml = p.flagSetup
+    ? row('Setup', formatSetup(p.flagSetup))
+    : '';
+
+  const qtyHtml = p.flagQty
+    ? row('Quantity', `${esc(String(p.flagQty))} flag${p.flagQty === 1 ? '' : 's'}`)
+    : '';
+
+  const logoFiles = (p.logoFileNames ?? []).filter(Boolean);
+  const logosHtml = logoFiles.length
+    ? row(
+        'Logos',
+        '<ul style="margin:0;padding-left:18px;color:#555;">' +
+          logoFiles.map(n => `<li style="padding:2px 0;">${esc(n)}</li>`).join('') +
+        '</ul>',
+        { vtop: true },
+      )
+    : '';
+
+  const notesHtml = p.designNotes
+    ? row('Notes', esc(p.designNotes), { vtop: true })
+    : '';
 
   return `<!DOCTYPE html>
 <html>
@@ -62,11 +119,15 @@ function buildHtml(p: OrderPayload): string {
 
       <h2 style="margin:0 0 16px;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#999;">Order Summary</h2>
       <table style="width:100%;border-collapse:collapse;font-size:15px;">
-        <tr><td style="padding:8px 0;color:#666;border-top:1px solid #f0f0f0;">Event</td><td style="padding:8px 0 8px 16px;border-top:1px solid #f0f0f0;font-weight:500;">${esc(p.eventName)}</td></tr>
-        <tr><td style="padding:8px 0;color:#666;border-top:1px solid #f0f0f0;">Date</td><td style="padding:8px 0 8px 16px;border-top:1px solid #f0f0f0;">${esc(formatDate(p.eventDate))}</td></tr>
-        <tr><td style="padding:8px 0;color:#666;border-top:1px solid #f0f0f0;text-transform:capitalize;">Flag Style</td><td style="padding:8px 0 8px 16px;border-top:1px solid #f0f0f0;text-transform:capitalize;">${esc(p.flagStyle)}</td></tr>
+        ${row('Event', esc(p.eventName))}
+        ${row('Date', esc(formatDate(p.eventDate)))}
+        ${shippingHtml}
+        ${row('Flag Style', `<span style="text-transform:capitalize;">${esc(p.flagStyle)}</span>`)}
         ${colorRows}
-        ${p.designNotes ? `<tr><td style="padding:8px 0;color:#666;border-top:1px solid #f0f0f0;vertical-align:top;">Notes</td><td style="padding:8px 0 8px 16px;border-top:1px solid #f0f0f0;color:#555;">${esc(p.designNotes)}</td></tr>` : ''}
+        ${setupHtml}
+        ${qtyHtml}
+        ${logosHtml}
+        ${notesHtml}
       </table>
 
       <p style="margin:28px 0 0;color:#888;font-size:13px;line-height:1.6;">

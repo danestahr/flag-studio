@@ -2,7 +2,9 @@ import './order.css';
 import { COLORS, FLAGS } from './data.js';
 import { createProject, uploadLogo, supabase, sendOrderConfirmation } from './supabase.js';
 
-const SKIP_VALIDATION = false;
+// TEMP: demo mode — bypass required-field validation so the order form can
+// be stepped through without filling everything in. Flip back to `false` after.
+const SKIP_VALIDATION = true;
 
 // ── US States ──────────────────────────────────────────────
 const US_STATES = [
@@ -70,6 +72,8 @@ const O = {
   flagSecondaryColor: null,  // { hex, name }
   secondaryColorOpen: false,
   flagSetup: 'same',
+  flagQty: 9,
+  flagQtyCustom: false,
   designNotes: '',
   // Step 4
   logoFiles: [],
@@ -120,6 +124,7 @@ function validate(step) {
   }
   if (step === 3) {
     if (!O.flagStyle) errors.flagStyle = 'Please select a flag style.';
+    if (!O.flagQty || O.flagQty < 9) errors.flagQty = 'Quantity must be at least 9.';
   }
   if (step === 4) {
     if (!O.logoFiles.length) errors.logoFiles = 'At least one logo is required.';
@@ -290,6 +295,19 @@ function renderStep3() {
       <button class="setup-btn${O.flagSetup === 'different' ? ' active' : ''}" onclick="window.selectSetup('different')">Different front &amp; back</button>
     </div>
 
+    <div class="form-section-label" style="margin-top:1.5rem">Quantity</div>
+    <div class="qty-toggle">
+      ${[9, 18, 27, 36].map(n => `
+        <button class="qty-btn${!O.flagQtyCustom && O.flagQty === n ? ' active' : ''}" onclick="window.selectQty(${n})">${n}</button>`).join('')}
+      <button class="qty-btn${O.flagQtyCustom ? ' active' : ''}" onclick="window.selectQtyCustom()">Custom</button>
+    </div>
+    ${O.flagQtyCustom ? `
+      <div class="form-field" style="margin-top:.75rem">
+        <input class="form-input" type="number" min="9" step="1" id="f-qty" value="${O.flagQty}"
+          placeholder="Enter quantity (min 9)" oninput="window.setQtyValue(this.value)" style="max-width:200px">
+      </div>` : ''}
+    ${e.flagQty ? `<div class="form-error" style="margin-top:6px">${esc(e.flagQty)}</div>` : ''}
+
     <div class="form-field" style="margin-top:1.25rem">
       <label class="form-label" for="f-notes">Design notes <span style="font-weight:400;color:var(--gray-400)">(optional)</span></label>
       <textarea class="form-input" id="f-notes" placeholder="Any specific design requests or references…">${esc(O.designNotes)}</textarea>
@@ -383,6 +401,7 @@ function renderStep5() {
       <div class="rs-row"><span class="rs-label">Primary</span><span class="rs-value">${colorChip(O.flagPrimaryColor)}</span></div>
       <div class="rs-row"><span class="rs-label">Secondary</span><span class="rs-value">${colorChip(O.flagSecondaryColor)}</span></div>
       <div class="rs-row"><span class="rs-label">Setup</span><span class="rs-value">${setupLabel}</span></div>
+      <div class="rs-row"><span class="rs-label">Quantity</span><span class="rs-value">${O.flagQty} flag${O.flagQty === 1 ? '' : 's'}</span></div>
       ${O.designNotes ? `<div class="rs-row"><span class="rs-label">Notes</span><span class="rs-value">${esc(O.designNotes)}</span></div>` : ''}
     </div>
 
@@ -455,7 +474,7 @@ function renderCollapsibleFlagPicker() {
     const svgText = svgCache.get(label) || '';
     const inner = svgText ? coloredSvgInner(svgText, primaryHex, secondaryHex) : '';
     return `<div class="picker-collapsed" onclick="window.openPicker('flagStyle')" style="cursor:pointer">
-      <div class="picker-flag-thumb">${inner ? `<svg viewBox="0 0 7519 4670" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">${inner}</svg>` : ''}</div>
+      <div class="picker-flag-thumb">${inner ? `<svg viewBox="0 0 7519 4669" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">${inner}</svg>` : ''}</div>
       <span class="picker-collapsed-name">${esc(label)}</span>
       <span style="flex:1"></span>
       <button class="picker-clear-btn" onclick="event.stopPropagation();window.clearPicker('flagStyle')" title="Clear">×</button>
@@ -467,7 +486,7 @@ function renderCollapsibleFlagPicker() {
     const svgText = svgCache.get(name) || '';
     const inner = svgText ? coloredSvgInner(svgText, primaryHex, secondaryHex) : '';
     return `<div class="flag-tmpl-card${isActive ? ' active' : ''}" onclick="window.selectFlagStyle('${name.toLowerCase()}')">
-      <div class="flag-tmpl-thumb">${inner ? `<svg viewBox="0 0 7519 4670" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">${inner}</svg>` : '<div style="width:100%;height:100%;background:var(--gray-100)"></div>'}</div>
+      <div class="flag-tmpl-thumb">${inner ? `<svg viewBox="0 0 7519 4669" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">${inner}</svg>` : '<div style="width:100%;height:100%;background:var(--gray-100)"></div>'}</div>
       <div class="flag-tmpl-name">${name}</div>
     </div>`;
   }).join('');
@@ -667,6 +686,7 @@ window.orderSubmit = async function () {
       flag_style: O.flagStyle,
       flag_colors: [O.flagPrimaryColor, O.flagSecondaryColor].filter(Boolean),
       flag_setup: O.flagSetup,
+      flag_qty: O.flagQty,
       design_notes: O.designNotes || null,
       ack_deadline: O.ackDeadline,
       ack_pricing: O.ackPricing,
@@ -677,9 +697,20 @@ window.orderSubmit = async function () {
       contactEmail: O.contactEmail,
       eventName: O.eventName,
       eventDate: O.eventDate,
+      shipping: {
+        addressLine1: O.addressLine1,
+        addressLine2: O.addressLine2 || '',
+        city: O.city,
+        stateProvince: O.stateProvince,
+        postalCode: O.postalCode,
+        country: O.country,
+      },
       flagStyle: O.flagStyle,
       flagColors: [O.flagPrimaryColor, O.flagSecondaryColor].filter(Boolean),
+      flagSetup: O.flagSetup,
+      flagQty: O.flagQty,
       designNotes: O.designNotes || '',
+      logoFileNames: O.logoFiles.map(lf => lf.file?.name).filter(Boolean),
       projectId,
     }).catch(err => console.warn('Order confirmation email failed', err));
 
@@ -743,6 +774,26 @@ window.selectFlagStyle = function (style) {
   O.flagStyleOpen = false;
   O.errors = {};
   render();
+};
+
+window.selectQty = function (n) {
+  O.flagQty = n;
+  O.flagQtyCustom = false;
+  O.errors = {};
+  render();
+};
+
+window.selectQtyCustom = function () {
+  O.flagQtyCustom = true;
+  O.errors = {};
+  render();
+  // Focus the custom field for immediate entry
+  requestAnimationFrame(() => document.getElementById('f-qty')?.focus());
+};
+
+window.setQtyValue = function (val) {
+  const n = parseInt(val, 10);
+  O.flagQty = isNaN(n) ? 0 : n;
 };
 
 window.selectSetup = function (setup) {

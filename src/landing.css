@@ -65,3 +65,7 @@ a.draft-card { text-decoration:none; cursor:pointer; }
 .tool-status.configured { color:var(--green); font-weight:500; }
 .tool-status.configured::before { content:'● '; }
 .tool-arrow { font-size:13px; font-weight:500; color:var(--green); }
+
+.export-btn { padding:.55rem 1.1rem; font-size:13px; font-weight:500; background:var(--black); color:var(--white); border:none; border-radius:7px; cursor:pointer; transition:opacity .15s; }
+.export-btn:hover { opacity:.82; }
+.export-btn:disabled { opacity:.45; cursor:default; }

@@ -41,11 +41,11 @@
         <div><div class="step-label">Logo library</div><div class="step-desc">Upload logos</div></div>
       </div>
       <div class="step-item" data-step="4" onclick="tryGoStep(4)">
-        <div class="step-num"><span>3</span></div>
+        <div class="step-num"><span>2</span></div>
         <div><div class="step-label">Variations</div><div class="step-desc">Build combinations</div></div>
       </div>
       <div class="step-item" data-step="5" onclick="tryGoStep(5)">
-        <div class="step-num"><span>4</span></div>
+        <div class="step-num"><span>3</span></div>
         <div><div class="step-label">Gallery &amp; export</div><div class="step-desc">Review &amp; download</div></div>
       </div>
     </div>
@@ -162,24 +162,33 @@
             <button class="var-edit-resolve-btn" id="varEditResolveBtn" onclick="resolveEdit()">Mark as resolved</button>
             <span class="var-edit-resolved-tag" id="varEditResolvedTag" style="display:none">Resolved</span>
           </div>
-          <!-- Single canvas (same logo front & back) -->
-          <div id="singleCanvas">
-            <div class="flag-wrap" id="varWrap">
-              <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
-            </div>
+          <div class="canvas-zoom-row">
+            <span class="canvas-zoom-value" id="flagZoomValue">100%</span>
+            <button class="canvas-zoom-reset" id="flagZoomReset" onclick="setFlagZoom(100)" style="display:none">Reset</button>
+            <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
           </div>
-          <!-- Dual canvas (different logos front & back) -->
-          <div id="dualCanvas" style="display:none" class="dual-canvas-row">
-            <div>
-              <div class="dual-canvas-label">Front</div>
-              <div class="flag-wrap" id="varWrapFront">
-                <svg class="bsvg" id="varSvgFront" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+          <div class="canvas-scroll" id="flagCanvasScroll">
+            <div class="canvas-zoom-wrap" id="flagZoomWrap">
+              <!-- Single canvas (same logo front & back) -->
+              <div id="singleCanvas">
+                <div class="flag-wrap" id="varWrap">
+                  <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+                </div>
               </div>
-            </div>
-            <div>
-              <div class="dual-canvas-label">Back</div>
-              <div class="flag-wrap" id="varWrapBack">
-                <svg class="bsvg" id="varSvgBack" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+              <!-- Dual canvas (different logos front & back) -->
+              <div id="dualCanvas" style="display:none" class="dual-canvas-row">
+                <div>
+                  <div class="dual-canvas-label">Front</div>
+                  <div class="flag-wrap" id="varWrapFront">
+                    <svg class="bsvg" id="varSvgFront" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+                  </div>
+                </div>
+                <div>
+                  <div class="dual-canvas-label">Back</div>
+                  <div class="flag-wrap" id="varWrapBack">
+                    <svg class="bsvg" id="varSvgBack" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -251,14 +260,22 @@
           <div class="rc-title">Details</div>
           <div id="gDetails"></div>
           <div class="exp-row">
-            <button class="btn sm" onclick="expSVG()">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>SVG
+            <button class="btn sm" id="expPdf" onclick="expPDF()">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PDF
             </button>
             <button class="btn sm" id="expPng" onclick="expPNG()">
               <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG
             </button>
           </div>
           <button class="btn sm" style="width:100%;justify-content:center" onclick="expAllPNG()">Export all as PNG</button>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-400);font-weight:500;margin-bottom:6px">Print files</div>
+            <div class="exp-row">
+              <button class="btn sm primary" id="expPrintPdfBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('pdf')">↓ PDF zip</button>
+              <button class="btn sm primary" id="expPrintPngBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('png')">↓ PNG zip</button>
+            </div>
+            <div id="expPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px;margin-top:6px"></div>
+          </div>
           <div class="share-section" id="shareSection">
             <div class="rc-title">Share for review</div>
             <div id="shareStatus" style="font-size:13px;color:var(--gray-400);min-height:16px"></div>

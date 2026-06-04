@@ -1,4 +1,6 @@
 import './style.css';
+import { PDFDocument } from 'pdf-lib';
+import JSZip from 'jszip';
 import { S, _dragLogoId, setDragLogoId } from './state.js';
 import { FLAGS, COLORS } from './data.js';
 import { getFlag, applyColors, makeSvg, renderInto, getLogoData } from './render.js';
@@ -46,7 +48,7 @@ function currentStep() {
   return [...document.querySelectorAll('.panel')].findIndex(p => p.classList.contains('visible')) + 1;
 }
 
-window.tryGoStep = (n) => { if (n > currentStep()) return; goStep(n); };
+window.tryGoStep = (n) => { goStep(n); };
 
 window.goStep = function goStep(n) {
   if (n !== 5 && feedbackChannel) { feedbackChannel.unsubscribe(); feedbackChannel = null; }
@@ -68,7 +70,7 @@ window.goStep = function goStep(n) {
 function renderFlagGrid() {
   document.getElementById('flagGrid').innerHTML = FLAGS.map(f => `
     <div class="flag-card" id="fc-${f.id}" onclick="pickFlag('${f.id}')">
-      <div class="flag-card-preview"><svg viewBox="${f.viewBox || '0 0 7519 4670'}" preserveAspectRatio="xMidYMid meet">${f.svgContent}</svg></div>
+      <div class="flag-card-preview"><svg viewBox="${f.viewBox || '0 0 7519 4669'}" preserveAspectRatio="xMidYMid meet">${f.svgContent}</svg></div>
       <div><div class="flag-card-name">${f.name}</div><div class="flag-card-zones">${f.colorZones.map(z => z.label).join(', ')}</div></div>
     </div>`).join('');
 }
@@ -228,7 +230,7 @@ function refreshColorPrev() {
   const flag = getFlag();
   if (!flag) return;
   const box = document.getElementById('colorPrev');
-  box.innerHTML = `<svg viewBox="${flag.viewBox || '0 0 7519 4670'}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${flag.svgContent}</svg>`;
+  box.innerHTML = `<svg viewBox="${flag.viewBox || '0 0 7519 4669'}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${flag.svgContent}</svg>`;
   applyColors(box.querySelector('svg'), S.colors);
 }
 
@@ -336,7 +338,7 @@ function setupLibrary() {
   const flag = getFlag();
   if (!flag) return;
   const svg = document.getElementById('baseSvg');
-  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4670');
+  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
   svg.innerHTML = flag.svgContent;
   applyColors(svg, S.colors);
   renderLib();
@@ -466,8 +468,8 @@ function renderDropZones(wrapId, svgId, assignment, face = 'front') {
   const wrap = document.getElementById(wrapId);
   wrap.querySelectorAll('.dzone').forEach(d => d.remove());
   const svg = document.getElementById(svgId);
-  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4670');
-  const [vbW, vbH] = (flag.viewBox || '0 0 7519 4670').split(' ').slice(2).map(Number);
+  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
+  const [vbW, vbH] = (flag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
   if (face === 'back') {
     svg.innerHTML = '';
     const ns = 'http://www.w3.org/2000/svg';
@@ -670,6 +672,60 @@ window.setFace = function (face) {
   renderVarCanvas();
 };
 
+let _flagZoom = 100;
+
+function applyFlagZoom(pct) {
+  _flagZoom = pct;
+  const wrap = document.getElementById('flagZoomWrap');
+  const label = document.getElementById('flagZoomValue');
+  const reset = document.getElementById('flagZoomReset');
+  if (wrap) wrap.style.width = pct + '%';
+  if (label) label.textContent = pct + '%';
+  if (reset) reset.style.display = pct === 100 ? 'none' : '';
+}
+
+window.setFlagZoom = function (val) {
+  const pct = Math.max(40, Math.min(400, parseInt(val, 10) || 100));
+  applyFlagZoom(pct);
+};
+
+(function wireFlagCanvasZoom() {
+  const setup = () => {
+    const scroll = document.getElementById('flagCanvasScroll');
+    if (!scroll || scroll.__zoomWired) return;
+    scroll.__zoomWired = true;
+    scroll.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const wrap = document.getElementById('flagZoomWrap');
+      if (!wrap) return;
+
+      const before = wrap.getBoundingClientRect();
+      if (!before.width || !before.height) return;
+      const fracX = (e.clientX - before.left) / before.width;
+      const fracY = (e.clientY - before.top)  / before.height;
+
+      const oldZoom = _flagZoom;
+      const raw = -e.deltaY * 0.005;
+      const factor = 1 + Math.max(-0.25, Math.min(0.25, raw));
+      const newZoom = Math.max(40, Math.min(400, Math.round(oldZoom * factor)));
+      if (newZoom === oldZoom) return;
+      applyFlagZoom(newZoom);
+
+      const after = wrap.getBoundingClientRect();
+      const targetX = after.left + fracX * after.width;
+      const targetY = after.top  + fracY * after.height;
+      scroll.scrollLeft += targetX - e.clientX;
+      scroll.scrollTop  += targetY - e.clientY;
+    }, { passive: false });
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setup);
+  } else {
+    setup();
+  }
+})();
+
 window.toggleDiffSides = function (checked) {
   S.sameLogoOnBothSides = !checked;
   activeFace = 'front';
@@ -737,17 +793,39 @@ window.renameVar = function (id, name) {
   markDirty();
 };
 
+window.setVarQty = function (id, val) {
+  const v = S.variations.find(v => v.id === id);
+  if (!v) return;
+  const n = Math.max(1, parseInt(val, 10) || 1);
+  v.qty = n;
+  markDirty();
+};
+
 function renderVarList() {
   document.getElementById('varList').innerHTML = S.variations.map(v => {
     const fb = S.feedback?.find(f => f.variation_id === v.id);
     const fbClass = fb?.status === 'needs_edits' && !fb?.resolved ? ' needs-edits'
       : fb?.status === 'approved' ? ' approved' : '';
+    const statusTile = fb?.status === 'approved'
+      ? '<span class="var-status-tile approved">✓ Approved</span>'
+      : (fb?.status === 'needs_edits' && !fb?.resolved)
+        ? '<span class="var-status-tile needs-edits">Needs edits</span>'
+        : '<span class="var-status-tile not-reviewed">Not reviewed</span>';
+    const qty = v.qty ?? 1;
     return `
     <div class="var-card${v.id === S.activeVarId ? ' active' : ''}${fbClass}" onclick="selectVar('${v.id}')">
       <div class="var-card-left">
         <div class="vthumb" id="vt-${v.id}"></div>
-        <input class="vname" value="${esc(v.name)}" onclick="event.stopPropagation()"
-          onchange="renameVar('${v.id}',this.value)">
+        <div style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1">
+          <input class="vname" value="${esc(v.name)}" onclick="event.stopPropagation()"
+            onchange="renameVar('${v.id}',this.value)">
+          ${statusTile}
+          <div class="var-qty-row" onclick="event.stopPropagation()">
+            <label class="var-qty-label">Qty</label>
+            <input class="var-qty-input" type="number" min="1" step="1" value="${qty}"
+              onchange="setVarQty('${v.id}', this.value)">
+          </div>
+        </div>
       </div>
       <div class="var-btns">
         <button class="vbtn" title="Duplicate" onclick="event.stopPropagation();dupVar('${v.id}')">⧉</button>
@@ -777,11 +855,11 @@ function renderVarCanvas() {
   updateFaceTabs();
 
   if (S.sameLogoOnBothSides) {
-    document.getElementById('varSvg').setAttribute('viewBox', flag.viewBox || '0 0 7519 4670');
+    document.getElementById('varSvg').setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
     document.getElementById('varWrap').querySelectorAll('.dzone').forEach(d => d.remove());
     renderDropZones('varWrap', 'varSvg', v.assignment, 'front');
   } else {
-    const vb = flag.viewBox || '0 0 7519 4670';
+    const vb = flag.viewBox || '0 0 7519 4669';
     document.getElementById('varSvgFront').setAttribute('viewBox', vb);
     document.getElementById('varWrapFront').querySelectorAll('.dzone').forEach(d => d.remove());
     renderDropZones('varWrapFront', 'varSvgFront', v.assignment, 'front');
@@ -823,7 +901,7 @@ function renderVarStrip() {
     el.title = l.name;
     el.setAttribute('ondragstart', `dragStart(event,'${l.id}')`);
     el.setAttribute('ondragend', `dragEnd('${l.id}')`);
-    el.innerHTML = `<img src="${l.src}" alt="${l.name}">`;
+    el.innerHTML = `<img src="${l.src}" alt="${l.name}">${l.uploading ? '' : `<button class="var-lib-del" title="Delete" onclick="event.stopPropagation();delLogo('${l.id}')">×</button>`}`;
     strip.appendChild(el);
   });
 }
@@ -933,6 +1011,7 @@ window.gGoTo = function (i) { S.gIndex = i; renderGSlide(); };
 
 // ── EXPORT ────────────────────────────────────────────────
 function slug(s) { return s.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); }
+
 function dl(url, name) {
   const a = document.createElement('a');
   a.href = url; a.download = name;
@@ -940,56 +1019,234 @@ function dl(url, name) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-window.expSVG = function () {
-  const v = S.variations[S.gIndex];
-  if (!v) return;
-  const faceAssignment = (gFace === 'back' && !S.sameLogoOnBothSides) ? (v.backAssignment || {}) : v.assignment;
-  const svg = makeSvg(faceAssignment, 1000, 750, gFace);
+const FLAG_DPI = 300;
+
+async function rasterizeSvg(assignment, face) {
+  const flag = getFlag();
+  const [, , vbW, vbH] = (flag?.viewBox || '0 0 7519 4669').split(' ').map(Number);
+  const pxW = vbW;
+  const pxH = vbH;
+  const svg = makeSvg(assignment, pxW, pxH, face);
+
+  // Inline all external image hrefs so the canvas renderer can paint them
+  await Promise.all(Array.from(svg.querySelectorAll('image')).map(async img => {
+    const src = img.getAttribute('href') || img.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || '';
+    if (!src || src.startsWith('data:') || src.startsWith('blob:')) return;
+    try {
+      const res = await fetch(src);
+      if (!res.ok) return;
+      const ext = src.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+      const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' };
+      const mime = mimeMap[ext] ?? (res.headers.get('content-type') ?? 'image/png').split(';')[0];
+      const buf = await res.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      img.setAttribute('href', `data:${mime};base64,${btoa(binary)}`);
+    } catch { /* leave as-is on failure */ }
+  }));
+
   let str = new XMLSerializer().serializeToString(svg);
   if (!str.startsWith('<?xml')) str = '<?xml version="1.0" encoding="UTF-8"?>\n' + str;
-  dl(URL.createObjectURL(new Blob([str], { type: 'image/svg+xml' })), slug(v.name) + (gFace === 'back' ? '-back' : '') + '.svg');
-};
+  const blobUrl = URL.createObjectURL(new Blob([str], { type: 'image/svg+xml' }));
 
-window.expPNG = function () {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = pxW; c.height = pxH;
+      c.getContext('2d').drawImage(img, 0, 0, pxW, pxH);
+      URL.revokeObjectURL(blobUrl);
+      c.toBlob(blob => blob ? resolve({ blob, pxW, pxH }) : reject(new Error('canvas.toBlob failed')), 'image/png');
+    };
+    img.onerror = () => { URL.revokeObjectURL(blobUrl); reject(new Error('SVG render failed')); };
+    img.src = blobUrl;
+  });
+}
+
+window.expPDF = async function () {
   const v = S.variations[S.gIndex];
   if (!v) return;
-  const faceAssignment = (gFace === 'back' && !S.sameLogoOnBothSides) ? (v.backAssignment || {}) : v.assignment;
-  const btn = document.getElementById('expPng');
+  const flag = getFlag();
+  if (!flag) return;
+  const btn = document.getElementById('expPdf');
   btn.textContent = '…'; btn.disabled = true;
-  svgToPng(faceAssignment, 2000, 1500, gFace, url => {
-    dl(url, slug(v.name) + (gFace === 'back' ? '-back' : '') + '.png');
-    btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG';
+  try {
+    const faceAssignment = (gFace === 'back' && !S.sameLogoOnBothSides) ? (v.backAssignment || {}) : v.assignment;
+    const { blob } = await rasterizeSvg(faceAssignment, gFace);
+    const pngBytes = await blob.arrayBuffer();
+    const [, , vbW, vbH] = (flag.viewBox || '0 0 7519 4669').split(' ').map(Number);
+    const ptW = (vbW / FLAG_DPI) * 72;
+    const ptH = (vbH / FLAG_DPI) * 72;
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([ptW, ptH]);
+    const pngImage = await pdfDoc.embedPng(pngBytes);
+    page.drawImage(pngImage, { x: 0, y: 0, width: ptW, height: ptH });
+    const pdfBytes = await pdfDoc.save();
+    dl(URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' })),
+      slug(v.name) + (gFace === 'back' ? '-back' : '') + '.pdf');
+  } catch (err) {
+    console.error('PDF export failed', err);
+    alert('PDF export failed.');
+  } finally {
+    btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PDF';
     btn.disabled = false;
-  });
-};
-
-window.expAllPNG = async function () {
-  for (let i = 0; i < S.variations.length; i++) {
-    const v = S.variations[i];
-    await new Promise(res => svgToPng(v.assignment, 2000, 1500, 'front', url => { dl(url, slug(v.name) + '.png'); res(); }));
-    await new Promise(r => setTimeout(r, 500));
-    if (!S.sameLogoOnBothSides) {
-      await new Promise(res => svgToPng(v.backAssignment || {}, 2000, 1500, 'back', url => { dl(url, slug(v.name) + '-back.png'); res(); }));
-      await new Promise(r => setTimeout(r, 500));
-    }
   }
 };
 
-function svgToPng(assignment, w, h, face, cb) {
-  const svg = makeSvg(assignment, w, h, face);
+window.expPNG = async function () {
+  const v = S.variations[S.gIndex];
+  if (!v) return;
+  const btn = document.getElementById('expPng');
+  btn.textContent = '…'; btn.disabled = true;
+  try {
+    const faceAssignment = (gFace === 'back' && !S.sameLogoOnBothSides) ? (v.backAssignment || {}) : v.assignment;
+    const { blob } = await rasterizeSvg(faceAssignment, gFace);
+    dl(URL.createObjectURL(blob), slug(v.name) + (gFace === 'back' ? '-back' : '') + '.png');
+  } catch (err) {
+    console.error('PNG export failed', err);
+    alert('PNG export failed.');
+  } finally {
+    btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG';
+    btn.disabled = false;
+  }
+};
+
+window.expAllPNG = async function () {
+  for (const v of S.variations) {
+    try {
+      const { blob } = await rasterizeSvg(v.assignment, 'front');
+      dl(URL.createObjectURL(blob), slug(v.name) + '.png');
+      await new Promise(r => setTimeout(r, 400));
+      if (!S.sameLogoOnBothSides) {
+        const { blob: blobB } = await rasterizeSvg(v.backAssignment || {}, 'back');
+        dl(URL.createObjectURL(blobB), slug(v.name) + '-back.png');
+        await new Promise(r => setTimeout(r, 400));
+      }
+    } catch (err) { console.error('PNG export failed for', v.name, err); }
+  }
+};
+
+// ── PRINT DOWNLOAD (zip of front+back per variation) ─────────
+async function rasterizeForPrint(assignment, face) {
+  // Same as rasterizeSvg but strips the `Bleed` group (the grey print-bleed area)
+  // from the SVG before drawing, since the print file shouldn't include it.
+  const flag = getFlag();
+  const [, , vbW, vbH] = (flag?.viewBox || '0 0 7519 4669').split(' ').map(Number);
+  const pxW = vbW;
+  const pxH = vbH;
+  const svg = makeSvg(assignment, pxW, pxH, face);
+
+  // Remove the grey bleed area for the print output
+  for (const gid of ['Bleed', 'bleed']) {
+    const el = svg.querySelector(`#${gid}`);
+    if (el) el.parentNode?.removeChild(el);
+  }
+
+  // Inline external image hrefs as data URIs (so canvas can paint them)
+  await Promise.all(Array.from(svg.querySelectorAll('image')).map(async img => {
+    const src = img.getAttribute('href') || img.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || '';
+    if (!src || src.startsWith('data:') || src.startsWith('blob:')) return;
+    try {
+      const res = await fetch(src);
+      if (!res.ok) return;
+      const ext = src.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+      const mimeMap = { png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', webp:'image/webp', svg:'image/svg+xml' };
+      const mime = mimeMap[ext] ?? (res.headers.get('content-type') ?? 'image/png').split(';')[0];
+      const buf = await res.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      img.setAttribute('href', `data:${mime};base64,${btoa(binary)}`);
+    } catch { /* leave as-is on failure */ }
+  }));
+
   let str = new XMLSerializer().serializeToString(svg);
   if (!str.startsWith('<?xml')) str = '<?xml version="1.0" encoding="UTF-8"?>\n' + str;
-  const url = URL.createObjectURL(new Blob([str], { type: 'image/svg+xml' }));
-  const img = new Image();
-  img.onload = () => {
-    const c = document.createElement('canvas');
-    c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h);
-    URL.revokeObjectURL(url);
-    c.toBlob(b => cb(URL.createObjectURL(b)), 'image/png');
-  };
-  img.onerror = () => { URL.revokeObjectURL(url); alert('PNG export failed — ensure logos are local file uploads.'); };
-  img.src = url;
+  const blobUrl = URL.createObjectURL(new Blob([str], { type: 'image/svg+xml' }));
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = pxW; c.height = pxH;
+      c.getContext('2d').drawImage(img, 0, 0, pxW, pxH);
+      URL.revokeObjectURL(blobUrl);
+      c.toBlob(blob => blob ? resolve({ blob, pxW, pxH }) : reject(new Error('canvas.toBlob failed')), 'image/png');
+    };
+    img.onerror = () => { URL.revokeObjectURL(blobUrl); reject(new Error('SVG render failed')); };
+    img.src = blobUrl;
+  });
 }
+
+async function pngBlobToPdfBlob(pngBlob, vbW, vbH) {
+  const FLAG_DPI = 300;
+  const ptW = (vbW / FLAG_DPI) * 72;
+  const ptH = (vbH / FLAG_DPI) * 72;
+  const pngBytes = await pngBlob.arrayBuffer();
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage([ptW, ptH]);
+  const png = await pdfDoc.embedPng(pngBytes);
+  page.drawImage(png, { x: 0, y: 0, width: ptW, height: ptH });
+  return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
+}
+
+window.downloadForPrint = async function (format) {
+  if (!S.variations.length) { alert('No variations to export.'); return; }
+  if (format !== 'pdf' && format !== 'png') return;
+
+  const btnPdf = document.getElementById('expPrintPdfBtn');
+  const btnPng = document.getElementById('expPrintPngBtn');
+  const status = document.getElementById('expPrintStatus');
+  const activeBtn = format === 'pdf' ? btnPdf : btnPng;
+  const originalLabel = activeBtn?.textContent;
+  if (btnPdf) btnPdf.disabled = true;
+  if (btnPng) btnPng.disabled = true;
+  if (activeBtn) activeBtn.textContent = 'Preparing…';
+  const setStatus = msg => { if (status) status.textContent = msg; };
+
+  try {
+    const zip = new JSZip();
+    const [, , vbW, vbH] = (getFlag()?.viewBox || '0 0 7519 4669').split(' ').map(Number);
+
+    for (let i = 0; i < S.variations.length; i++) {
+      const v = S.variations[i];
+      setStatus(`Rendering ${i + 1} of ${S.variations.length}: ${v.name}…`);
+
+      const frontAssign = v.assignment;
+      const backAssign  = S.sameLogoOnBothSides ? v.assignment : (v.backAssignment || {});
+
+      const { blob: frontPng } = await rasterizeForPrint(frontAssign, 'front');
+      const { blob: backPng }  = await rasterizeForPrint(backAssign,  'back');
+
+      const safe = slug(v.name) || 'variation-' + (i + 1);
+      if (format === 'png') {
+        zip.file(`${safe}/${safe}-front.png`, frontPng);
+        zip.file(`${safe}/${safe}-back.png`,  backPng);
+      } else {
+        const frontPdf = await pngBlobToPdfBlob(frontPng, vbW, vbH);
+        const backPdf  = await pngBlobToPdfBlob(backPng,  vbW, vbH);
+        zip.file(`${safe}/${safe}-front.pdf`, frontPdf);
+        zip.file(`${safe}/${safe}-back.pdf`,  backPdf);
+      }
+    }
+
+    setStatus('Zipping…');
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const flag = getFlag();
+    const zipName = `flags-${slug(flag?.name || S.flagId || 'export')}-${format}.zip`;
+    dl(URL.createObjectURL(zipBlob), zipName);
+    setStatus(`Done — ${S.variations.length} variation${S.variations.length === 1 ? '' : 's'} exported.`);
+  } catch (err) {
+    console.error('Print export failed', err);
+    setStatus('Export failed: ' + (err.message || err));
+    alert('Print export failed. See console for details.');
+  } finally {
+    if (btnPdf) btnPdf.disabled = false;
+    if (btnPng) btnPng.disabled = false;
+    if (activeBtn && originalLabel) activeBtn.textContent = originalLabel;
+  }
+};
 
 // ── SHARE ─────────────────────────────────────────────────
 window.openShareModal = async function () {
@@ -1058,7 +1315,7 @@ window.notifyCustomer = async function () {
   } catch (err) {
     console.error(err);
     status.style.color = 'var(--red, #c0392b)';
-    status.textContent = 'Failed to send. Try again.';
+    status.textContent = `Failed to send: ${err.message || err}`;
   } finally {
     btn.disabled = false;
   }

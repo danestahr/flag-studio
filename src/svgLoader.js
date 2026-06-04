@@ -33,7 +33,7 @@ async function loadFlagData(flag) {
     flag.logoZones = [];
   }
 
-  flag.viewBox = svgEl.getAttribute('viewBox') || '0 0 7519 4670';
+  flag.viewBox = svgEl.getAttribute('viewBox') || '0 0 7519 4669';
   flag.svgContent = svgEl.innerHTML;
 }
 
