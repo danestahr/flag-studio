@@ -5,6 +5,23 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ── Auth ──────────────────────────────────────────────────
+export async function signIn(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
+}
+
+export async function signOut() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+export async function getSession() {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session;
+}
+
 // ── Projects ──────────────────────────────────────────────
 export async function createProject(name = '') {
   const { data, error } = await supabase
@@ -114,7 +131,7 @@ export async function saveFlagConfig(projectId, state) {
       flag_id: state.flagId,
       colors: state.colors,
       base_assignment: state.baseAssignment,
-      variations: state.variations,
+      variations: { layout: state.logoLayout || 'single', items: state.variations },
       same_logo_on_both_sides: state.sameLogoOnBothSides,
       status: 'draft',
       updated_at: new Date().toISOString(),
@@ -128,8 +145,8 @@ export async function loadFlagConfig(projectId) {
     .from('flag_config')
     .select('*')
     .eq('project_id', projectId)
-    .single();
-  if (error && error.code !== 'PGRST116') throw error;
+    .maybeSingle();
+  if (error) throw error;
   return data || null;
 }
 
@@ -155,8 +172,8 @@ export async function loadHoleSignConfig(projectId) {
     .from('hole_sign_config')
     .select('*')
     .eq('project_id', projectId)
-    .single();
-  if (error && error.code !== 'PGRST116') throw error;
+    .maybeSingle();
+  if (error) throw error;
   return data || null;
 }
 
@@ -180,8 +197,8 @@ export async function getProjectByToken(token) {
   if (error) throw error;
 
   const [{ data: flagCfg }, { data: holeCfg }] = await Promise.all([
-    supabase.from('flag_config').select('*').eq('project_id', project.id).single(),
-    supabase.from('hole_sign_config').select('*').eq('project_id', project.id).single(),
+    supabase.from('flag_config').select('*').eq('project_id', project.id).maybeSingle(),
+    supabase.from('hole_sign_config').select('*').eq('project_id', project.id).maybeSingle(),
   ]);
 
   return { ...project, flagConfig: flagCfg || null, holeSignConfig: holeCfg || null };
@@ -193,8 +210,8 @@ export async function loadOrderIntake(projectId) {
     .from('order_intakes')
     .select('*')
     .eq('project_id', projectId)
-    .single();
-  if (error && error.code !== 'PGRST116') throw error;
+    .maybeSingle();
+  if (error) throw error;
   return data || null;
 }
 

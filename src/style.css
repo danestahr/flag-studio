@@ -9,6 +9,8 @@
 body { font-family:'DM Sans',sans-serif; background:var(--gray-50); color:var(--black); min-height:100vh; font-size:15px; line-height:1.6; }
 
 header { background:var(--green); padding:0 2.5rem; height:64px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
+.sign-out-btn { background:transparent; border:1px solid rgba(255,255,255,.35); color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; padding:5px 14px; border-radius:20px; cursor:pointer; transition:background .15s,color .15s; }
+.sign-out-btn:hover { background:rgba(255,255,255,.12); color:white; }
 .logo { font-family:'DM Serif Display',serif; color:var(--white); font-size:20px; display:flex; align-items:center; gap:10px; }
 .logo-mark { width:28px; height:21px; background:var(--gold); border-radius:2px; position:relative; }
 .logo-mark::before { content:''; position:absolute; top:0; left:0; right:0; height:5px; background:var(--green-light); border-radius:2px 2px 0 0; }
@@ -141,9 +143,16 @@ input[type=file] { display:none; }
 /* ── Drop zones ──────────────────────────────────────────── */
 .dzone { position:absolute; border:2px dashed rgba(255,255,255,.5); border-radius:6px; cursor:default; transition:background .15s, border-color .15s; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; overflow:hidden; }
 .dzone.has-logo { border-color:rgba(255,255,255,.2); background:transparent; }
-.dzone:not(.has-logo):hover { background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.8); }
+.dzone:hover { background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.8); }
 .dzone.drag-over { background:rgba(255,255,255,.2); border-color:white; }
 .dzone.selected { border-color:rgba(255,255,255,.9); box-shadow:0 0 0 2px rgba(255,255,255,.3); }
+/* When one zone is active, make all others invisible and non-interactive */
+.flag-wrap.dz-solo .dzone:not(.selected):not(.drag-over) { border-color:transparent; pointer-events:none; }
+
+/* Zone-picker badges — always on top of all dzones, always clickable */
+.dz-badge { position:absolute; width:22px; height:22px; border-radius:50%; background:rgba(0,0,0,.5); color:#fff; font-size:11px; font-weight:600; border:1.5px solid rgba(255,255,255,.35); cursor:pointer; z-index:50; display:flex; align-items:center; justify-content:center; font-family:inherit; transform:translate(6px,6px); transition:background .12s; pointer-events:auto; }
+.dz-badge:hover { background:rgba(0,0,0,.78); }
+.dz-badge.active { background:var(--green); border-color:var(--green); }
 
 .dz-lbl { font-size:11px; font-weight:500; color:rgba(255,255,255,.9); text-shadow:0 1px 3px rgba(0,0,0,.5); pointer-events:none; text-align:center; padding:0 4px; }
 .dz-icon { font-size:18px; color:rgba(255,255,255,.8); pointer-events:none; }
@@ -206,7 +215,11 @@ input[type=file] { display:none; }
 .canvas-zoom-reset:hover { color:var(--black); }
 .canvas-zoom-hint { font-size:11px; color:var(--gray-400); margin-left:auto; }
 .canvas-scroll { overflow:auto; max-height:calc(100vh - 280px); border-radius:6px; }
-.canvas-zoom-wrap { width:100%; margin:0 auto; }
+/* Step-2 canvas: bounded, flex-centred box so the JS-fitted wrap is centred and
+   the whole sign is visible by default (mirrors the Step-1 scroll). */
+#hsCanvasScroll { max-height:none; display:flex; align-items:center; justify-content:center; background:var(--gray-50); border:1px solid var(--gray-100); }
+.canvas-zoom-wrap { margin:auto; flex-shrink:0; }
+.canvas-zoom-wrap .hs-sign-preview { width:100%; height:100%; }
 .var-strip-wrap { margin-bottom:1rem; }
 .var-strip-label { font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-400); margin-bottom:8px; }
 .var-strip { display:flex; gap:8px; flex-wrap:wrap; }
@@ -369,10 +382,15 @@ input[type=file] { display:none; }
 .band-dragging .tl-slot { opacity:.35; }
 
 /* Inline canvas text editing */
-.canvas-edit-zone { border-radius:4px; }
-.canvas-edit-hotspot { border-radius:4px; transition:background .12s; }
-.canvas-edit-hotspot:hover { background:rgba(128,128,128,.3); }
-.canvas-edit-input { border-radius:4px; background:rgba(128,128,128,.3); }
+.canvas-edit-zone { border-radius:4px; transition:background .12s; }
+/* Body text: on hover, highlight the FULL available text area (matching the
+   click/edit state) rather than a tight box hugging the glyphs. The banner is
+   already an obvious draggable band, so it gets NO highlight box — that box was
+   the "halo" on the banner text. */
+.canvas-edit-zone:not(.is-banner):hover { background:rgba(128,128,128,.16); }
+.canvas-edit-hotspot { border-radius:4px; }
+.canvas-edit-input { border-radius:4px; background:rgba(128,128,128,.16); }
+.canvas-edit-zone.is-banner .canvas-edit-input { background:transparent; }
 .canvas-edit-input:empty:before { content:attr(data-ph); opacity:.5; }
 
 /* Step-1 variation-logo placeholder: neutral dashed box that reads on any sign bg */
@@ -380,7 +398,7 @@ input[type=file] { display:none; }
 .hs-ph-label { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; color:rgba(128,128,128,.85); background:rgba(255,255,255,.55); padding:2px 7px; border-radius:10px; }
 .hs-design-preview-col { position:sticky; top:calc(64px + 2rem); display:flex; flex-direction:column; gap:.5rem; }
 .hs-step1-scroll { overflow:auto; height:calc(100vh - 180px); background:var(--gray-50); border-radius:var(--rl); border:1px solid var(--gray-100); display:flex; justify-content:center; align-items:center; }
-.hs-step1-zoom-wrap { height:100%; aspect-ratio:6375/5475; flex-shrink:0; }
+.hs-step1-zoom-wrap { aspect-ratio:6375/5475; flex-shrink:0; }
 .hs-step1-zoom-wrap #hsStep1Preview { width:100%; height:100%; aspect-ratio:auto; border:none; border-radius:0; }
 .hs-section { display:flex; flex-direction:column; gap:8px; background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; }
 .hs-section-title { font-size:13px; font-weight:500; }
@@ -468,12 +486,10 @@ input[type=file] { display:none; }
 .tl-select:hover { border-color:var(--gray-400); }
 .tl-select:disabled { cursor:not-allowed; background-color:var(--gray-50); color:var(--gray-400); }
 .tl-hint { font-size:11px; color:var(--gray-400); line-height:1.4; margin-top:4px; }
-.tl-slot { position:absolute; border:1.5px solid rgba(128,128,128,.25); border-radius:8px; cursor:pointer; box-sizing:border-box; background:rgba(255,255,255,.7); transition:border-color .15s, background .15s; overflow:hidden; }
+.tl-slot { position:absolute; border:1.5px solid rgba(128,128,128,.25); border-radius:8px; cursor:pointer; box-sizing:border-box; background:rgba(255,255,255,.7); transition:border-color .15s, background .15s; overflow:visible; }
 .tl-slot:hover { border-color:rgba(128,128,128,.45); background:rgba(255,255,255,.85); }
-/* Once a logo is in place the slot must render exactly what the user
-   configured — no decorative default border, no hover halo, no selection
-   ring. The corner resize handle alone indicates the selected slot. */
-.tl-slot.has-logo { border-color:transparent; background:transparent; }
+.tl-slot.has-logo { border-color:transparent; background:transparent; cursor:grab; overflow:hidden; }
+.tl-slot.has-logo:active { cursor:grabbing; }
 .tl-slot.has-logo:hover { border-color:transparent; }
 .tl-slot.has-logo.selected { border-color:transparent; }
 .tl-slot .tl-snap-guide { position:absolute; background:var(--green); pointer-events:none; opacity:0; transition:opacity .1s; z-index:1; }
@@ -484,7 +500,15 @@ input[type=file] { display:none; }
 .tl-slot-placeholder > span:first-child { font-size:18px; font-weight:300; line-height:1; }
 .tl-slot-ph-label { font-size:9px; text-transform:uppercase; letter-spacing:.06em; }
 .tl-slot-img { user-select:none; -webkit-user-drag:none; }
-.tl-slot-handle { position:absolute; right:2px; bottom:2px; width:14px; height:14px; background:var(--green); border:2px solid #fff; border-radius:50%; cursor:nwse-resize; box-shadow:0 1px 3px rgba(0,0,0,.4); z-index:2; }
+.tl-slot-handle { position:absolute; right:2px; bottom:2px; width:14px; height:14px; background:var(--green); border:2px solid #fff; border-radius:50%; cursor:nwse-resize; box-shadow:0 1px 3px rgba(0,0,0,.4); z-index:5; opacity:0; transition:opacity .15s; }
+.tl-slot:hover .tl-slot-handle { opacity:1; }
+.tl-slot-actions { position:absolute; top:4px; left:4px; display:flex; gap:3px; opacity:0; transition:opacity .15s; pointer-events:none; z-index:6; }
+.tl-slot:hover .tl-slot-actions { opacity:1; pointer-events:auto; }
+.tl-slot-act-btn { padding:2px 7px; background:rgba(255,255,255,.92); border:1px solid rgba(0,0,0,.12); border-radius:4px; font-size:10px; font-weight:500; cursor:pointer; color:#111; font-family:inherit; line-height:1.6; }
+.tl-slot-act-btn:hover { background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+.tl-slot-act-btn.danger:hover { background:#fee2e2; color:#dc2626; border-color:#fecaca; }
+.tl-slot-size-badge { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,.58); color:#fff; font-size:9px; padding:2px 5px; border-radius:3px; white-space:nowrap; opacity:0; transition:opacity .15s; pointer-events:none; z-index:4; }
+.tl-slot:hover .tl-slot-size-badge { opacity:1; }
 
 .color-row { display:flex; align-items:center; gap:8px; }
 .eyedropper-btn { width:34px; height:34px; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--white); border:1.5px solid var(--gray-200); border-radius:8px; color:var(--gray-600); cursor:pointer; padding:0; transition:border-color .15s, color .15s; }

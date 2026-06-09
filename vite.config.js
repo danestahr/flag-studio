@@ -8,6 +8,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
+        login: resolve(__dirname, 'login.html'),
         project: resolve(__dirname, 'project.html'),
         flags: resolve(__dirname, 'flags.html'),
         'hole-signs': resolve(__dirname, 'hole-signs.html'),

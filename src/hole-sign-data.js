@@ -47,8 +47,8 @@ export const HS_BANNER_DEFAULT_H = 700;
 export function emptyBanner() {
   return {
     enabled: false,
-    position: 'top',
     height: HS_BANNER_DEFAULT_H,
+    spacing: 0,
     bg: { type: 'color', color: '#E5E5E5', imageUrl: null, storagePath: null, imageX: 50, imageY: 50, imageScale: 100 },
     topText: { text: '', font: 'dm-serif', size: 260, color: '#111110' },
     subText: { text: '', font: 'dm-sans',  size: 140, color: '#111110' },

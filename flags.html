@@ -139,6 +139,13 @@
           Different design on front &amp; back
         </label>
       </div>
+      <div id="logoLayoutRow" class="sides-row" style="display:none">
+        <span style="font-size:13px;font-weight:500;color:var(--gray-600);margin-right:8px">Logo placement:</span>
+        <div class="face-toggle-row">
+          <button class="face-tab active" id="layoutBtnSingle" onclick="setLogoLayout('single')">Full logo</button>
+          <button class="face-tab" id="layoutBtnMulti" onclick="setLogoLayout('multi')">Multiple logos</button>
+        </div>
+      </div>
       <div class="var-strip-wrap">
         <div class="var-strip-label">Logos</div>
         <div class="var-strip" id="varStrip">

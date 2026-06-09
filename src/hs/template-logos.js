@@ -1,0 +1,627 @@
+import { HS, UI, eyedropperBtn } from './state.js';
+import { renderStep1, updateStep1Preview } from './design.js';
+import { renderEditor, renderVariationPreview } from './variations.js';
+import { prepareLogo } from './logo-utils.js';
+import { HS_H, HS_TPL_LOGO_MAX, HS_TPL_LOGO_MIN, HS_W, emptyTemplateLogos, normalizeTplLogoSize } from '../hole-sign-data.js';
+import { HS_TPL_LOGO_SAFE_FRAC, escXml } from '../hole-sign-render.js';
+import { uploadLogo } from '../supabase.js';
+
+// ── Template logo controls ────────────────────────────────
+// Which hAlign options are valid given count + whether text shares the band.
+// Anything that would put a logo on top of the text is dropped.
+export function validHAlignsFor(count, hasText) {
+  if (!count || !hasText) return ['left','center','spread','right'];
+  if (count === 1) return ['left','right'];
+  if (count === 2) return ['left','right','spread'];
+  return ['left','right']; // count === 3
+}
+
+export function tlBandHasText() {
+  const tl = tlSource();
+  if (!tl || !tl.count) return false;
+  const src = HS.editingVarId && HS.editingDraft ? HS.editingDraft : HS;
+  const t = tl.vAlign === 'bottom' ? src.bottomText : src.topText;
+  return !!(t && t.text && t.text.trim());
+}
+
+// If current hAlign just became invalid, snap to the closest still-valid value
+// (preferring 'left' as the safe default). Returns true if anything changed.
+export function correctTplHAlign() {
+  const tl = tlSource();
+  if (!tl || !tl.count) return false;
+  const valid = validHAlignsFor(tl.count, tlBandHasText());
+  if (valid.includes(tl.hAlign)) return false;
+  tl.hAlign = valid[0];
+  if (tl.hAlign === 'spread') tl.stack = 'horizontal';
+  return true;
+}
+
+export function renderTemplateLogoControls() {
+  const tl = tlSource();
+  const countBtns = [0,1,2,3].map(n => `<button class="hs-tog-btn${tl.count===n?' active':''}" onclick="setTplCount(${n})">${n||'Off'}</button>`).join('');
+  if (!tl.count) {
+    return `
+      <div class="hs-section">
+        <div class="hs-section-title">Template logos <span class="hs-optional">(optional)</span></div>
+        <div class="hs-bg-toggle">${countBtns}</div>
+      </div>`;
+  }
+  const valid = validHAlignsFor(tl.count, tlBandHasText());
+  const opt = (val, label, current) => `<option value="${val}"${current===val?' selected':''}>${label}</option>`;
+  const hOpt = (val, label) => {
+    const disabled = !valid.includes(val);
+    return `<option value="${val}"${tl.hAlign===val?' selected':''}${disabled?' disabled':''}>${label}${disabled?' — overlaps text':''}</option>`;
+  };
+  const stackDisabled = tl.hAlign === 'spread' || tl.count < 2;
+  return `
+    <div class="hs-section">
+      <div class="hs-section-title">Template logos</div>
+      <div class="tl-row"><div class="tl-row-label">Logos</div><div class="hs-bg-toggle">${countBtns}</div></div>
+      ${(() => {
+        const sz = normalizeTplLogoSize(tl.size);
+        const pct = Math.round((sz - HS_TPL_LOGO_MIN) / (HS_TPL_LOGO_MAX - HS_TPL_LOGO_MIN) * 100);
+        return `
+      <div class="tl-row">
+        <div class="tl-row-label">Size</div>
+        <div class="tl-size-slider">
+          <input type="range" min="${HS_TPL_LOGO_MIN}" max="${HS_TPL_LOGO_MAX}" step="10" value="${sz}" oninput="setTplSize(this.value)">
+          <span class="tl-size-value" id="tlSizeValue">${pct}%</span>
+        </div>
+      </div>`;
+      })()}
+      <div class="tl-row">
+        <div class="tl-row-label">Vertical</div>
+        <select class="tl-select" onchange="setTplVAlign(this.value)">
+          ${opt('top','Top',tl.vAlign)}${opt('bottom','Bottom',tl.vAlign)}
+        </select>
+      </div>
+      <div class="tl-row">
+        <div class="tl-row-label">Horizontal</div>
+        <select class="tl-select" onchange="setTplHAlign(this.value)">
+          ${hOpt('left','Left')}${hOpt('center','Center')}${hOpt('spread','Spread')}${hOpt('right','Right')}
+        </select>
+      </div>
+      <div class="tl-row${stackDisabled?' disabled':''}">
+        <div class="tl-row-label">Stack</div>
+        <select class="tl-select" onchange="setTplStack(this.value)" ${stackDisabled?'disabled':''}>
+          ${opt('horizontal','Horizontal',tl.stack)}${opt('vertical','Vertical',tl.stack)}
+        </select>
+      </div>
+      <div class="tl-hint">Drag slots in the preview to reposition and resize individually.</div>
+      <button class="btn sm" style="margin-top:6px" onclick="resetTlFreePositions()">Reset layout</button>
+    </div>`;
+}
+
+// The same template-logo controls power Step 1 (project default) and the
+// per-variation editor (HS.editingDraft.templateLogos). `tlSource` returns the
+// object that the active surface should mutate.
+export function tlSource() {
+  if (HS.editingVarId && HS.editingDraft) {
+    HS.editingDraft.templateLogos = HS.editingDraft.templateLogos || emptyTemplateLogos();
+    return HS.editingDraft.templateLogos;
+  }
+  HS.templateLogos = HS.templateLogos || emptyTemplateLogos();
+  return HS.templateLogos;
+}
+
+// Structural redraw — count/align changes can show/hide rows or repaint
+// thumbnails, so we re-render the whole controls panel in addition to the
+// preview.
+export function redrawTplStructural() {
+  if (HS.editingVarId) {
+    renderEditor();
+    renderVariationPreview();
+  } else {
+    renderStep1();
+  }
+}
+
+// Lightweight redraw for scale/color tweaks that only need the canvas refreshed.
+export function redrawTplPreview() {
+  if (HS.editingVarId) renderVariationPreview();
+  else updateStep1Preview();
+}
+
+export function ensureTlSlots() {
+  const tl = tlSource();
+  while (tl.slots.length < tl.count) tl.slots.push(null);
+  if (tl.slots.length > tl.count) tl.slots.length = tl.count;
+}
+
+window.setTplCount = function (n) {
+  const tl = tlSource();
+  tl.count = n;
+  ensureTlSlots();
+  correctTplHAlign();
+  UI.tlSelectedIdx = null;
+  closeTlSidePanel();
+  closeTlSlotToolbar();
+  redrawTplStructural();
+};
+window.setTplSize = function (k) {
+  const tl = tlSource();
+  const n = normalizeTplLogoSize(parseInt(k, 10));
+  tl.size = n;
+  const lbl = document.getElementById('tlSizeValue');
+  if (lbl) {
+    const pct = Math.round((n - HS_TPL_LOGO_MIN) / (HS_TPL_LOGO_MAX - HS_TPL_LOGO_MIN) * 100);
+    lbl.textContent = pct + '%';
+  }
+  redrawTplPreview();
+};
+window.setTplVAlign = function (k) {
+  const tl = tlSource();
+  tl.vAlign = k;
+  correctTplHAlign();
+  redrawTplStructural();
+};
+window.setTplHAlign = function (k) {
+  const tl = tlSource();
+  const valid = validHAlignsFor(tl.count, tlBandHasText());
+  if (!valid.includes(k)) return;
+  tl.hAlign = k;
+  if (k === 'spread') tl.stack = 'horizontal';
+  redrawTplStructural();
+};
+window.setTplStack = function (k) { tlSource().stack = k; redrawTplStructural(); };
+
+window.resetTlFreePositions = function () {
+  const tl = tlSource();
+  (tl.slots || []).forEach(s => {
+    if (s) { delete s.freeX; delete s.freeY; delete s.freeW; delete s.freeH; }
+  });
+  redrawTplPreview();
+};
+
+
+export function applyTlSlotImgStyle(img, slot) {
+  const fit = slot.fit || 'width';
+  // In fit mode the slot is sized to the logo's aspect — no safe-area inset.
+  const safeFrac = (slot.ratio === 'fit') ? 0 : HS_TPL_LOGO_SAFE_FRAC;
+  const safe = 1 - 2 * safeFrac;
+  const effScale = (slot.scale ?? 100) * safe;
+  const tx = slot.tx ?? 50;
+  const ty = slot.ty ?? 50;
+  if (fit === 'height') {
+    img.style.height = effScale + '%';
+    img.style.width  = 'auto';
+  } else {
+    img.style.width  = effScale + '%';
+    img.style.height = 'auto';
+  }
+  img.style.position = 'absolute';
+  img.style.left = tx + '%';
+  img.style.top  = ty + '%';
+  img.style.transform = 'translate(-50%, -50%)';
+  img.style.maxWidth = 'none';
+  img.style.maxHeight = 'none';
+  img.style.pointerEvents = 'none';
+}
+
+export function wireTlSlotDragResize(overlay, img, handle, idx) {
+  let mode = null, startX, startY, startTx, startTy, startScale;
+  overlay.addEventListener('pointerdown', e => {
+    if (e.target === handle) return;
+    mode = 'move';
+    overlay.setPointerCapture(e.pointerId);
+    const slot = HS.templateLogos.slots[idx];
+    startX = e.clientX; startY = e.clientY;
+    startTx = slot.tx ?? 50; startTy = slot.ty ?? 50;
+    e.preventDefault();
+  });
+  handle.addEventListener('pointerdown', e => {
+    mode = 'resize';
+    handle.setPointerCapture(e.pointerId);
+    const slot = HS.templateLogos.slots[idx];
+    startX = e.clientX; startY = e.clientY;
+    startScale = slot.scale ?? 100;
+    e.stopPropagation();
+    e.preventDefault();
+  });
+  const SNAP_PCT = 4; // % within which to snap to center on each axis
+  const onMove = e => {
+    if (!mode) return;
+    const slot = HS.templateLogos.slots[idx];
+    const rect = overlay.getBoundingClientRect();
+    if (mode === 'move') {
+      const dx = (e.clientX - startX) / rect.width  * 100;
+      const dy = (e.clientY - startY) / rect.height * 100;
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) UI.tlJustDragged = true;
+      let nx = startTx + dx;
+      let ny = startTy + dy;
+      const snapX = Math.abs(nx - 50) < SNAP_PCT;
+      const snapY = Math.abs(ny - 50) < SNAP_PCT;
+      if (snapX) nx = 50;
+      if (snapY) ny = 50;
+      overlay.classList.toggle('snap-x', snapX);
+      overlay.classList.toggle('snap-y', snapY);
+      slot.tx = nx;
+      slot.ty = ny;
+      applyTlSlotImgStyle(img, slot);
+    } else if (mode === 'resize') {
+      const dx = (e.clientX - startX) / rect.width * 100 * 2;
+      if (Math.abs(dx) > 0.5) UI.tlJustDragged = true;
+      slot.scale = Math.max(10, Math.min(400, startScale + dx));
+      applyTlSlotImgStyle(img, slot);
+    }
+  };
+  overlay.addEventListener('pointermove', onMove);
+  handle.addEventListener('pointermove', onMove);
+  const onUp = () => {
+    mode = null;
+    overlay.classList.remove('snap-x', 'snap-y');
+    // Reset the drag-flag after the synthetic click would have fired.
+    setTimeout(() => { UI.tlJustDragged = false; }, 0);
+  };
+  overlay.addEventListener('pointerup', onUp);
+  handle.addEventListener('pointerup', onUp);
+}
+
+// Drag and resize the slot box itself (sets per-slot freeX/freeY/freeW/freeH).
+// Pointer on slot body → move; pointer on handle → resize.
+// signRect is the slot's current position in sign coords at wire-time.
+export function wireTlSlotFreeDrag(overlay, handle, idx, signRect) {
+  let mode = null, startClientX, startClientY;
+  let startSignX, startSignY, startSignW, startSignH;
+  const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
+
+  overlay.addEventListener('pointerdown', e => {
+    if (e.target.closest('.tl-slot-handle,.tl-slot-actions')) return;
+    if (e.button !== 0) return;
+    mode = 'move';
+    overlay.setPointerCapture(e.pointerId);
+    startClientX = e.clientX; startClientY = e.clientY;
+    const s = tlSource().slots[idx];
+    startSignX = s?.freeX ?? signRect.x;
+    startSignY = s?.freeY ?? signRect.y;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  handle.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    mode = 'resize';
+    handle.setPointerCapture(e.pointerId);
+    startClientX = e.clientX; startClientY = e.clientY;
+    const s = tlSource().slots[idx];
+    startSignW = s?.freeW ?? signRect.w;
+    startSignH = s?.freeH ?? signRect.h;
+    e.stopPropagation();
+    e.preventDefault();
+  });
+
+  const onMove = e => {
+    if (!mode) return;
+    const pr = overlay.parentElement?.getBoundingClientRect();
+    const scaleX = pr ? pr.width / HS_W : 1;
+    const scaleY = pr ? pr.height / HS_H : 1;
+    const dxSign = (e.clientX - startClientX) / scaleX;
+    const dySign = (e.clientY - startClientY) / scaleY;
+    const s = tlSource().slots[idx];
+    if (!s) return;
+    if (Math.hypot(dxSign, dySign) > 5) UI.tlJustDragged = true;
+    if (mode === 'move') {
+      s.freeX = startSignX + dxSign;
+      s.freeY = startSignY + dySign;
+      s.freeW = s.freeW ?? signRect.w;
+      s.freeH = s.freeH ?? signRect.h;
+      overlay.style.left = pct(s.freeX, HS_W);
+      overlay.style.top  = pct(s.freeY, HS_H);
+    } else {
+      s.freeX = s.freeX ?? signRect.x;
+      s.freeY = s.freeY ?? signRect.y;
+      s.freeW = Math.max(300, startSignW + dxSign);
+      s.freeH = Math.max(150, startSignH + dySign);
+      overlay.style.width  = pct(s.freeW, HS_W);
+      overlay.style.height = pct(s.freeH, HS_H);
+    }
+  };
+
+  overlay.addEventListener('pointermove', onMove);
+  handle.addEventListener('pointermove', onMove);
+
+  const onUp = () => {
+    if (!mode) return;
+    mode = null;
+    setTimeout(() => { UI.tlJustDragged = false; }, 0);
+    redrawTplPreview();
+  };
+  overlay.addEventListener('pointerup', onUp);
+  handle.addEventListener('pointerup', onUp);
+}
+
+export function openTlLibPicker(idx, anchorEl) {
+  closeTlLibPicker();
+  const picker = document.createElement('div');
+  picker.className = 'tl-lib-picker';
+  const libHtml = HS.library.length
+    ? HS.library.map(l => `<div class="tl-lp-item" data-lid="${l.id}" title="${escXml(l.name)}"><img src="${l.src}" alt=""></div>`).join('')
+    : '<div class="tl-lp-empty">No logos uploaded yet</div>';
+  picker.innerHTML = `${libHtml}<div class="tl-lp-upload" id="tlLpUpload">+ Upload image</div><input type="file" id="tlLpFile" accept="image/*" style="display:none">`;
+  document.body.appendChild(picker);
+  UI.tlPickerEl = picker;
+
+  const r = anchorEl.getBoundingClientRect();
+  const ph = picker.offsetHeight;
+  const pw = picker.offsetWidth;
+  const vh = window.innerHeight;
+  const vw = window.innerWidth;
+  const gap = 6;
+  const spaceBelow = vh - r.bottom;
+  const placeAbove = spaceBelow < ph + gap && r.top > ph + gap;
+  const top = placeAbove ? (r.top + window.scrollY - ph - gap) : (r.bottom + window.scrollY + gap);
+  const left = Math.max(8, Math.min(r.left + window.scrollX, window.scrollX + vw - pw - 8));
+  picker.style.left = left + 'px';
+  picker.style.top  = top + 'px';
+
+  picker.querySelectorAll('.tl-lp-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const logo = HS.library.find(l => l.id === el.dataset.lid);
+      if (logo) assignTlSlot(idx, logo);
+      closeTlLibPicker();
+    });
+  });
+  const fileInput = picker.querySelector('#tlLpFile');
+  picker.querySelector('#tlLpUpload').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async e => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    try {
+      const logo = await uploadLogo(HS.projectId, file);
+      HS.library.push(logo);
+      assignTlSlot(idx, logo);
+    } catch (err) { console.error('Upload failed', err); }
+    closeTlLibPicker();
+  });
+
+  setTimeout(() => {
+    const close = ev => {
+      if (!ev.target.closest('.tl-lib-picker')) {
+        closeTlLibPicker();
+        document.removeEventListener('click', close);
+      }
+    };
+    document.addEventListener('click', close);
+  }, 0);
+}
+
+export function closeTlLibPicker() {
+  if (UI.tlPickerEl) { UI.tlPickerEl.remove(); UI.tlPickerEl = null; }
+}
+
+export function openTlSlotToolbar(idx, anchorEl) {
+  closeTlSlotToolbar();
+  const tb = document.createElement('div');
+  tb.id = 'tlSlotToolbar';
+  tb.className = 'tl-slot-toolbar';
+  tb.innerHTML = `
+    <button class="tl-tb-btn" data-act="replace">Replace</button>
+    <button class="tl-tb-btn" data-act="finetune">Fine-tune</button>
+    <button class="tl-tb-btn danger" data-act="remove">Remove</button>`;
+  document.body.appendChild(tb);
+
+  tb.addEventListener('click', e => {
+    const act = e.target.dataset?.act;
+    if (!act) return;
+    closeTlSlotToolbar();
+    const liveAnchor = document.querySelector(`.tl-slot[data-idx="${idx}"]`) || anchorEl;
+    if (act === 'replace')   openTlLibPicker(idx, liveAnchor);
+    if (act === 'finetune')  openTlSidePanel(idx);
+    if (act === 'remove')    removeTlSlot(idx);
+  });
+
+  const r = anchorEl.getBoundingClientRect();
+  // Default above; flip below if there's not enough headroom.
+  const th = tb.offsetHeight;
+  const tw = tb.offsetWidth;
+  const placeAbove = r.top > th + 12;
+  const top  = placeAbove ? (r.top + window.scrollY - th - 6) : (r.bottom + window.scrollY + 6);
+  const left = Math.max(8, Math.min(window.scrollX + window.innerWidth - tw - 8,
+    r.left + window.scrollX + r.width / 2 - tw / 2));
+  tb.style.top  = top + 'px';
+  tb.style.left = left + 'px';
+
+  setTimeout(() => {
+    const close = ev => {
+      if (!ev.target.closest('#tlSlotToolbar') && !ev.target.closest('.tl-slot') && !ev.target.closest('.tl-lib-picker') && !ev.target.closest('#tlSidePanel')) {
+        closeTlSlotToolbar();
+        document.removeEventListener('click', close);
+      }
+    };
+    document.addEventListener('click', close);
+  }, 0);
+}
+
+export function closeTlSlotToolbar() {
+  const tb = document.getElementById('tlSlotToolbar');
+  if (tb) tb.remove();
+}
+
+export function assignTlSlot(idx, logo) {
+  ensureTlSlots();
+  const slot = {
+    logoId: logo.id,
+    logoSrc: logo.src,
+    fit: 'width',
+    tx: 50, ty: 50, scale: 100,
+    border: { color: '#D1D5DB' },
+  };
+  tlSource().slots[idx] = slot;
+  UI.tlSelectedIdx = idx;
+  prepareLogo(slot, logo.src).then(() => redrawTplPreview()).catch(() => {});
+  redrawTplPreview();
+}
+
+export function openTlSidePanel(idx) {
+  closeTlSidePanel();
+  const slot = tlSource().slots[idx];
+  if (!slot) return;
+  const hasBg = !!(slot.bg && slot.bg !== 'transparent');
+  const bgColor = hasBg ? slot.bg : '#FFFFFF';
+  const hasBorder = !!(slot.border && slot.border.color);
+  const borderColor = hasBorder ? slot.border.color : '#000000';
+  const ratio = slot.ratio || '2:1';
+  const ratioOpt = (val, label) =>
+    `<option value="${val}"${ratio === val ? ' selected' : ''}>${label}</option>`;
+  const panel = document.createElement('div');
+  panel.id = 'tlSidePanel';
+  panel.className = 'tl-side-panel';
+  panel.innerHTML = `
+    <div class="tl-sp-header">
+      <div class="tl-sp-title">Slot ${idx + 1}</div>
+      <button class="tl-sp-close" onclick="closeTlSidePanel()">✕</button>
+    </div>
+    <div class="tl-sp-body">
+      <div class="hs-editor-section">
+        <div class="hs-editor-label">Ratio</div>
+        <select class="tl-select" onchange="setTlSlotRatio(${idx}, this.value)">
+          ${ratioOpt('fit','Fit logo')}${ratioOpt('1:1','1:1')}${ratioOpt('2:1','2:1')}${ratioOpt('3:1','3:1')}${ratioOpt('4:1','4:1')}
+        </select>
+      </div>
+      <div class="hs-editor-section">
+        <div class="hs-editor-label">Fit</div>
+        <div class="hs-bg-toggle">
+          <button class="hs-tog-btn${(slot.fit||'width')==='width'?' active':''}" onclick="setTlSlotFit(${idx},'width')">Width</button>
+          <button class="hs-tog-btn${slot.fit==='height'?' active':''}" onclick="setTlSlotFit(${idx},'height')">Height</button>
+        </div>
+        <div style="font-size:11px;color:var(--gray-400);margin-top:4px">Drag to reposition and the corner handle to resize. The safe-area padding stays in effect at scale 100%.</div>
+      </div>
+      <div class="hs-editor-section">
+        <div class="hs-editor-label">Scale</div>
+        <input type="range" id="tlSpScale" min="10" max="400" value="${slot.scale ?? 100}" oninput="setTlSlotScale(${idx}, this.value); document.getElementById('tlSpScaleLabel').textContent=this.value+'%'">
+        <div style="display:flex;justify-content:space-between"><span style="font-size:11px;color:var(--gray-400)">10%</span><span id="tlSpScaleLabel" style="font-size:11px;color:var(--gray-600)">${slot.scale ?? 100}%</span><span style="font-size:11px;color:var(--gray-400)">400%</span></div>
+      </div>
+      <div class="hs-editor-section">
+        <div class="tl-toggle-row">
+          <div class="hs-editor-label" style="margin:0">Background</div>
+          <label class="tl-switch">
+            <input type="checkbox"${hasBg?' checked':''} onchange="setTlSlotBgMode(${idx}, this.checked?'color':'transparent')">
+            <span class="tl-switch-slider"></span>
+          </label>
+        </div>
+        ${hasBg ? `
+        <div class="color-row">
+          <input type="color" class="hs-color-swatch" id="tlSpBgSwatch" value="${bgColor}"
+            oninput="setTlSlotBgColor(${idx}, this.value)">
+          <input type="text" class="hexin" id="tlSpBgHex" style="flex:1" maxlength="7" value="${bgColor}"
+            oninput="setTlSlotBgHex(${idx}, this.value)">
+          ${eyedropperBtn('tlSpBgSwatch')}
+        </div>` : ''}
+      </div>
+      ${ratio === 'fit' ? '' : `
+      <div class="hs-editor-section">
+        <div class="tl-toggle-row">
+          <div class="hs-editor-label" style="margin:0">Border</div>
+          <label class="tl-switch">
+            <input type="checkbox"${hasBorder?' checked':''} onchange="setTlSlotBorderMode(${idx}, this.checked?'on':'off')">
+            <span class="tl-switch-slider"></span>
+          </label>
+        </div>
+        ${hasBorder ? `
+        <div class="color-row">
+          <input type="color" class="hs-color-swatch" id="tlSpBorderSwatch" value="${borderColor}"
+            oninput="setTlSlotBorderColor(${idx}, this.value)">
+          <input type="text" class="hexin" id="tlSpBorderHex" style="flex:1" maxlength="7" value="${borderColor}"
+            oninput="setTlSlotBorderHex(${idx}, this.value)">
+          ${eyedropperBtn('tlSpBorderSwatch')}
+        </div>` : ''}
+      </div>`}
+      <div class="hs-editor-section">
+        <button class="btn sm" onclick="resetTlSlot(${idx})">Reset position</button>
+        <button class="btn sm" style="color:#dc2626;border-color:#fecaca" onclick="removeTlSlot(${idx})">Remove logo</button>
+      </div>
+    </div>`;
+  document.body.appendChild(panel);
+}
+
+window.closeTlSidePanel = function () {
+  const p = document.getElementById('tlSidePanel');
+  if (p) p.remove();
+};
+
+export function activeSlot(idx) { return tlSource().slots[idx]; }
+
+window.setTlSlotFit = function (idx, fit) {
+  const slot = activeSlot(idx); if (!slot) return;
+  slot.fit = fit;
+  slot.scale = 100;
+  slot.tx = 50; slot.ty = 50;
+  redrawTplPreview();
+  openTlSidePanel(idx);
+};
+window.setTlSlotScale = function (idx, val) {
+  const slot = activeSlot(idx); if (!slot) return;
+  slot.scale = parseInt(val, 10) || 100;
+  redrawTplPreview();
+};
+window.resetTlSlot = function (idx) {
+  const slot = activeSlot(idx); if (!slot) return;
+  slot.tx = 50; slot.ty = 50; slot.scale = 100;
+  redrawTplPreview();
+  openTlSidePanel(idx);
+};
+window.removeTlSlot = function (idx) {
+  tlSource().slots[idx] = null;
+  UI.tlSelectedIdx = null;
+  closeTlSidePanel();
+  redrawTplPreview();
+};
+window.setTlSlotBgMode = function (idx, mode) {
+  const slot = activeSlot(idx); if (!slot) return;
+  if (mode === 'transparent') {
+    if (slot.bg && slot.bg !== 'transparent') slot.bgLast = slot.bg;
+    slot.bg = null;
+  } else {
+    slot.bg = slot.bgLast || slot.bg || '#FFFFFF';
+  }
+  openTlSidePanel(idx);
+  redrawTplPreview();
+};
+window.setTlSlotBgColor = function (idx, color) {
+  const slot = activeSlot(idx); if (!slot) return;
+  slot.bg = color;
+  const hex = document.getElementById('tlSpBgHex');
+  if (hex) hex.value = color;
+  redrawTplPreview();
+};
+window.setTlSlotBgHex = function (idx, val) {
+  const c = val.startsWith('#') ? val : '#' + val;
+  if (!/^#[0-9a-fA-F]{6}$/.test(c)) return;
+  const slot = activeSlot(idx); if (!slot) return;
+  slot.bg = c;
+  const swatch = document.getElementById('tlSpBgSwatch');
+  if (swatch) swatch.value = c;
+  redrawTplPreview();
+};
+window.setTlSlotRatio = function (idx, val) {
+  const slot = activeSlot(idx); if (!slot) return;
+  slot.ratio = val;
+  redrawTplPreview();
+};
+window.setTlSlotBorderMode = function (idx, mode) {
+  const slot = activeSlot(idx); if (!slot) return;
+  if (mode === 'off') {
+    if (slot.border) slot.borderLast = slot.border;
+    slot.border = null;
+  } else {
+    slot.border = slot.borderLast || slot.border || { color: '#000000' };
+  }
+  openTlSidePanel(idx);
+  redrawTplPreview();
+};
+window.setTlSlotBorderColor = function (idx, color) {
+  const slot = activeSlot(idx); if (!slot) return;
+  slot.border = { ...(slot.border || {}), color };
+  const hex = document.getElementById('tlSpBorderHex');
+  if (hex) hex.value = color;
+  redrawTplPreview();
+};
+window.setTlSlotBorderHex = function (idx, val) {
+  const c = val.startsWith('#') ? val : '#' + val;
+  if (!/^#[0-9a-fA-F]{6}$/.test(c)) return;
+  const slot = activeSlot(idx); if (!slot) return;
+  slot.border = { ...(slot.border || {}), color: c };
+  const swatch = document.getElementById('tlSpBorderSwatch');
+  if (swatch) swatch.value = c;
+  redrawTplPreview();
+};

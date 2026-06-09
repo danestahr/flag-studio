@@ -35,9 +35,16 @@ async function init() {
       S.flagId = flagCfg.flag_id;
       S.colors = flagCfg.colors || {};
       try { S.library = await loadLogosForProject(project.id); } catch { S.library = []; }
-      S.variations = (flagCfg.variations || []).map(v => ({ ...v, backAssignment: v.backAssignment || {} }));
+      const varData = flagCfg.variations || [];
+      const varItems = Array.isArray(varData) ? varData : (varData.items || []);
+      S.logoLayout = Array.isArray(varData) ? 'single' : (varData.layout || 'single');
+      S.variations = varItems.map(v => ({ ...v, backAssignment: v.backAssignment || {} }));
       S.sameLogoOnBothSides = !S.variations.some(v => Object.keys(v.backAssignment).length > 0);
       await loadAllFlags(FLAGS);
+      const activeFlag = FLAGS.find(f => f.id === S.flagId);
+      if (activeFlag?.logoZoneSets && S.logoLayout) {
+        activeFlag.logoZones = activeFlag.logoZoneSets[S.logoLayout] || activeFlag.logoZones;
+      }
       try {
         (await getFeedback(project.id, 'flags')).forEach(f => {
           localFeedback[f.variation_id] = { status: f.status, note: f.note || '', resolved: f.resolved || false };

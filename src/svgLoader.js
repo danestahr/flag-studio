@@ -18,19 +18,51 @@ function parseZoneRect(rect, index) {
 }
 
 async function loadFlagData(flag) {
-  const res = await fetch(`/flags/${flag.name}.svg`);
+  const url = '/flags/' + encodeURIComponent(flag.name) + '.svg';
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to load ${flag.name}: ${res.status}`);
   const text = await res.text();
   const parser = new DOMParser();
   const doc = parser.parseFromString(text, 'image/svg+xml');
   const svgEl = doc.querySelector('svg');
+  if (!svgEl) throw new Error(`No SVG element in ${flag.name}`);
 
-  const placementGroup = svgEl.querySelector('#logo-placement');
-  if (placementGroup) {
-    flag.logoZones = Array.from(placementGroup.querySelectorAll('rect'))
-      .map((rect, i) => parseZoneRect(rect, i));
-    placementGroup.setAttribute('display', 'none');
+  // IDs may be 'logo-placement' or '#logo-placement' depending on the export tool,
+  // so use attribute selectors rather than CSS ID selectors.
+  const findGroup = (...ids) => {
+    for (const id of ids) {
+      const g = svgEl.querySelector(`[id="${id}"]`);
+      if (g) return g;
+    }
+    return null;
+  };
+  const singleGroup = findGroup('logo-placement', '#logo-placement', 'logo-placement-full', '#logo-placement-full');
+  const multiGroup  = findGroup('logo-placement-2', '#logo-placement-2');
+  const parseGroup  = g => g ? Array.from(g.querySelectorAll('rect')).map((r, i) => parseZoneRect(r, i)) : null;
+
+  const singleZones = parseGroup(singleGroup);
+  const multiZones  = parseGroup(multiGroup);
+
+  if (singleGroup) singleGroup.setAttribute('display', 'none');
+  if (multiGroup)  multiGroup.setAttribute('display', 'none');
+
+  // When only multi zones exist, synthesise a full-logo single option from the
+  // bounding box of all the multi zones so the layout toggle still appears.
+  const effectiveSingle = singleZones ?? (multiZones?.length
+    ? [{ id: 'lz-logo-full', label: 'Logo',
+         x: Math.min(...multiZones.map(z => z.x)),
+         y: Math.min(...multiZones.map(z => z.y)),
+         w: Math.max(...multiZones.map(z => z.x + z.w)) - Math.min(...multiZones.map(z => z.x)),
+         h: Math.max(...multiZones.map(z => z.y + z.h)) - Math.min(...multiZones.map(z => z.y)) }]
+    : null);
+
+  if (effectiveSingle && multiZones) {
+    // Flag supports both layouts — store both, default to single
+    flag.logoZoneSets = { single: effectiveSingle, multi: multiZones };
+    flag.logoZones = effectiveSingle;
   } else {
-    flag.logoZones = [];
+    flag.logoZoneSets = null;
+    flag.logoZones = effectiveSingle || [];
   }
 
   flag.viewBox = svgEl.getAttribute('viewBox') || '0 0 7519 4669';
@@ -38,5 +70,8 @@ async function loadFlagData(flag) {
 }
 
 export async function loadAllFlags(flags) {
-  await Promise.all(flags.map(loadFlagData));
+  const results = await Promise.allSettled(flags.map(loadFlagData));
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') console.error('Flag load failed:', flags[i].name, r.reason);
+  });
 }

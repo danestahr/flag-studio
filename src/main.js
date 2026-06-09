@@ -1,7 +1,10 @@
 import './style.css';
+import { requireAuth } from './auth.js';
 import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
 import { S, _dragLogoId, setDragLogoId } from './state.js';
+
+await requireAuth();
 import { FLAGS, COLORS } from './data.js';
 import { getFlag, applyColors, makeSvg, renderInto, getLogoData } from './render.js';
 import {
@@ -77,6 +80,7 @@ function renderFlagGrid() {
 
 window.pickFlag = function (id) {
   S.flagId = id;
+  S.logoLayout = 'single'; // reset layout when flag changes
   document.querySelectorAll('.flag-card').forEach(c => c.classList.remove('selected'));
   document.getElementById('fc-' + id).classList.add('selected');
   renderP1Colors();
@@ -369,7 +373,7 @@ function ensureToolbar() {
     delete assignment[zoneId];
     hideZoneToolbar();
     renderDropZones(wrapId, svgId, assignment, face);
-    if (wrapId === 'varWrap') { refreshVarThumbs(); markDirty(); }
+    refreshVarThumbs(); markDirty();
   });
 
   document.getElementById('dzTbReplace').addEventListener('click', e => {
@@ -395,12 +399,12 @@ function ensureToolbar() {
       renderLib();
       renderVarStrip();
       renderDropZones(wrapId, svgId, assignment, face);
-      if (wrapId === 'varWrap') { refreshVarThumbs(); markDirty(); }
+      refreshVarThumbs(); markDirty();
     } catch (err) { console.error('Upload failed', err); }
   });
 
   document.addEventListener('click', e => {
-    if (!e.target.closest('#dzToolbar') && !e.target.closest('.dz-logo-wrap')) hideZoneToolbar();
+    if (!e.target.closest('#dzToolbar') && !e.target.closest('.dz-logo-wrap') && !e.target.closest('.dzone') && !e.target.closest('.dz-badge')) hideZoneToolbar();
   });
 }
 
@@ -422,7 +426,7 @@ function renderLibPicker() {
       assignment[zoneId] = { id: lid, x: existing?.x ?? 50, y: existing?.y ?? 50, w: existing?.w ?? 80 };
       hideZoneToolbar();
       renderDropZones(wrapId, svgId, assignment, face);
-      if (wrapId === 'varWrap') { refreshVarThumbs(); markDirty(); }
+      refreshVarThumbs(); markDirty();
     });
   });
   picker.querySelector('#dzLpUpload')?.addEventListener('click', () => {
@@ -430,8 +434,24 @@ function renderLibPicker() {
   });
 }
 
+function setDzSolo(wrapId, on) {
+  const wrap = wrapId ? document.getElementById(wrapId) : null;
+  if (wrap) wrap.classList.toggle('dz-solo', on);
+}
+
+function syncBadges(wrapId) {
+  const wrap = wrapId ? document.getElementById(wrapId) : null;
+  if (!wrap) return;
+  const dzones = Array.from(wrap.querySelectorAll('.dzone'));
+  wrap.querySelectorAll('.dz-badge').forEach((b, i) => {
+    b.classList.toggle('active', dzones[i] === _activeZone?.dz);
+  });
+}
+
 function showZoneToolbar(dz, openPicker = false) {
   ensureToolbar();
+  setDzSolo(_activeZone?.wrapId, true);
+  syncBadges(_activeZone?.wrapId);
   const hasLogo = !!getLogoData(_activeZone?.assignment, _activeZone?.zoneId);
   document.getElementById('dzTbRemove').style.display = hasLogo ? '' : 'none';
   document.getElementById('dzTbSep').style.display    = hasLogo ? '' : 'none';
@@ -458,6 +478,8 @@ function hideZoneToolbar() {
   const picker = document.getElementById('dzLibPicker');
   if (picker) picker.style.display = 'none';
   if (_activeZone?.dz) _activeZone.dz.classList.remove('selected');
+  setDzSolo(_activeZone?.wrapId, false);
+  syncBadges(_activeZone?.wrapId);
   _activeZone = null;
 }
 
@@ -466,7 +488,7 @@ function renderDropZones(wrapId, svgId, assignment, face = 'front') {
   const flag = getFlag();
   if (!flag) return;
   const wrap = document.getElementById(wrapId);
-  wrap.querySelectorAll('.dzone').forEach(d => d.remove());
+  wrap.querySelectorAll('.dzone, .dz-badge').forEach(d => d.remove());
   const svg = document.getElementById(svgId);
   svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
   const [vbW, vbH] = (flag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
@@ -525,7 +547,7 @@ function renderDropZones(wrapId, svgId, assignment, face = 'front') {
 
       logoWrap.addEventListener('click', e => {
         e.stopPropagation();
-        if (_activeZone?.dz === dz) { hideZoneToolbar(); return; }
+        if (_activeZone?.dz === dz) return; // already selected — stay selected
         if (_activeZone) _activeZone.dz.classList.remove('selected');
         _activeZone = { dz, assignment, zoneId: zone.id, wrapId, svgId, face };
         dz.classList.add('selected');
@@ -537,7 +559,7 @@ function renderDropZones(wrapId, svgId, assignment, face = 'front') {
       dz.style.cursor = 'pointer';
       dz.addEventListener('click', e => {
         e.stopPropagation();
-        if (_activeZone?.dz === dz) { hideZoneToolbar(); return; }
+        if (_activeZone?.dz === dz) return; // already selected — stay selected
         if (_activeZone) _activeZone.dz.classList.remove('selected');
         _activeZone = { dz, assignment, zoneId: zone.id, wrapId, svgId, face };
         dz.classList.add('selected');
@@ -556,11 +578,36 @@ function renderDropZones(wrapId, svgId, assignment, face = 'front') {
       assignment[zone.id] = { id: dragId, x: prev?.x ?? 50, y: prev?.y ?? 50, w: prev?.w ?? 80 };
       setDragLogoId(null);
       renderDropZones(wrapId, svgId, assignment, face);
-      if (wrapId === 'varWrap') { refreshVarThumbs(); markDirty(); }
+      refreshVarThumbs(); markDirty();
     });
 
     wrap.appendChild(dz);
   });
+
+  // When zones overlap, add persistent numbered badges directly on the wrap
+  // (not inside any dzone) so they stay on top and are always clickable.
+  if (flag.logoZones.length > 1) {
+    const dzones = Array.from(wrap.querySelectorAll('.dzone'));
+    flag.logoZones.forEach((zone, i) => {
+      const badge = document.createElement('button');
+      badge.className = 'dz-badge';
+      badge.textContent = i + 1;
+      badge.title = zone.label || `Zone ${i + 1}`;
+      const zoneX = face === 'back' ? vbW - zone.x - zone.w : zone.x;
+      badge.style.left = (zoneX / vbW * 100).toFixed(3) + '%';
+      badge.style.top  = (zone.y / vbH * 100).toFixed(3) + '%';
+      badge.addEventListener('click', e => {
+        e.stopPropagation();
+        const dz = dzones[i];
+        if (_activeZone) _activeZone.dz.classList.remove('selected');
+        setDzSolo(wrapId, false);
+        _activeZone = { dz, assignment, zoneId: zone.id, wrapId, svgId, face };
+        dz.classList.add('selected');
+        showZoneToolbar(dz);
+      });
+      wrap.appendChild(badge);
+    });
+  }
 }
 
 function setupLogoInteraction(logoWrap, resizeHandle, dz, assignment, zoneId, wrapId, svgId, face) {
@@ -571,6 +618,7 @@ function setupLogoInteraction(logoWrap, resizeHandle, dz, assignment, zoneId, wr
     if (e.target === resizeHandle) return;
     dragging = true;
     dz.classList.add('dz-adjusting');
+    setDzSolo(wrapId, true);
     logoWrap.setPointerCapture(e.pointerId);
     startPX = e.clientX; startPY = e.clientY;
     startX  = parseFloat(logoWrap.style.left);
@@ -605,11 +653,12 @@ function setupLogoInteraction(logoWrap, resizeHandle, dz, assignment, zoneId, wr
     if (!dragging) return;
     dragging = false;
     dz.classList.remove('dz-adjusting', 'snap-h', 'snap-v');
+    if (!_activeZone || _activeZone.dz !== dz) setDzSolo(wrapId, false);
     const nx = parseFloat(logoWrap.style.left);
     const ny = parseFloat(logoWrap.style.top);
     const prev = getLogoData(assignment, zoneId) || {};
     assignment[zoneId] = { ...prev, x: nx, y: ny };
-    if (wrapId === 'varWrap') { refreshVarThumbs(); markDirty(); }
+    refreshVarThumbs(); markDirty();
   });
 
   // ── Resize via corner handle ──────────────────────────────
@@ -618,6 +667,7 @@ function setupLogoInteraction(logoWrap, resizeHandle, dz, assignment, zoneId, wr
   resizeHandle.addEventListener('pointerdown', e => {
     resizing = true;
     dz.classList.add('dz-adjusting');
+    setDzSolo(wrapId, true);
     resizeHandle.setPointerCapture(e.pointerId);
     rStartX = e.clientX;
     rStartW = parseFloat(logoWrap.style.width);
@@ -637,10 +687,11 @@ function setupLogoInteraction(logoWrap, resizeHandle, dz, assignment, zoneId, wr
     if (!resizing) return;
     resizing = false;
     dz.classList.remove('dz-adjusting');
+    if (!_activeZone || _activeZone.dz !== dz) setDzSolo(wrapId, false);
     const nw = parseFloat(logoWrap.style.width);
     const prev = getLogoData(assignment, zoneId) || {};
     assignment[zoneId] = { ...prev, w: nw };
-    if (wrapId === 'varWrap') { refreshVarThumbs(); markDirty(); }
+    refreshVarThumbs(); markDirty();
   });
 }
 
@@ -733,6 +784,32 @@ window.toggleDiffSides = function (checked) {
   renderVarCanvas();
 };
 
+function syncLogoLayoutToggle() {
+  const flag = getFlag();
+  const row = document.getElementById('logoLayoutRow');
+  if (!row) return;
+  const hasOptions = !!(flag?.logoZoneSets);
+  row.style.display = hasOptions ? '' : 'none';
+  if (hasOptions) {
+    const layout = S.logoLayout || 'single';
+    flag.logoZones = flag.logoZoneSets[layout] || flag.logoZones;
+    document.getElementById('layoutBtnSingle')?.classList.toggle('active', layout === 'single');
+    document.getElementById('layoutBtnMulti')?.classList.toggle('active', layout === 'multi');
+  }
+}
+
+window.setLogoLayout = function (layout) {
+  const flag = getFlag();
+  if (!flag?.logoZoneSets) return;
+  S.logoLayout = layout;
+  flag.logoZones = flag.logoZoneSets[layout] || flag.logoZones;
+  document.getElementById('layoutBtnSingle')?.classList.toggle('active', layout === 'single');
+  document.getElementById('layoutBtnMulti')?.classList.toggle('active', layout === 'multi');
+  renderVarCanvas();
+  refreshVarThumbs();
+  markDirty();
+};
+
 function setupVariations() {
   if (!S.variations.length) {
     S.variations.push({ id: 'v' + Date.now(), name: 'Variation 1', assignment: { ...S.baseAssignment }, backAssignment: {} });
@@ -742,6 +819,7 @@ function setupVariations() {
   activeFace = 'front';
   const cb = document.getElementById('diffSidesCheck');
   if (cb) cb.checked = !S.sameLogoOnBothSides;
+  syncLogoLayoutToggle();
   updateFaceTabs();
   renderVarList();
   renderVarCanvas();
@@ -961,7 +1039,7 @@ function renderGSlide() {
   const count   = `${S.gIndex + 1} / ${S.variations.length}`;
 
   if (S.sameLogoOnBothSides) {
-    renderInto(document.getElementById('gFlag'), v.assignment, gFace);
+    renderInto(document.getElementById('gFlag'), v.assignment, gFace, gFace === 'back');
     document.getElementById('gName').textContent  = v.name;
     document.getElementById('gCount').textContent = count;
     document.getElementById('gPrev').disabled = atStart;
@@ -978,8 +1056,8 @@ function renderGSlide() {
   document.querySelectorAll('.gthumb').forEach((t, i) => t.classList.toggle('active', i === S.gIndex));
 
   const zoneRows = (flag?.logoZones || []).map(z => {
-    const lid = v.assignment[z.id];
-    const logo = S.library.find(l => l.id === lid);
+    const ld = getLogoData(v.assignment, z.id);
+    const logo = ld ? S.library.find(l => l.id === ld.id) : null;
     return `<div class="drow"><span class="dkey">${z.label}</span><span class="dval">
       ${logo ? `<img src="${logo.src}" style="width:20px;height:20px;object-fit:contain;border-radius:3px">${esc(logo.name)}` : '<span style="color:var(--gray-400)">Empty</span>'}
     </span></div>`;
@@ -1021,12 +1099,12 @@ function dl(url, name) {
 
 const FLAG_DPI = 300;
 
-async function rasterizeSvg(assignment, face) {
+async function rasterizeSvg(assignment, face, mirrorX = false) {
   const flag = getFlag();
   const [, , vbW, vbH] = (flag?.viewBox || '0 0 7519 4669').split(' ').map(Number);
   const pxW = vbW;
   const pxH = vbH;
-  const svg = makeSvg(assignment, pxW, pxH, face);
+  const svg = makeSvg(assignment, pxW, pxH, face, mirrorX);
 
   // Inline all external image hrefs so the canvas renderer can paint them
   await Promise.all(Array.from(svg.querySelectorAll('image')).map(async img => {
@@ -1073,7 +1151,7 @@ window.expPDF = async function () {
   btn.textContent = '…'; btn.disabled = true;
   try {
     const faceAssignment = (gFace === 'back' && !S.sameLogoOnBothSides) ? (v.backAssignment || {}) : v.assignment;
-    const { blob } = await rasterizeSvg(faceAssignment, gFace);
+    const { blob } = await rasterizeSvg(faceAssignment, gFace, S.sameLogoOnBothSides && gFace === 'back');
     const pngBytes = await blob.arrayBuffer();
     const [, , vbW, vbH] = (flag.viewBox || '0 0 7519 4669').split(' ').map(Number);
     const ptW = (vbW / FLAG_DPI) * 72;
@@ -1101,7 +1179,7 @@ window.expPNG = async function () {
   btn.textContent = '…'; btn.disabled = true;
   try {
     const faceAssignment = (gFace === 'back' && !S.sameLogoOnBothSides) ? (v.backAssignment || {}) : v.assignment;
-    const { blob } = await rasterizeSvg(faceAssignment, gFace);
+    const { blob } = await rasterizeSvg(faceAssignment, gFace, S.sameLogoOnBothSides && gFace === 'back');
     dl(URL.createObjectURL(blob), slug(v.name) + (gFace === 'back' ? '-back' : '') + '.png');
   } catch (err) {
     console.error('PNG export failed', err);
@@ -1128,14 +1206,14 @@ window.expAllPNG = async function () {
 };
 
 // ── PRINT DOWNLOAD (zip of front+back per variation) ─────────
-async function rasterizeForPrint(assignment, face) {
+async function rasterizeForPrint(assignment, face, mirrorX = false) {
   // Same as rasterizeSvg but strips the `Bleed` group (the grey print-bleed area)
   // from the SVG before drawing, since the print file shouldn't include it.
   const flag = getFlag();
   const [, , vbW, vbH] = (flag?.viewBox || '0 0 7519 4669').split(' ').map(Number);
   const pxW = vbW;
   const pxH = vbH;
-  const svg = makeSvg(assignment, pxW, pxH, face);
+  const svg = makeSvg(assignment, pxW, pxH, face, mirrorX);
 
   // Remove the grey bleed area for the print output
   for (const gid of ['Bleed', 'bleed']) {
@@ -1217,7 +1295,7 @@ window.downloadForPrint = async function (format) {
       const backAssign  = S.sameLogoOnBothSides ? v.assignment : (v.backAssignment || {});
 
       const { blob: frontPng } = await rasterizeForPrint(frontAssign, 'front');
-      const { blob: backPng }  = await rasterizeForPrint(backAssign,  'back');
+      const { blob: backPng }  = await rasterizeForPrint(backAssign,  'back', S.sameLogoOnBothSides);
 
       const safe = slug(v.name) || 'variation-' + (i + 1);
       if (format === 'png') {
@@ -1398,7 +1476,10 @@ if (_urlProject) {
     if (flagCfg) {
       S.flagId = flagCfg.flag_id;
       S.colors = flagCfg.colors || {};
-      S.variations = (flagCfg.variations || []).map(v => ({ ...v, backAssignment: v.backAssignment || {} }));
+      const varData = flagCfg.variations || [];
+      const varItems = Array.isArray(varData) ? varData : (varData.items || []);
+      S.variations = varItems.map(v => ({ ...v, backAssignment: v.backAssignment || {} }));
+      S.logoLayout = Array.isArray(varData) ? 'single' : (varData.layout || 'single');
       S.baseAssignment = flagCfg.base_assignment || {};
       S.sameLogoOnBothSides = flagCfg.same_logo_on_both_sides ?? true;
       S.activeVarId = S.variations[0]?.id || null;

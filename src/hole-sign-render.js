@@ -93,7 +93,7 @@ function bannerTextBlock(banner) {
   const subLines = hasSub ? wrapText(sub.text, maxW, sub.size) : [];
   const titleLineH = (title.size || 0) * 1.1;
   const subLineH = (sub.size || 0) * 1.1;
-  const gap = (titleLines.length && subLines.length) ? Math.round((title.size || 0) * 0.2) : 0;
+  const gap = (titleLines.length && subLines.length) ? Math.round((title.size || 0) * 0.2) + (banner.spacing || 0) : 0;
   const total = titleLines.length * titleLineH + subLines.length * subLineH + gap;
   return { title, sub, titleLines, subLines, titleLineH, subLineH, gap, total };
 }
@@ -110,13 +110,12 @@ function bannerEffectiveHeight(banner) {
 }
 
 function computeLayout(state, templateId) {
-  // Banner band reserves full-width height at the top or bottom edge before any
-  // other content is placed, so the logo zone and text bands shrink to fit. The
-  // height is the larger of the configured height and what the text needs.
-  const banner = state.banner;
-  const bEff = bannerEffectiveHeight(banner);
-  const bannerTopH = (bEff > 0 && banner.position !== 'bottom') ? bEff : 0;
-  const bannerBotH = (bEff > 0 && banner.position === 'bottom') ? bEff : 0;
+  // Each banner band independently reserves height at its fixed edge before any
+  // other content is placed, so the logo zone and text bands shrink to fit.
+  const bTopEff = bannerEffectiveHeight(state.bannerTop);
+  const bBotEff = bannerEffectiveHeight(state.bannerBottom);
+  const bannerTopH = (state.bannerTop?.enabled && bTopEff > 0) ? bTopEff : 0;
+  const bannerBotH = (state.bannerBottom?.enabled && bBotEff > 0) ? bBotEff : 0;
 
   if (templateId === 'hole-sign-logo-only') {
     return { topH: 0, botH: 0,
@@ -195,13 +194,13 @@ function computeLayout(state, templateId) {
            topTextX, topTextAnchor, topTextMaxW, botTextX, botTextAnchor, botTextMaxW };
 }
 
-// Full-width banner band rect (sign coords), or null when the banner is off.
-// Used by the editor to place a drag overlay for snapping the banner top/bottom.
-export function getBannerRect(state) {
-  const b = state.banner;
+// Full-width banner band rect (sign coords), or null when that banner is off.
+// `which` is 'top' | 'bottom'.
+export function getBannerRect(state, which) {
+  const b = which === 'bottom' ? state.bannerBottom : state.bannerTop;
   const h = bannerEffectiveHeight(b);
   if (!b || !b.enabled || !(h > 0)) return null;
-  const y = b.position === 'bottom' ? HS_H - h : 0;
+  const y = which === 'bottom' ? HS_H - h : 0;
   return { x: 0, y, w: HS_W, h };
 }
 
@@ -222,15 +221,26 @@ export function getTextRegions(state, templateId, forceText = []) {
     if (L.botH > 0) regions.bottom = { x: HS_MARGIN, y: HS_H - L.bannerBotH - HS_MARGIN - L.botH, w: innerW, h: L.botH };
     else if (forceText.includes('bottom')) { const h = oneLine(state.bottomText.size); regions.bottom = { x: HS_MARGIN, y: HS_H - L.bannerBotH - HS_MARGIN - h, w: innerW, h }; }
   }
-  const br = getBannerRect(state);
-  if (br) {
-    const hasTitle = !!(state.banner.topText?.text || '').trim();
-    const hasSub = !!(state.banner.subText?.text || '').trim();
+  const brTop = getBannerRect(state, 'top');
+  if (brTop) {
+    const hasTitle = !!(state.bannerTop?.topText?.text || '').trim();
+    const hasSub   = !!(state.bannerTop?.subText?.text  || '').trim();
     if (hasTitle && hasSub) {
-      regions.bannerTitle = { x: HS_MARGIN, y: br.y, w: HS_W - 2 * HS_MARGIN, h: br.h / 2 };
-      regions.bannerSub = { x: HS_MARGIN, y: br.y + br.h / 2, w: HS_W - 2 * HS_MARGIN, h: br.h / 2 };
+      regions.bannerTopTitle = { x: HS_MARGIN, y: brTop.y, w: HS_W - 2 * HS_MARGIN, h: brTop.h / 2 };
+      regions.bannerTopSub   = { x: HS_MARGIN, y: brTop.y + brTop.h / 2, w: HS_W - 2 * HS_MARGIN, h: brTop.h / 2 };
     } else {
-      regions.bannerTitle = { x: HS_MARGIN, y: br.y, w: HS_W - 2 * HS_MARGIN, h: br.h };
+      regions.bannerTopTitle = { x: HS_MARGIN, y: brTop.y, w: HS_W - 2 * HS_MARGIN, h: brTop.h };
+    }
+  }
+  const brBot = getBannerRect(state, 'bottom');
+  if (brBot) {
+    const hasTitle = !!(state.bannerBottom?.topText?.text || '').trim();
+    const hasSub   = !!(state.bannerBottom?.subText?.text  || '').trim();
+    if (hasTitle && hasSub) {
+      regions.bannerBotTitle = { x: HS_MARGIN, y: brBot.y, w: HS_W - 2 * HS_MARGIN, h: brBot.h / 2 };
+      regions.bannerBotSub   = { x: HS_MARGIN, y: brBot.y + brBot.h / 2, w: HS_W - 2 * HS_MARGIN, h: brBot.h / 2 };
+    } else {
+      regions.bannerBotTitle = { x: HS_MARGIN, y: brBot.y, w: HS_W - 2 * HS_MARGIN, h: brBot.h };
     }
   }
   return regions;
@@ -294,6 +304,7 @@ function wrapText(text, maxW, fontSize) {
 }
 
 // Resolved absolute rects for each template-logo slot. Returns [] when off.
+// Slots with freeX/freeY/freeW/freeH use those instead of the computed position.
 export function getTemplateLogoSlots(state, templateId) {
   const tid = templateId || state.templateStyle || 'hole-sign-1';
   if (tid === 'hole-sign-logo-only') return [];
@@ -301,12 +312,18 @@ export function getTemplateLogoSlots(state, templateId) {
   const tll = computeTemplateLogoLayout(tl);
   if (!tll) return [];
   const { stripY } = computeLayout(state, tid);
-  return tll.slotsRel.map(({ dx, dy }, i) => ({
-    x: HS_MARGIN + dx,
-    y: stripY + dy,
-    w: tll.widths[i],
-    h: tll.slotH,
-  }));
+  return tll.slotsRel.map(({ dx, dy }, i) => {
+    const slot = (tl.slots || [])[i];
+    if (slot?.freeX != null) {
+      return { x: slot.freeX, y: slot.freeY, w: slot.freeW ?? tll.widths[i], h: slot.freeH ?? tll.slotH };
+    }
+    return {
+      x: HS_MARGIN + dx,
+      y: stripY + dy,
+      w: tll.widths[i],
+      h: tll.slotH,
+    };
+  });
 }
 
 // Safe-area inset on each side of a slot (≈16px in display at typical preview).
@@ -364,15 +381,18 @@ function renderTemplateLogoSlot(slot, rect, clipId) {
     + borderRect;
 }
 
-// Build SVG markup for the full-width banner band (background + title/sub-text).
+// Build SVG markup for a banner band (background + title/sub-text).
+// `position` is 'top' | 'bottom'; hide keys are bannerTopTitle/bannerTopSub/bannerBotTitle/bannerBotSub.
 // Returns an array of SVG string parts, or [] when the banner is disabled.
-function renderBanner(banner, getFamily, hide = []) {
+function renderBanner(banner, getFamily, hide = [], position = 'top') {
   const h = bannerEffectiveHeight(banner);
   if (!banner || !banner.enabled || !(h > 0)) return [];
-  const y = banner.position === 'bottom' ? HS_H - h : 0;
+  const y = position === 'bottom' ? HS_H - h : 0;
   const bg = banner.bg || {};
   const parts = [];
-  const clipId = 'bannerClip';
+  const clipId = position === 'bottom' ? 'bannerBotClip' : 'bannerTopClip';
+  const titleKey = position === 'bottom' ? 'bannerBotTitle' : 'bannerTopTitle';
+  const subKey   = position === 'bottom' ? 'bannerBotSub'   : 'bannerTopSub';
   parts.push(`<clipPath id="${clipId}"><rect x="0" y="${y}" width="${HS_W}" height="${h}"/></clipPath>`);
   parts.push(`<rect x="0" y="${y}" width="${HS_W}" height="${h}" fill="${escXml(bg.color || '#E5E5E5')}"/>`);
   if (bg.type === 'image' && bg.imageUrl) {
@@ -383,32 +403,63 @@ function renderBanner(banner, getFamily, hide = []) {
     const cy = y + (bg.imageY ?? 50) / 100 * h;
     parts.push(`<image href="${escXml(bg.imageUrl)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"/>`);
   }
+  const alignAttrs = (t) => {
+    const a = t.align || 'center';
+    const anchor = a === 'left' ? 'start' : a === 'right' ? 'end' : 'middle';
+    const x = a === 'left' ? HS_MARGIN : a === 'right' ? HS_W - HS_MARGIN : HS_W / 2;
+    return { x, anchor };
+  };
   const tb = bannerTextBlock(banner);
   if (tb.total > 0) {
     const { title, sub, titleLines, subLines, titleLineH, subLineH, gap } = tb;
     let topY = y + h / 2 - tb.total / 2;
     if (titleLines.length) {
-      if (!hide.includes('bannerTitle')) {
-        const tspans = titleLines.map((line, i) => `<tspan x="${HS_W / 2}"${i === 0 ? '' : ` dy="${titleLineH}"`}>${escXml(line)}</tspan>`).join('');
-        parts.push(`<text x="${HS_W / 2}" y="${Math.round(topY + title.size * 0.82)}" text-anchor="middle" font-family="${escXml(getFamily(title.font))}" font-size="${title.size}" fill="${escXml(title.color || '#111110')}">${tspans}</text>`);
+      if (!hide.includes(titleKey)) {
+        const { x: tx, anchor: ta } = alignAttrs(title);
+        const tspans = titleLines.map((line, i) => `<tspan x="${tx}"${i === 0 ? '' : ` dy="${titleLineH}"`}>${escXml(line)}</tspan>`).join('');
+        parts.push(`<text x="${tx}" y="${Math.round(topY + title.size * 0.82)}" text-anchor="${ta}" font-family="${escXml(getFamily(title.font))}" font-size="${title.size}" fill="${escXml(title.color || '#111110')}">${tspans}</text>`);
       }
       topY += titleLines.length * titleLineH + gap;
     }
-    if (subLines.length && !hide.includes('bannerSub')) {
-      const tspans = subLines.map((line, i) => `<tspan x="${HS_W / 2}"${i === 0 ? '' : ` dy="${subLineH}"`}>${escXml(line)}</tspan>`).join('');
-      parts.push(`<text x="${HS_W / 2}" y="${Math.round(topY + sub.size * 0.82)}" text-anchor="middle" font-family="${escXml(getFamily(sub.font))}" font-size="${sub.size}" fill="${escXml(sub.color || '#111110')}">${tspans}</text>`);
+    if (subLines.length && !hide.includes(subKey)) {
+      const { x: sx, anchor: sa } = alignAttrs(sub);
+      const tspans = subLines.map((line, i) => `<tspan x="${sx}"${i === 0 ? '' : ` dy="${subLineH}"`}>${escXml(line)}</tspan>`).join('');
+      parts.push(`<text x="${sx}" y="${Math.round(topY + sub.size * 0.82)}" text-anchor="${sa}" font-family="${escXml(getFamily(sub.font))}" font-size="${sub.size}" fill="${escXml(sub.color || '#111110')}">${tspans}</text>`);
     }
   }
   return parts;
 }
 
 export function makeHoleSignSvg(state, variation) {
-  const templateId = variation?.templateId || state.templateStyle || 'hole-sign-1';
-  const { topH, botH, logoY, logoH, bannerTopH, bannerBotH, topTextX, topTextAnchor, topTextMaxW, botTextX, botTextAnchor, botTextMaxW } = computeLayout(state, templateId);
+  // state.templateStyle comes from getEffectiveState() which correctly resolves
+  // per-variation overrides. Prefer it over variation.templateId which can be a
+  // stale value set when the variation was first created.
+  const templateId = state.templateStyle || variation?.templateId || 'hole-sign-1';
+  let { topH, botH, logoY, logoH, bannerTopH, bannerBotH, topTextX, topTextAnchor, topTextMaxW, botTextX, botTextAnchor, botTextMaxW } = computeLayout(state, templateId);
   const viewBox = `0 0 ${HS_W} ${HS_H}`;
   const bg = state.background;
   const topText = state.topText;
   const bottomText = state.bottomText;
+  // Apply explicit text alignment only when the user has deliberately set it
+  // (non-center forces the x position; 'center' overrides anchor but keeps the
+  // logo-constrained max-width so text doesn't bleed into a logo strip).
+  const innerW = HS_W - 2 * HS_MARGIN;
+  if (topText.align === 'left' || topText.align === 'right') {
+    topTextAnchor = topText.align === 'left' ? 'start' : 'end';
+    topTextX      = topText.align === 'left' ? HS_MARGIN : HS_W - HS_MARGIN;
+    topTextMaxW   = innerW;
+  } else if (topText.align === 'center') {
+    topTextAnchor = 'middle';
+    topTextX      = HS_W / 2;
+  }
+  if (bottomText.align === 'left' || bottomText.align === 'right') {
+    botTextAnchor = bottomText.align === 'left' ? 'start' : 'end';
+    botTextX      = bottomText.align === 'left' ? HS_MARGIN : HS_W - HS_MARGIN;
+    botTextMaxW   = innerW;
+  } else if (bottomText.align === 'center') {
+    botTextAnchor = 'middle';
+    botTextX      = HS_W / 2;
+  }
   // Text keys to lay out but not draw (e.g. while being edited inline, so the
   // SVG copy doesn't show around the live editor — avoids the "halo").
   const hide = state.hideText || [];
@@ -428,8 +479,9 @@ export function makeHoleSignSvg(state, variation) {
     parts.push(`<image href="${escXml(bg.imageUrl)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid slice"/>`);
   }
 
-  // Banner band (full-width strip; reserved by computeLayout)
-  parts.push(...renderBanner(state.banner, getFamily, hide));
+  // Banner bands (full-width strips; reserved by computeLayout)
+  parts.push(...renderBanner(state.bannerTop,    getFamily, hide, 'top'));
+  parts.push(...renderBanner(state.bannerBottom, getFamily, hide, 'bottom'));
 
   // Top text (standard template only)
   if (templateId !== 'hole-sign-logo-only' && topH > 0 && topText.text && topText.text.trim() && !hide.includes('top')) {

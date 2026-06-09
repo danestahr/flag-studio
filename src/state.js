@@ -9,6 +9,7 @@ export const S = {
   activeVarId: null,
   gIndex: 0,
   sameLogoOnBothSides: true,
+  logoLayout: 'single',
   shareToken: null,
   feedback: [],
 };

@@ -30,4 +30,76 @@ export const FLAGS = [
     ],
     svgContent: '', viewBox: '0 0 7519 4669', logoZones: [],
   },
+  {
+    id: 'bristol', name: 'Bristol',
+    colorZones: [
+      { id: 'zone-primary',   label: 'Field' },
+      { id: 'zone-secondary', label: 'Accent' },
+    ],
+    svgContent: '', viewBox: '0 0 7519 4670', logoZones: [],
+  },
+  {
+    id: 'checkered', name: 'Checkered',
+    colorZones: [
+      { id: 'zone-primary',   label: 'Field' },
+      { id: 'zone-secondary', label: 'Checker' },
+    ],
+    svgContent: '', viewBox: '0 0 7519 4671', logoZones: [],
+  },
+  {
+    id: 'checkered-logo', name: 'Checkered Logo',
+    colorZones: [
+      { id: 'zone-primary',   label: 'Field' },
+      { id: 'zone-secondary', label: 'Checker' },
+    ],
+    svgContent: '', viewBox: '0 0 7519 4671', logoZones: [],
+  },
+  {
+    id: 'diagonal', name: 'Diagonal',
+    colorZones: [
+      { id: 'zone-primary',   label: 'Field' },
+      { id: 'zone-secondary', label: 'Diagonal' },
+    ],
+    svgContent: '', viewBox: '0 0 7519 4670', logoZones: [],
+  },
+  {
+    id: 'new-castle', name: 'New Castle',
+    colorZones: [
+      { id: 'zone-primary',   label: 'Field' },
+      { id: 'zone-secondary', label: 'Accent' },
+    ],
+    svgContent: '', viewBox: '0 0 7519 4670', logoZones: [],
+  },
+  {
+    id: 'shefield', name: 'Shefield',
+    colorZones: [
+      { id: 'zone-primary',   label: 'Field' },
+      { id: 'zone-secondary', label: 'Accent' },
+    ],
+    svgContent: '', viewBox: '0 0 7519 4670', logoZones: [],
+  },
+  {
+    id: 'south-hampton', name: 'South Hampton',
+    colorZones: [
+      { id: 'zone-primary',   label: 'Field' },
+      { id: 'zone-secondary', label: 'Accent' },
+    ],
+    svgContent: '', viewBox: '0 0 7519 4670', logoZones: [],
+  },
+  {
+    id: 'windsor', name: 'Windsor',
+    colorZones: [
+      { id: 'zone-primary',   label: 'Field' },
+      { id: 'zone-secondary', label: 'Accent' },
+    ],
+    svgContent: '', viewBox: '0 0 7519 4670', logoZones: [],
+  },
+  {
+    id: 'york', name: 'York',
+    colorZones: [
+      { id: 'zone-primary',   label: 'Field' },
+      { id: 'zone-secondary', label: 'Accent' },
+    ],
+    svgContent: '', viewBox: '0 0 7519 4670', logoZones: [],
+  },
 ];

@@ -1,6 +1,9 @@
 import './landing.css';
+import { requireAuth } from './auth.js';
 import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake,
          updateProject } from './supabase.js';
+
+await requireAuth();
 
 const pid = new URLSearchParams(window.location.search).get('project');
 if (!pid) window.location.href = '/';

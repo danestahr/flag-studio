@@ -51,7 +51,7 @@ async function loadSvg(name) {
 }
 
 function preloadSvgs() {
-  ['Edinburgh', 'Ascot', 'Plain'].forEach(name => loadSvg(name));
+  FLAGS.forEach(f => loadSvg(f.name));
 }
 
 // ── State ──────────────────────────────────────────────────
@@ -355,7 +355,8 @@ function renderStep5() {
   ].filter(Boolean);
 
   const setupLabel = O.flagSetup === 'different' ? 'Different front & back' : 'Same front & back';
-  const styleLabel = O.flagStyle ? O.flagStyle.charAt(0).toUpperCase() + O.flagStyle.slice(1) : null;
+  const selectedFlag = FLAGS.find(f => f.id === O.flagStyle);
+  const styleLabel = selectedFlag ? selectedFlag.name : (O.flagStyle || null);
 
   return `
     <div class="order-title">Review &amp; submit</div>
@@ -458,8 +459,7 @@ function coloredSvgInner(svgText, primaryHex, secondaryHex) {
       el.querySelectorAll('rect,path,polygon,circle,ellipse').forEach(c => c.setAttribute('fill', secondaryHex));
     }
   }
-  const logoPlacement = svgEl.querySelector('#logo-placement');
-  if (logoPlacement) logoPlacement.setAttribute('display', 'none');
+  svgEl.querySelectorAll('[id*="logo-placement"]').forEach(g => g.setAttribute('display', 'none'));
   return svgEl.innerHTML;
 }
 
@@ -467,27 +467,28 @@ function coloredSvgInner(svgText, primaryHex, secondaryHex) {
 function renderCollapsibleFlagPicker() {
   const primaryHex = O.flagPrimaryColor?.hex || null;
   const secondaryHex = O.flagSecondaryColor?.hex || null;
-  const flagNames = ['Edinburgh', 'Ascot', 'Plain'];
 
   if (O.flagStyle && !O.flagStyleOpen) {
-    const label = O.flagStyle.charAt(0).toUpperCase() + O.flagStyle.slice(1);
-    const svgText = svgCache.get(label) || '';
+    const flag = FLAGS.find(f => f.id === O.flagStyle);
+    const label = flag ? flag.name : O.flagStyle;
+    const svgText = svgCache.get(flag?.name || label) || '';
     const inner = svgText ? coloredSvgInner(svgText, primaryHex, secondaryHex) : '';
+    const vb = flag?.viewBox || '0 0 7519 4669';
     return `<div class="picker-collapsed" onclick="window.openPicker('flagStyle')" style="cursor:pointer">
-      <div class="picker-flag-thumb">${inner ? `<svg viewBox="0 0 7519 4669" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">${inner}</svg>` : ''}</div>
+      <div class="picker-flag-thumb">${inner ? `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">${inner}</svg>` : ''}</div>
       <span class="picker-collapsed-name">${esc(label)}</span>
       <span style="flex:1"></span>
       <button class="picker-clear-btn" onclick="event.stopPropagation();window.clearPicker('flagStyle')" title="Clear">×</button>
     </div>`;
   }
 
-  const cards = flagNames.map(name => {
-    const isActive = O.flagStyle === name.toLowerCase();
-    const svgText = svgCache.get(name) || '';
+  const cards = FLAGS.map(flag => {
+    const isActive = O.flagStyle === flag.id;
+    const svgText = svgCache.get(flag.name) || '';
     const inner = svgText ? coloredSvgInner(svgText, primaryHex, secondaryHex) : '';
-    return `<div class="flag-tmpl-card${isActive ? ' active' : ''}" onclick="window.selectFlagStyle('${name.toLowerCase()}')">
-      <div class="flag-tmpl-thumb">${inner ? `<svg viewBox="0 0 7519 4669" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">${inner}</svg>` : '<div style="width:100%;height:100%;background:var(--gray-100)"></div>'}</div>
-      <div class="flag-tmpl-name">${name}</div>
+    return `<div class="flag-tmpl-card${isActive ? ' active' : ''}" onclick="window.selectFlagStyle('${flag.id}')">
+      <div class="flag-tmpl-thumb">${inner ? `<svg viewBox="${flag.viewBox}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">${inner}</svg>` : '<div style="width:100%;height:100%;background:var(--gray-100)"></div>'}</div>
+      <div class="flag-tmpl-name">${flag.name}</div>
     </div>`;
   }).join('');
   return `<div class="flag-tmpl-grid">${cards}</div>`;
@@ -822,7 +823,7 @@ function init() {
 
   // Re-render step 3 once SVGs are loaded so thumbnails appear
   setTimeout(async () => {
-    await Promise.all(['Edinburgh', 'Ascot', 'Plain'].map(name => loadSvg(name)));
+    await Promise.all(FLAGS.map(f => loadSvg(f.name)));
     if (O.step === 3) render();
   }, 0);
 }

@@ -1,5 +1,8 @@
 import './landing.css';
+import { requireAuth } from './auth.js';
 import { listProjects, createProject, deleteProject } from './supabase.js';
+
+await requireAuth();
 
 async function renderProjects() {
   const container = document.getElementById('projectsList');

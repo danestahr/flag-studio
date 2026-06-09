@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in · Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/login.css">
+</head>
+<body>
+
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="logo-mark"></div>
+      <span>Studio</span>
+    </div>
+
+    <h1 class="login-heading">Staff sign in</h1>
+
+    <form id="loginForm" class="login-form" novalidate>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" placeholder="••••••••" required>
+      </div>
+      <p id="loginError" class="login-error" style="display:none"></p>
+      <button type="submit" class="login-btn" id="loginBtn">Sign in</button>
+    </form>
+  </div>
+</div>
+
+<script type="module" src="/src/login.js"></script>
+</body>
+</html>
