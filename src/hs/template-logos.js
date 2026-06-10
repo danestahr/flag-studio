@@ -1,40 +1,13 @@
 import { HS, UI, eyedropperBtn } from './state.js';
 import { renderStep1, updateStep1Preview } from './design.js';
-import { renderEditor, renderVariationPreview } from './variations.js';
+import { renderEditor } from './var-editor.js';
+import { renderVariationPreview } from './var-canvas.js';
 import { prepareLogo } from './logo-utils.js';
 import { HS_H, HS_TPL_LOGO_MAX, HS_TPL_LOGO_MIN, HS_W, emptyTemplateLogos, normalizeTplLogoSize } from '../hole-sign-data.js';
-import { HS_TPL_LOGO_SAFE_FRAC, escXml } from '../hole-sign-render.js';
+import { HS_TPL_LOGO_SAFE_FRAC, escXml, getTemplateLogoSlots, slotWidthForRatio } from '../hole-sign-render.js';
 import { uploadLogo } from '../supabase.js';
 
 // ── Template logo controls ────────────────────────────────
-// Which hAlign options are valid given count + whether text shares the band.
-// Anything that would put a logo on top of the text is dropped.
-export function validHAlignsFor(count, hasText) {
-  if (!count || !hasText) return ['left','center','spread','right'];
-  if (count === 1) return ['left','right'];
-  if (count === 2) return ['left','right','spread'];
-  return ['left','right']; // count === 3
-}
-
-export function tlBandHasText() {
-  const tl = tlSource();
-  if (!tl || !tl.count) return false;
-  const src = HS.editingVarId && HS.editingDraft ? HS.editingDraft : HS;
-  const t = tl.vAlign === 'bottom' ? src.bottomText : src.topText;
-  return !!(t && t.text && t.text.trim());
-}
-
-// If current hAlign just became invalid, snap to the closest still-valid value
-// (preferring 'left' as the safe default). Returns true if anything changed.
-export function correctTplHAlign() {
-  const tl = tlSource();
-  if (!tl || !tl.count) return false;
-  const valid = validHAlignsFor(tl.count, tlBandHasText());
-  if (valid.includes(tl.hAlign)) return false;
-  tl.hAlign = valid[0];
-  if (tl.hAlign === 'spread') tl.stack = 'horizontal';
-  return true;
-}
 
 export function renderTemplateLogoControls() {
   const tl = tlSource();
@@ -46,49 +19,36 @@ export function renderTemplateLogoControls() {
         <div class="hs-bg-toggle">${countBtns}</div>
       </div>`;
   }
-  const valid = validHAlignsFor(tl.count, tlBandHasText());
-  const opt = (val, label, current) => `<option value="${val}"${current===val?' selected':''}>${label}</option>`;
-  const hOpt = (val, label) => {
-    const disabled = !valid.includes(val);
-    return `<option value="${val}"${tl.hAlign===val?' selected':''}${disabled?' disabled':''}>${label}${disabled?' — overlaps text':''}</option>`;
-  };
-  const stackDisabled = tl.hAlign === 'spread' || tl.count < 2;
+  const sz = normalizeTplLogoSize(tl.size);
+  const pct = Math.round((sz - HS_TPL_LOGO_MIN) / (HS_TPL_LOGO_MAX - HS_TPL_LOGO_MIN) * 100);
   return `
     <div class="hs-section">
       <div class="hs-section-title">Template logos</div>
       <div class="tl-row"><div class="tl-row-label">Logos</div><div class="hs-bg-toggle">${countBtns}</div></div>
-      ${(() => {
-        const sz = normalizeTplLogoSize(tl.size);
-        const pct = Math.round((sz - HS_TPL_LOGO_MIN) / (HS_TPL_LOGO_MAX - HS_TPL_LOGO_MIN) * 100);
-        return `
       <div class="tl-row">
         <div class="tl-row-label">Size</div>
         <div class="tl-size-slider">
           <input type="range" min="${HS_TPL_LOGO_MIN}" max="${HS_TPL_LOGO_MAX}" step="10" value="${sz}" oninput="setTplSize(this.value)">
           <span class="tl-size-value" id="tlSizeValue">${pct}%</span>
         </div>
-      </div>`;
-      })()}
-      <div class="tl-row">
-        <div class="tl-row-label">Vertical</div>
-        <select class="tl-select" onchange="setTplVAlign(this.value)">
-          ${opt('top','Top',tl.vAlign)}${opt('bottom','Bottom',tl.vAlign)}
-        </select>
       </div>
       <div class="tl-row">
-        <div class="tl-row-label">Horizontal</div>
-        <select class="tl-select" onchange="setTplHAlign(this.value)">
-          ${hOpt('left','Left')}${hOpt('center','Center')}${hOpt('spread','Spread')}${hOpt('right','Right')}
-        </select>
+        <div class="tl-row-label">Position</div>
+        <div class="hs-bg-toggle">
+          <button class="hs-tog-btn${tl.vAlign !== 'bottom' ? ' active' : ''}" onclick="setTplVAlign('top')">Top</button>
+          <button class="hs-tog-btn${tl.vAlign === 'bottom' ? ' active' : ''}" onclick="setTplVAlign('bottom')">Bottom</button>
+        </div>
       </div>
-      <div class="tl-row${stackDisabled?' disabled':''}">
-        <div class="tl-row-label">Stack</div>
-        <select class="tl-select" onchange="setTplStack(this.value)" ${stackDisabled?'disabled':''}>
-          ${opt('horizontal','Horizontal',tl.stack)}${opt('vertical','Vertical',tl.stack)}
-        </select>
+      <div class="tl-row">
+        <div class="tl-row-label">Alignment</div>
+        <div class="hs-bg-toggle">
+          <button class="hs-tog-btn${tl.hAlign === 'left' ? ' active' : ''}" onclick="setTplHAlign('left')">Left</button>
+          <button class="hs-tog-btn${tl.hAlign === 'spread' || !['left','right'].includes(tl.hAlign) ? ' active' : ''}" onclick="setTplHAlign('spread')">Spread</button>
+          <button class="hs-tog-btn${tl.hAlign === 'right' ? ' active' : ''}" onclick="setTplHAlign('right')">Right</button>
+        </div>
       </div>
-      <div class="tl-hint">Drag slots in the preview to reposition and resize individually.</div>
-      <button class="btn sm" style="margin-top:6px" onclick="resetTlFreePositions()">Reset layout</button>
+      <div class="tl-hint">Drag slots in the preview to reposition and resize. Click + to assign a logo.</div>
+      <button class="btn sm" style="margin-top:6px" onclick="resetTlFreePositions()">Reset to defaults</button>
     </div>`;
 }
 
@@ -102,6 +62,28 @@ export function tlSource() {
   }
   HS.templateLogos = HS.templateLogos || emptyTemplateLogos();
   return HS.templateLogos;
+}
+
+// Applies computed default positions to all existing slots (used when vAlign/hAlign
+// changes so the banner snap-drag and quick-add can reflow slot positions).
+export function snapTlSlotsToDefaults(tl) {
+  const defaults = getDefaultSlotRects(tl);
+  (tl.slots || []).forEach((s, i) => {
+    if (!s) return;
+    const d = defaults[i];
+    if (d) { s.freeX = d.x; s.freeY = d.y; s.freeW = d.w; s.freeH = d.h; }
+  });
+}
+
+// Returns the computed default rect for each slot, ignoring any existing
+// freeX/freeY. Used to pre-set positions when a logo is first assigned
+// and to restore positions on "Reset to defaults".
+function getDefaultSlotRects(tl) {
+  const draft = HS.editingVarId && HS.editingDraft ? HS.editingDraft : null;
+  const state = draft ? { ...HS, ...draft } : HS;
+  const tid = (draft?.templateStyle) || HS.templateStyle || 'hole-sign-1';
+  const tlCopy = { ...tl, slots: (tl.slots || []).map(() => null) };
+  return getTemplateLogoSlots({ ...state, templateLogos: tlCopy }, tid);
 }
 
 // Structural redraw — count/align changes can show/hide rows or repaint
@@ -124,7 +106,14 @@ export function redrawTplPreview() {
 
 export function ensureTlSlots() {
   const tl = tlSource();
-  while (tl.slots.length < tl.count) tl.slots.push(null);
+  if (tl.slots.length < tl.count) {
+    const defaults = getDefaultSlotRects(tl);
+    while (tl.slots.length < tl.count) {
+      const i = tl.slots.length;
+      const d = defaults[i];
+      tl.slots.push(d ? { freeX: d.x, freeY: d.y, freeW: d.w, freeH: d.h } : {});
+    }
+  }
   if (tl.slots.length > tl.count) tl.slots.length = tl.count;
 }
 
@@ -132,7 +121,6 @@ window.setTplCount = function (n) {
   const tl = tlSource();
   tl.count = n;
   ensureTlSlots();
-  correctTplHAlign();
   UI.tlSelectedIdx = null;
   closeTlSidePanel();
   closeTlSlotToolbar();
@@ -152,23 +140,35 @@ window.setTplSize = function (k) {
 window.setTplVAlign = function (k) {
   const tl = tlSource();
   tl.vAlign = k;
-  correctTplHAlign();
+  const defaults = getDefaultSlotRects(tl);
+  (tl.slots || []).forEach((s, i) => {
+    if (!s) return;
+    const d = defaults[i];
+    if (d) { s.freeX = d.x; s.freeY = d.y; s.freeW = d.w; s.freeH = d.h; }
+  });
   redrawTplStructural();
 };
 window.setTplHAlign = function (k) {
   const tl = tlSource();
-  const valid = validHAlignsFor(tl.count, tlBandHasText());
-  if (!valid.includes(k)) return;
   tl.hAlign = k;
   if (k === 'spread') tl.stack = 'horizontal';
+  const defaults = getDefaultSlotRects(tl);
+  (tl.slots || []).forEach((s, i) => {
+    if (!s) return;
+    const d = defaults[i];
+    if (d) { s.freeX = d.x; s.freeY = d.y; s.freeW = d.w; s.freeH = d.h; }
+  });
   redrawTplStructural();
 };
-window.setTplStack = function (k) { tlSource().stack = k; redrawTplStructural(); };
 
 window.resetTlFreePositions = function () {
   const tl = tlSource();
-  (tl.slots || []).forEach(s => {
-    if (s) { delete s.freeX; delete s.freeY; delete s.freeW; delete s.freeH; }
+  const defaults = getDefaultSlotRects(tl);
+  (tl.slots || []).forEach((s, i) => {
+    if (!s) return;
+    const d = defaults[i];
+    if (d) { s.freeX = d.x; s.freeY = d.y; s.freeW = d.w; s.freeH = d.h; }
+    else { delete s.freeX; delete s.freeY; delete s.freeW; delete s.freeH; }
   });
   redrawTplPreview();
 };
@@ -297,8 +297,10 @@ export function wireTlSlotFreeDrag(overlay, handle, idx, signRect) {
     const scaleY = pr ? pr.height / HS_H : 1;
     const dxSign = (e.clientX - startClientX) / scaleX;
     const dySign = (e.clientY - startClientY) / scaleY;
-    const s = tlSource().slots[idx];
-    if (!s) return;
+    let s = tlSource().slots[idx];
+    // Ensure we have a mutable object — empty slots are {} but could be null for
+    // legacy data; create one in place so we can store the free position.
+    if (s == null) { tlSource().slots[idx] = {}; s = tlSource().slots[idx]; }
     if (Math.hypot(dxSign, dySign) > 5) UI.tlJustDragged = true;
     if (mode === 'move') {
       s.freeX = startSignX + dxSign;
@@ -337,7 +339,7 @@ export function openTlLibPicker(idx, anchorEl) {
   const libHtml = HS.library.length
     ? HS.library.map(l => `<div class="tl-lp-item" data-lid="${l.id}" title="${escXml(l.name)}"><img src="${l.src}" alt=""></div>`).join('')
     : '<div class="tl-lp-empty">No logos uploaded yet</div>';
-  picker.innerHTML = `${libHtml}<div class="tl-lp-upload" id="tlLpUpload">+ Upload image</div><input type="file" id="tlLpFile" accept="image/*" style="display:none">`;
+  picker.innerHTML = `${libHtml}<div class="tl-lp-upload" id="tlLpUpload">+ Upload image</div><input type="file" id="tlLpFile" accept="image/*,.pdf,.ai,.eps" style="display:none">`;
   document.body.appendChild(picker);
   UI.tlPickerEl = picker;
 
@@ -439,14 +441,26 @@ export function closeTlSlotToolbar() {
 
 export function assignTlSlot(idx, logo) {
   ensureTlSlots();
+  const tl = tlSource();
+  const existing = tl.slots[idx];
+  // Prefer the slot's existing position (user may have pre-placed the empty slot)
+  // otherwise fall back to the computed default.
+  let freePos = {};
+  if (existing?.freeX != null) {
+    freePos = { freeX: existing.freeX, freeY: existing.freeY, freeW: existing.freeW, freeH: existing.freeH };
+  } else {
+    const dr = getDefaultSlotRects(tl)[idx];
+    if (dr) freePos = { freeX: dr.x, freeY: dr.y, freeW: dr.w, freeH: dr.h };
+  }
   const slot = {
     logoId: logo.id,
     logoSrc: logo.src,
     fit: 'width',
     tx: 50, ty: 50, scale: 100,
     border: { color: '#D1D5DB' },
+    ...freePos,
   };
-  tlSource().slots[idx] = slot;
+  tl.slots[idx] = slot;
   UI.tlSelectedIdx = idx;
   prepareLogo(slot, logo.src).then(() => redrawTplPreview()).catch(() => {});
   redrawTplPreview();
@@ -561,7 +575,11 @@ window.resetTlSlot = function (idx) {
   openTlSidePanel(idx);
 };
 window.removeTlSlot = function (idx) {
-  tlSource().slots[idx] = null;
+  const s = tlSource().slots[idx];
+  // Keep the slot's position so the empty placeholder stays in place.
+  tlSource().slots[idx] = s?.freeX != null
+    ? { freeX: s.freeX, freeY: s.freeY, freeW: s.freeW, freeH: s.freeH }
+    : {};
   UI.tlSelectedIdx = null;
   closeTlSidePanel();
   redrawTplPreview();
@@ -596,6 +614,8 @@ window.setTlSlotBgHex = function (idx, val) {
 window.setTlSlotRatio = function (idx, val) {
   const slot = activeSlot(idx); if (!slot) return;
   slot.ratio = val;
+  // Update slot width to match the new ratio, keeping the current height.
+  if (slot.freeH != null) slot.freeW = Math.round(slotWidthForRatio(slot, slot.freeH));
   redrawTplPreview();
 };
 window.setTlSlotBorderMode = function (idx, mode) {

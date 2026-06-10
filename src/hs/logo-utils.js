@@ -1,5 +1,6 @@
 import { HS, UI } from './state.js';
-import { renderVarList, renderVariationPreview } from './variations.js';
+import { renderVarList } from './variations.js';
+import { renderVariationPreview } from './var-canvas.js';
 import { getLogoZone } from '../hole-sign-render.js';
 
 // Scan alpha channel on a 256×256 canvas to find opaque pixel bounds (fractions of image size)

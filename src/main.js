@@ -1,5 +1,6 @@
 import './style.css';
 import { requireAuth } from './auth.js';
+import { logoThumbHtml } from './media-utils.js';
 import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
 import { S, _dragLogoId, setDragLogoId } from './state.js';
@@ -305,7 +306,7 @@ function renderLib() {
   g.innerHTML = S.library.map(l => `
     <div class="lib-item ${l.uploading ? 'uploading' : ''}" id="li-${l.id}" draggable="${!l.uploading}"
       ondragstart="dragStart(event,'${l.id}')" ondragend="dragEnd('${l.id}')">
-      <img src="${l.src}" alt="${l.name}">
+      ${logoThumbHtml(l.src, l.name)}
       <div class="lib-item-name">${l.uploading ? '↑ uploading…' : l.name}</div>
       ${l.uploading ? '' : `<button class="lib-del" onclick="delLogo('${l.id}')">×</button>`}
     </div>`).join('');
@@ -364,7 +365,7 @@ function ensureToolbar() {
       <button class="dz-tb-btn" id="dzTbReplace">Replace ▾</button>
       <div class="dz-lib-picker" id="dzLibPicker" style="display:none"></div>
     </div>
-    <input type="file" id="dzReplaceFile" accept="image/*" style="display:none">`;
+    <input type="file" id="dzReplaceFile" accept="image/*,.pdf,.ai,.eps" style="display:none">`;
   document.body.appendChild(t);
 
   document.getElementById('dzTbRemove').addEventListener('click', () => {
@@ -416,7 +417,7 @@ function renderLibPicker() {
   picker.innerHTML = S.library.length
     ? S.library.map(l => `
         <div class="dz-lp-item${existing?.id === l.id ? ' active' : ''}" data-lid="${l.id}" title="${l.name}">
-          <img src="${l.src}" alt="${l.name}">
+          ${logoThumbHtml(l.src, l.name)}
         </div>`).join('') + `<div class="dz-lp-upload" id="dzLpUpload">+ Upload</div>`
     : `<div class="dz-lp-upload" id="dzLpUpload">+ Upload</div>`;
 
@@ -979,7 +980,7 @@ function renderVarStrip() {
     el.title = l.name;
     el.setAttribute('ondragstart', `dragStart(event,'${l.id}')`);
     el.setAttribute('ondragend', `dragEnd('${l.id}')`);
-    el.innerHTML = `<img src="${l.src}" alt="${l.name}">${l.uploading ? '' : `<button class="var-lib-del" title="Delete" onclick="event.stopPropagation();delLogo('${l.id}')">×</button>`}`;
+    el.innerHTML = `${logoThumbHtml(l.src, l.name)}${l.uploading ? '' : `<button class="var-lib-del" title="Delete" onclick="event.stopPropagation();delLogo('${l.id}')">×</button>`}`;
     strip.appendChild(el);
   });
 }

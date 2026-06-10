@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flag Studio — Variations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;gap:1.5rem">
+    <a href="/" class="back-link">← Projects</a>
+    <div class="logo"><div class="logo-mark"></div>Flag Studio</div>
+  </div>
+  <span class="header-sub">Tournament flag configurator</span>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div style="padding:1.25rem 1.5rem 0">
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin-bottom:6px">Project name</div>
+      <input id="projectNameInput" class="hexin" style="width:100%;height:36px" placeholder="e.g. Ascot 2026 Final"
+        oninput="setProjectName(this.value)">
+    </div>
+    <div class="sdivider" style="margin:.75rem 1.5rem"></div>
+    <div class="steps-nav">
+      <div class="step-item done" id="navDesign">
+        <div class="step-num"><span>1</span></div>
+        <div><div class="step-label">Design</div><div class="step-desc">Style, colors &amp; logos</div></div>
+      </div>
+      <div class="step-item active" id="navVariations">
+        <div class="step-num"><span>2</span></div>
+        <div><div class="step-label">Variations</div><div class="step-desc">Build combinations</div></div>
+      </div>
+      <div class="step-item" id="navGallery">
+        <div class="step-num"><span>3</span></div>
+        <div><div class="step-label">Gallery</div><div class="step-desc">Review &amp; export</div></div>
+      </div>
+    </div>
+    <div class="sdivider"></div>
+    <div class="ssummary">
+      <div class="stitle">Variations</div>
+      <div class="srow"><span class="skey">Count</span><span class="sval" id="sumVC" style="color:var(--gray-400)">—</span></div>
+    </div>
+    <div class="sdivider"></div>
+    <div style="padding:0 1.5rem 1.5rem;display:flex;flex-direction:column;gap:8px">
+      <button class="btn sm" id="saveDesignsBtn" onclick="saveDraft()" style="width:100%;justify-content:center">Save draft</button>
+      <div id="saveStatus" style="font-size:12px;color:var(--gray-400);text-align:center;min-height:16px"></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="panel visible" id="panel-4">
+      <div><div class="ptitle">Variations</div><div class="psub">Each variation swaps logos on the same master. Select a variation, then drag logos from the library into zones.</div></div>
+      <div class="sides-row">
+        <label class="check-label">
+          <input type="checkbox" id="diffSidesCheck" onchange="toggleDiffSides(this.checked)">
+          Different design on front &amp; back
+        </label>
+      </div>
+      <div id="logoLayoutRow" class="sides-row" style="display:none">
+        <span style="font-size:13px;font-weight:500;color:var(--gray-600);margin-right:8px">Logo placement:</span>
+        <div class="face-toggle-row">
+          <button class="face-tab active" id="layoutBtnSingle" onclick="setLogoLayout('single')">Full logo</button>
+          <button class="face-tab" id="layoutBtnMulti" onclick="setLogoLayout('multi')">Multiple logos</button>
+        </div>
+      </div>
+      <div class="var-strip-wrap">
+        <div class="var-strip-label">Logos</div>
+        <div class="var-strip" id="varStrip">
+          <div class="var-upload-btn" onclick="document.getElementById('varFile').click()" title="Upload logos">
+            <span>+</span>
+          </div>
+          <input type="file" id="varFile" accept="image/*" multiple onchange="handleUpload(event)">
+        </div>
+      </div>
+      <div class="s4layout">
+        <div class="var-canvas-panel">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+            <span style="font-size:13px;font-weight:500" id="activeVarName">Variation 1</span>
+            <span style="font-size:12px;color:var(--gray-400)">Drag logos into zones</span>
+          </div>
+          <div id="varEditNote" class="var-edit-note" style="display:none">
+            <div class="var-edit-note-body">
+              <span class="var-edit-note-label">Edit requested:</span>
+              <span id="varEditNoteText"></span>
+            </div>
+            <button class="var-edit-resolve-btn" id="varEditResolveBtn" onclick="resolveEdit()">Mark as resolved</button>
+            <span class="var-edit-resolved-tag" id="varEditResolvedTag" style="display:none">Resolved</span>
+          </div>
+          <div class="canvas-zoom-row">
+            <span class="canvas-zoom-value" id="flagZoomValue">100%</span>
+            <button class="canvas-zoom-reset" id="flagZoomReset" onclick="setFlagZoom(100)" style="display:none">Reset</button>
+            <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
+          </div>
+          <div class="canvas-scroll" id="flagCanvasScroll">
+            <div class="canvas-zoom-wrap" id="flagZoomWrap">
+              <div id="singleCanvas">
+                <div class="flag-wrap" id="varWrap">
+                  <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+                </div>
+              </div>
+              <div id="dualCanvas" style="display:none" class="dual-canvas-row">
+                <div>
+                  <div class="dual-canvas-label">Front</div>
+                  <div class="flag-wrap" id="varWrapFront">
+                    <svg class="bsvg" id="varSvgFront" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+                  </div>
+                </div>
+                <div>
+                  <div class="dual-canvas-label">Back</div>
+                  <div class="flag-wrap" id="varWrapBack">
+                    <svg class="bsvg" id="varSvgBack" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="var-list-panel">
+          <div class="var-list-title">All variations</div>
+          <div class="var-list" id="varList"></div>
+          <button class="add-var" onclick="addVariation()">+ Add variation</button>
+        </div>
+      </div>
+      <div class="arow">
+        <button class="btn" id="backToDesignBtn">← Design</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn primary" onclick="goToGallery()">Gallery →</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script type="module" src="/src/flags/variations.js"></script>
+<script>
+  document.getElementById('backToDesignBtn').addEventListener('click', () => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    window.location.href = 'flags.html' + (p ? '?project=' + p : '');
+  });
+  document.getElementById('navDesign').addEventListener('click', () => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    window.location.href = 'flags.html' + (p ? '?project=' + p : '');
+  });
+  document.getElementById('navGallery').addEventListener('click', () => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    if (p) window.location.href = 'flags-gallery.html?project=' + p;
+  });
+</script>
+</body>
+</html>

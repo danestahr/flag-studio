@@ -1,4 +1,5 @@
 import { HS_W, HS_H, HS_MARGIN, HS_GAP, HS_FONTS, normalizeTplLogoSize } from './hole-sign-data.js';
+import { isDisplayableImage, fileTypeLabel } from './media-utils.js';
 
 export function escXml(s) {
   return String(s)
@@ -9,9 +10,20 @@ export function escXml(s) {
     .replace(/'/g, '&apos;');
 }
 
+function filePlaceholderSvg(x, y, w, h, label) {
+  const cx = Math.round(x + w / 2);
+  const cy = Math.round(y + h / 2);
+  const fs = Math.round(Math.min(w, h) * 0.18);
+  return [
+    `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#e8e8e8" rx="8"/>`,
+    `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle"`,
+    ` font-family="sans-serif" font-size="${fs}" font-weight="bold" fill="#999">${escXml(label)}</text>`,
+  ].join('');
+}
+
 // Slot width for the configured ratio. `fit` follows the logo's natural aspect
 // (using logoAspect = h/w); the rest are simple width:height factors.
-function slotWidthForRatio(slot, slotH) {
+export function slotWidthForRatio(slot, slotH) {
   if (!slot) return slotH * 2;
   const ratio = slot.ratio || '2:1';
   if (ratio === 'fit') {
@@ -117,6 +129,13 @@ function computeLayout(state, templateId) {
   const bannerTopH = (state.bannerTop?.enabled && bTopEff > 0) ? bTopEff : 0;
   const bannerBotH = (state.bannerBottom?.enabled && bBotEff > 0) ? bBotEff : 0;
 
+  if (templateId === 'hole-sign-full-graphic') {
+    return { topH: 0, botH: 0,
+             logoY: 0, logoH: HS_H,
+             stripY: 0, stripH: 0, bannerTopH: 0, bannerBotH: 0,
+             topTextX: HS_W / 2, topTextAnchor: 'middle',
+             botTextX: HS_W / 2, botTextAnchor: 'middle' };
+  }
   if (templateId === 'hole-sign-logo-only') {
     return { topH: 0, botH: 0,
              logoY: bannerTopH + HS_MARGIN,
@@ -127,71 +146,36 @@ function computeLayout(state, templateId) {
   }
   const top = state.topText;
   const bot = state.bottomText;
+  const innerW = HS_W - 2 * HS_MARGIN;
 
-  const tl = state.templateLogos;
-  const tll = computeTemplateLogoLayout(tl);
-  const stripH = tll ? tll.stripH : 0;
-
-  // Merge the strip band with the text band on the same side: the band's
-  // height is the larger of the two, and the text shifts horizontally so it
-  // doesn't sit on top of a side-anchored logo group.
-  const stripOnTop = tll && tl.vAlign === 'top';
-  const stripOnBot = tll && tl.vAlign === 'bottom';
-
-  // Text height grows with the number of wrapped lines so multi-line text never
-  // bleeds out of its band. The wrap width matches the render: the full inner
-  // width, or the narrower text rect when the band is shared with a logo group.
-  const topRect = (stripOnTop && stripH > 0) ? computeTextRect(tl) : null;
-  const botRect = (stripOnBot && stripH > 0) ? computeTextRect(tl) : null;
-  const topMaxW = topRect ? (topRect.r - topRect.l) : (HS_W - 2 * HS_MARGIN);
-  const botMaxW = botRect ? (botRect.r - botRect.l) : (HS_W - 2 * HS_MARGIN);
-  const topLines = (top.text && top.text.trim()) ? wrapText(top.text, topMaxW, top.size).length : 0;
-  const botLines = (bot.text && bot.text.trim()) ? wrapText(bot.text, botMaxW, bot.size).length : 0;
+  // Template logos are free-positioned; text bands are independent of logo placement.
+  const topLines = (top.text && top.text.trim()) ? wrapText(top.text, innerW, top.size).length : 0;
+  const botLines = (bot.text && bot.text.trim()) ? wrapText(bot.text, innerW, bot.size).length : 0;
   const topTextH = topLines ? Math.round(topLines * top.size * 1.1 + 80) : 0;
   const botTextH = botLines ? Math.round(botLines * bot.size * 1.1 + 80) : 0;
 
-  const topBandH = stripOnTop ? Math.max(topTextH, stripH) : topTextH;
-  const botBandH = stripOnBot ? Math.max(botTextH, stripH) : botTextH;
+  const topBandH = topTextH;
+  const botBandH = botTextH;
   const topGap = topBandH > 0 ? HS_GAP : 0;
   const botGap = botBandH > 0 ? HS_GAP : 0;
 
-  // Sponsor logo zone uses everything between the bands (after the banner).
+  // Sponsor logo zone uses everything between the text bands (after the banner).
   const logoY = bannerTopH + HS_MARGIN + topBandH + topGap;
   const logoH = Math.max(0, HS_H - bannerTopH - bannerBotH - 2 * HS_MARGIN - topBandH - topGap - botBandH - botGap);
 
-  // Strip Y: centered inside the merged band on the appropriate side.
-  let stripY = 0;
-  if (stripOnTop) stripY = bannerTopH + HS_MARGIN + (topBandH - stripH) / 2;
-  else if (stripOnBot) stripY = HS_H - bannerBotH - HS_MARGIN - botBandH + (botBandH - stripH) / 2;
-
-  // Carve out the text rect when sharing the band with the strip. Text aligns
-  // to the side opposite the logos (left logos → right-aligned text, etc.)
-  // and wraps inside its rect.
-  const innerW = HS_W - 2 * HS_MARGIN;
-  const anchorFor = (h) => h === 'left' ? 'end' : h === 'right' ? 'start' : 'middle';
-  const xFor = (rect, anchor) => anchor === 'start' ? rect.l : anchor === 'end' ? rect.r : (rect.l + rect.r) / 2;
-
-  let topTextX = HS_W / 2, topTextAnchor = 'middle', topTextMaxW = innerW;
-  let botTextX = HS_W / 2, botTextAnchor = 'middle', botTextMaxW = innerW;
-  if (stripOnTop && stripH > 0) {
-    const r = computeTextRect(tl);
-    if (r) {
-      topTextAnchor = anchorFor(tl.hAlign);
-      topTextX = xFor(r, topTextAnchor);
-      topTextMaxW = r.r - r.l;
-    }
-  }
-  if (stripOnBot && stripH > 0) {
-    const r = computeTextRect(tl);
-    if (r) {
-      botTextAnchor = anchorFor(tl.hAlign);
-      botTextX = xFor(r, botTextAnchor);
-      botTextMaxW = r.r - r.l;
-    }
+  // Default strip Y for template-logo initial placement (slots with no freeX set).
+  // Placed at the start of the logo zone; bottom vAlign flips to the bottom edge.
+  const tl = state.templateLogos;
+  const tll = computeTemplateLogoLayout(tl);
+  const stripH = tll ? tll.stripH : 0;
+  let stripY = logoY;
+  if (tl?.vAlign === 'bottom') {
+    stripY = HS_H - bannerBotH - HS_MARGIN - botBandH - (botBandH > 0 ? HS_GAP : 0) - stripH;
   }
 
   return { topH: topBandH, botH: botBandH, logoY, logoH, stripY, stripH, bannerTopH, bannerBotH,
-           topTextX, topTextAnchor, topTextMaxW, botTextX, botTextAnchor, botTextMaxW };
+           topTextX: HS_W / 2, topTextAnchor: 'middle', topTextMaxW: innerW,
+           botTextX: HS_W / 2, botTextAnchor: 'middle', botTextMaxW: innerW };
 }
 
 // Full-width banner band rect (sign coords), or null when that banner is off.
@@ -248,35 +232,11 @@ export function getTextRegions(state, templateId, forceText = []) {
 
 export function getLogoZone(state, templateId) {
   const tid = templateId || state.templateStyle || 'hole-sign-1';
+  if (tid === 'hole-sign-full-graphic') return { x: 0, y: 0, w: HS_W, h: HS_H };
   const { logoY, logoH } = computeLayout(state, tid);
   return { x: HS_MARGIN, y: logoY, w: HS_W - 2 * HS_MARGIN, h: logoH };
 }
 
-// Available horizontal text rect when text shares the band with the logo strip.
-// Returns null for configurations that don't leave room for text (center, or
-// spread with count !== 2) — the UI prevents reaching those when text exists.
-function computeTextRect(tl) {
-  if (!tl || !tl.count) return null;
-  const slotH = normalizeTplLogoSize(tl.size);
-  const pad = HS_GAP * 2;
-  const stack = tl.stack || 'horizontal';
-  const gap = HS_GAP * 2;
-  const widths = [];
-  for (let i = 0; i < tl.count; i++) widths.push(slotWidthForRatio((tl.slots || [])[i], slotH));
-  const sum = widths.reduce((s, w) => s + w, 0);
-  const groupW = (stack === 'vertical') ? Math.max(...widths) : sum + (tl.count - 1) * gap;
-
-  if (tl.hAlign === 'left') {
-    return { l: HS_MARGIN + groupW + pad, r: HS_W - HS_MARGIN };
-  }
-  if (tl.hAlign === 'right') {
-    return { l: HS_MARGIN, r: HS_W - HS_MARGIN - groupW - pad };
-  }
-  if (tl.hAlign === 'spread' && tl.count === 2) {
-    return { l: HS_MARGIN + widths[0] + pad, r: HS_W - HS_MARGIN - widths[1] - pad };
-  }
-  return null;
-}
 
 // Word-wrap text into lines that fit within `maxW`. Width estimated from
 // font size — close enough for layout intent, the SVG renderer handles the
@@ -307,7 +267,7 @@ function wrapText(text, maxW, fontSize) {
 // Slots with freeX/freeY/freeW/freeH use those instead of the computed position.
 export function getTemplateLogoSlots(state, templateId) {
   const tid = templateId || state.templateStyle || 'hole-sign-1';
-  if (tid === 'hole-sign-logo-only') return [];
+  if (tid === 'hole-sign-logo-only' || tid === 'hole-sign-full-graphic') return [];
   const tl = state.templateLogos;
   const tll = computeTemplateLogoLayout(tl);
   if (!tll) return [];
@@ -479,9 +439,11 @@ export function makeHoleSignSvg(state, variation) {
     parts.push(`<image href="${escXml(bg.imageUrl)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid slice"/>`);
   }
 
-  // Banner bands (full-width strips; reserved by computeLayout)
-  parts.push(...renderBanner(state.bannerTop,    getFamily, hide, 'top'));
-  parts.push(...renderBanner(state.bannerBottom, getFamily, hide, 'bottom'));
+  // Banner bands skipped for full-graphic (image owns the entire canvas)
+  if (templateId !== 'hole-sign-full-graphic') {
+    parts.push(...renderBanner(state.bannerTop,    getFamily, hide, 'top'));
+    parts.push(...renderBanner(state.bannerBottom, getFamily, hide, 'bottom'));
+  }
 
   // Top text (standard template only)
   if (templateId !== 'hole-sign-logo-only' && topH > 0 && topText.text && topText.text.trim() && !hide.includes('top')) {
@@ -506,17 +468,28 @@ export function makeHoleSignSvg(state, variation) {
   }
 
   // Logo (raster/SVG image) OR sponsor text fallback when no logo
-  if (variation && variation.logoSrc) {
+  if (variation && variation.logoSrc && templateId === 'hole-sign-full-graphic') {
     const src = variation.logoSrcTight || variation.logoSrc;
-    const ld = variation.logoData || { x: 50, y: 50, w: 90 };
+    if (isDisplayableImage(src)) {
+      parts.push(`<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`);
+    } else {
+      parts.push(filePlaceholderSvg(0, 0, HS_W, HS_H, fileTypeLabel(src)));
+    }
+  } else if (variation && variation.logoSrc) {
+    const src = variation.logoSrcTight || variation.logoSrc;
     const lz = { x: HS_MARGIN, y: logoY, w: HS_W - 2 * HS_MARGIN, h: logoH };
-    const logoW = lz.w * (ld.w / 100);
-    const aspect = variation.logoAspect != null ? variation.logoAspect : 1;
-    const logoImgH = logoW * aspect;
-    const cx = lz.x + (ld.x / 100) * lz.w;
-    const cy = lz.y + (ld.y / 100) * lz.h;
-    parts.push(`<clipPath id="lzc"><rect x="${lz.x}" y="${lz.y}" width="${lz.w}" height="${lz.h}"/></clipPath>`);
-    parts.push(`<image href="${escXml(src)}" x="${Math.round(cx - logoW / 2)}" y="${Math.round(cy - logoImgH / 2)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}" preserveAspectRatio="xMidYMid meet" clip-path="url(#lzc)"/>`);
+    if (isDisplayableImage(src)) {
+      const ld = variation.logoData || { x: 50, y: 50, w: 90 };
+      const logoW = lz.w * (ld.w / 100);
+      const aspect = variation.logoAspect != null ? variation.logoAspect : 1;
+      const logoImgH = logoW * aspect;
+      const cx = lz.x + (ld.x / 100) * lz.w;
+      const cy = lz.y + (ld.y / 100) * lz.h;
+      parts.push(`<clipPath id="lzc"><rect x="${lz.x}" y="${lz.y}" width="${lz.w}" height="${lz.h}"/></clipPath>`);
+      parts.push(`<image href="${escXml(src)}" x="${Math.round(cx - logoW / 2)}" y="${Math.round(cy - logoImgH / 2)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}" preserveAspectRatio="xMidYMid meet" clip-path="url(#lzc)"/>`);
+    } else {
+      parts.push(filePlaceholderSvg(lz.x, lz.y, lz.w, lz.h, fileTypeLabel(src)));
+    }
   } else if (variation && variation.sponsorText && variation.sponsorText.text && variation.sponsorText.text.trim()) {
     const st = variation.sponsorText;
     const cx = HS_W / 2;

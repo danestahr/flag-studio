@@ -10,8 +10,9 @@ export const HS_FONTS = [
 ];
 
 export const HS_TEMPLATES = [
-  { id: 'hole-sign-1',        name: 'Standard',  description: 'Logo centered, optional top & bottom text', supportsText: true  },
-  { id: 'hole-sign-logo-only', name: 'Logo only', description: 'Logo fills the entire sign',               supportsText: false },
+  { id: 'hole-sign-1',            name: 'Standard',     description: 'Logo centered, optional top & bottom text', supportsText: true  },
+  { id: 'hole-sign-logo-only',    name: 'Logo only',    description: 'Logo fills the entire sign',               supportsText: false },
+  { id: 'hole-sign-full-graphic', name: 'Full graphic', description: 'Pre-designed graphic fills the entire canvas, no text or overlays', supportsText: false },
 ];
 
 // Template-logo slot height range (in sign coordinates, HS_H = 5475).

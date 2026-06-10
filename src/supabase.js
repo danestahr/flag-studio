@@ -159,12 +159,57 @@ export async function saveHoleSignConfig(projectId, state) {
       template_style: state.templateStyle,
       colors: state.colors,
       variations: state.variations,
-      one_offs: state.oneOffs || [],
+      one_offs: state.defaults || [],
       status: 'draft',
       updated_at: new Date().toISOString(),
     }, { onConflict: 'project_id' });
   if (error) throw error;
   await supabase.from('projects').update({ updated_at: new Date().toISOString() }).eq('id', projectId);
+}
+
+export async function saveHsOneOffs(projectId, defaults) {
+  const { error } = await supabase
+    .from('hole_sign_config')
+    .upsert({ project_id: projectId, one_offs: defaults || [], updated_at: new Date().toISOString() }, { onConflict: 'project_id' });
+  if (error) throw error;
+}
+
+// ── Default hole sign library ──────────────────────────────
+// Stored in the flag-logos bucket under a reserved _hs_defaults/ prefix so no
+// separate bucket or policy setup is needed.
+const HS_DEFAULTS_BUCKET = 'flag-logos';
+const HS_DEFAULTS_FOLDER = '_hs_defaults';
+
+export async function listHsDefaults() {
+  const { data, error } = await supabase.storage
+    .from(HS_DEFAULTS_BUCKET)
+    .list(HS_DEFAULTS_FOLDER, { limit: 500, sortBy: { column: 'name', order: 'asc' } });
+  if (error) throw error;
+  return (data || [])
+    .filter(f => f.name && !f.name.endsWith('/') && f.id)
+    .map(f => {
+      const path = `${HS_DEFAULTS_FOLDER}/${f.name}`;
+      const { data: { publicUrl } } = supabase.storage.from(HS_DEFAULTS_BUCKET).getPublicUrl(path);
+      return { id: path, name: f.name.replace(/\.[^.]+$/, ''), src: publicUrl, storagePath: path };
+    });
+}
+
+export async function uploadHsDefault(file) {
+  const ext = file.name.split('.').pop();
+  const name = file.name.replace(/\.[^.]+$/, '');
+  const safeName = name.replace(/[^a-zA-Z0-9_\-. ]/g, '_');
+  const path = `${HS_DEFAULTS_FOLDER}/${Date.now()}_${safeName}.${ext}`;
+  const { error } = await supabase.storage
+    .from(HS_DEFAULTS_BUCKET)
+    .upload(path, file, { upsert: false });
+  if (error) throw error;
+  const { data: { publicUrl } } = supabase.storage.from(HS_DEFAULTS_BUCKET).getPublicUrl(path);
+  return { id: path, name: safeName, src: publicUrl, storagePath: path };
+}
+
+export async function deleteHsDefault(storagePath) {
+  const { error } = await supabase.storage.from(HS_DEFAULTS_BUCKET).remove([storagePath]);
+  if (error) throw error;
 }
 
 export async function loadHoleSignConfig(projectId) {

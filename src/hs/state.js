@@ -7,13 +7,14 @@ export const HS = {
   projectName: '',
   templateStyle: 'hole-sign-1',
   background: { type: 'color', color: '#FFFFFF', imageUrl: null, storagePath: null },
-  topText:    { text: '', font: 'dm-serif', size: 300, color: '#111110' },
+  topText:    { text: 'Sponsored By', font: 'dm-serif', size: 300, color: '#111110' },
   bottomText: { text: '', font: 'dm-serif', size: 300, color: '#111110' },
   bannerTop:    emptyBanner(),
   bannerBottom: emptyBanner(),
   templateLogos: emptyTemplateLogos(),
   library: [],
   variations: [],
+  defaults: [],      // selected default hole signs for this project
   activeVarId: null,
   editingVarId: null,
   editingDraft: null,
@@ -39,6 +40,7 @@ export const UI = {
   hsZoom: 100,               // Step-2 preview zoom %
   hsStep1Zoom: 100,          // Step-1 preview zoom %
   hsActiveZone: null,        // active variation drop zone for the toolbar
+  activeDefaultId: null,     // selected default hole sign id (mutually exclusive with HS.activeVarId)
   fontCssCache: null,        // cached embedded-font @font-face CSS
 };
 
@@ -143,8 +145,8 @@ export function renderTextControls(which, textState) {
   const cap = which.charAt(0).toUpperCase() + which.slice(1);
   return `
     <div class="hs-section">
-      <div class="hs-section-title">${cap === 'Top' ? 'Top' : 'Bottom'} text <span class="hs-optional">(optional)</span></div>
-      <input class="hexin" style="width:100%" placeholder="Add Text..." value="${escXml(textState.text)}"
+      <div class="hs-section-title">${cap === 'Top' ? 'Text' : 'Bottom text'} <span class="hs-optional">(optional)</span></div>
+      <input class="hexin" style="width:100%" placeholder="Write Here..." value="${escXml(textState.text)}"
         oninput="setHsTextProp('${which}','text',this.value)">
       ${fontSelect(`setHsTextProp('${which}','font',this.value)`, textState.font)}
       ${alignBtns(textState.align, `setHsTextProp('${which}','align'`)}

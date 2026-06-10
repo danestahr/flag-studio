@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flag Studio — Gallery</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;gap:1.5rem">
+    <a href="/" class="back-link">← Projects</a>
+    <div class="logo"><div class="logo-mark"></div>Flag Studio</div>
+  </div>
+  <span class="header-sub">Tournament flag configurator</span>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div style="padding:1.25rem 1.5rem 0">
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin-bottom:6px">Project name</div>
+      <input id="projectNameInput" class="hexin" style="width:100%;height:36px" placeholder="e.g. Ascot 2026 Final" readonly>
+    </div>
+    <div class="sdivider" style="margin:.75rem 1.5rem"></div>
+    <div class="steps-nav">
+      <div class="step-item done" id="navDesign">
+        <div class="step-num"><span>1</span></div>
+        <div><div class="step-label">Design</div><div class="step-desc">Style, colors &amp; logos</div></div>
+      </div>
+      <div class="step-item done" id="navVariations">
+        <div class="step-num"><span>2</span></div>
+        <div><div class="step-label">Variations</div><div class="step-desc">Build combinations</div></div>
+      </div>
+      <div class="step-item active" id="navGallery">
+        <div class="step-num"><span>3</span></div>
+        <div><div class="step-label">Gallery</div><div class="step-desc">Review &amp; export</div></div>
+      </div>
+    </div>
+    <div class="sdivider"></div>
+    <div id="customerSection" style="display:none"></div>
+  </aside>
+
+  <main class="main">
+    <div class="panel visible" id="panel-5">
+      <div><div class="ptitle">Gallery</div><div class="psub">Review all variations and export.</div></div>
+      <div class="s5layout">
+        <div>
+          <div id="gSingleView">
+            <div class="face-toggle-row" style="margin-bottom:.75rem">
+              <button class="face-tab active" id="gFtFront" onclick="setGFace('front')">Front</button>
+              <button class="face-tab" id="gFtBack" onclick="setGFace('back')">Back</button>
+            </div>
+            <div class="gallery-stage">
+              <div class="gflag" id="gFlag"></div>
+              <div class="gnav">
+                <button class="garrow" id="gPrev" onclick="gNav(-1)">←</button>
+                <button class="garrow" id="gNext" onclick="gNav(1)">→</button>
+              </div>
+              <div class="gcaption">
+                <span class="gname" id="gName"></span>
+                <span class="gcounter" id="gCount"></span>
+              </div>
+            </div>
+          </div>
+          <div id="gDualView" style="display:none">
+            <div class="gallery-dual-stage">
+              <div>
+                <div class="dual-canvas-label">Front</div>
+                <div class="gallery-stage" style="margin-bottom:1rem">
+                  <div class="gflag" id="gFlagFront"></div>
+                </div>
+                <div class="dual-canvas-label">Back</div>
+                <div class="gallery-stage">
+                  <div class="gflag" id="gFlagBack"></div>
+                </div>
+              </div>
+              <div class="gnav" style="position:relative;justify-content:center;margin-top:1rem">
+                <button class="garrow" id="gPrevD" onclick="gNav(-1)">←</button>
+                <div class="gcaption" style="position:relative;transform:none;bottom:auto">
+                  <span class="gname" id="gNameD"></span>
+                  <span class="gcounter" id="gCountD"></span>
+                </div>
+                <button class="garrow" id="gNextD" onclick="gNav(1)">→</button>
+              </div>
+            </div>
+          </div>
+          <div class="gstrip" id="gStrip"></div>
+        </div>
+        <div class="review-card">
+          <div class="rc-title">Details</div>
+          <div id="gDetails"></div>
+          <div class="exp-row">
+            <button class="btn sm" id="expPdf" onclick="expPDF()">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PDF
+            </button>
+            <button class="btn sm" id="expPng" onclick="expPNG()">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG
+            </button>
+          </div>
+          <button class="btn sm" style="width:100%;justify-content:center" onclick="expAllPNG()">Export all as PNG</button>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-400);font-weight:500;margin-bottom:6px">Print files</div>
+            <div class="exp-row">
+              <button class="btn sm primary" id="expPrintPdfBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('pdf')">↓ PDF zip</button>
+              <button class="btn sm primary" id="expPrintPngBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('png')">↓ PNG zip</button>
+            </div>
+            <div id="expPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px;margin-top:6px"></div>
+          </div>
+          <div class="share-section" id="shareSection">
+            <div class="rc-title">Share for review</div>
+            <div id="shareStatus" style="font-size:13px;color:var(--gray-400);min-height:16px"></div>
+            <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openShareModal()">Share for review →</button>
+          </div>
+        </div>
+      </div>
+      <div class="arow">
+        <button class="btn" id="backToVariationsBtn">← Variations</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Share modal -->
+<div class="share-modal-overlay" id="shareModalOverlay" style="display:none" onclick="closeShareModal(event)">
+  <div class="share-modal">
+    <div class="share-modal-header">
+      <span class="share-modal-title">Share for review</span>
+      <button class="share-modal-close" onclick="closeShareModal()">×</button>
+    </div>
+    <div class="share-modal-body">
+      <p class="share-modal-label">Review link</p>
+      <div class="share-link-box">
+        <input class="share-link-input" id="shareLinkInput" readonly>
+        <button class="btn sm" onclick="copyShareLink()">Copy</button>
+      </div>
+      <p class="share-modal-label" style="margin-top:1.25rem">Notify customer by email</p>
+      <input class="share-email-input" id="shareEmailInput" type="email" placeholder="customer@email.com">
+      <div id="shareNotifyStatus" style="font-size:13px;color:var(--gray-400);min-height:16px;margin-top:6px"></div>
+      <button class="btn sm primary" style="width:100%;justify-content:center;margin-top:8px" onclick="notifyCustomer()">Send notification</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/src/flags/gallery.js"></script>
+<script>
+  document.getElementById('backToVariationsBtn').addEventListener('click', () => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    if (p) window.location.href = 'flags-variations.html?project=' + p;
+  });
+  document.getElementById('navDesign').addEventListener('click', () => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    window.location.href = 'flags.html' + (p ? '?project=' + p : '');
+  });
+  document.getElementById('navVariations').addEventListener('click', () => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    if (p) window.location.href = 'flags-variations.html?project=' + p;
+  });
+</script>
+</body>
+</html>

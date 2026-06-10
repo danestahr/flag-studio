@@ -2,7 +2,7 @@ import { HS, UI, eyedropperBtn, mergeBanner, renderTextControls } from './state.
 import { goStep } from './app.js';
 import { renderBannerSection, wireCanvasTextEditing, wireElementDrag, wireQuickAddHover } from './banner.js';
 import { applyTlSlotImgStyle, openTlLibPicker, openTlSidePanel, redrawTplPreview, renderTemplateLogoControls, tlSource, wireTlSlotFreeDrag } from './template-logos.js';
-import { applyHsStep1Zoom, wireCanvasZoom } from './variations.js';
+import { applyHsStep1Zoom, wireCanvasZoom } from './var-canvas.js';
 import { cropSvgToArtwork } from './logo-utils.js';
 import { saveDraftInternal } from './export.js';
 import { HS_H, HS_TEMPLATES, HS_W, emptyBanner, emptyTemplateLogos } from '../hole-sign-data.js';
@@ -114,7 +114,7 @@ export function renderDesignMenuList(activeTmpl) {
   rows.push(menuRow('bannerTop',    'Top banner',    HS.bannerTop?.enabled    ? 'On' : 'Off'));
   rows.push(menuRow('bannerBottom', 'Bottom banner', HS.bannerBottom?.enabled ? 'On' : 'Off'));
   if (activeTmpl.supportsText) {
-    rows.push(menuRow('top', 'Top text', HS.topText.text ? escXml(HS.topText.text) : 'Empty'));
+    rows.push(menuRow('top', 'Text', HS.topText.text ? escXml(HS.topText.text) : 'Empty'));
     rows.push(menuRow('bottom', 'Bottom text', HS.bottomText.text ? escXml(HS.bottomText.text) : 'Empty'));
   }
   if (activeTmpl.id !== 'hole-sign-logo-only') {
@@ -132,7 +132,7 @@ export function renderDesignMenuList(activeTmpl) {
 const HS_MENU_TITLES = {
   template: 'Template', mytemplates: 'My templates', background: 'Background',
   bannerTop: 'Top banner', bannerBottom: 'Bottom banner',
-  top: 'Top text', bottom: 'Bottom text', logos: 'Template logos',
+  top: 'Text', bottom: 'Bottom text', logos: 'Template logos',
 };
 
 export function renderDesignSection(key) {
@@ -311,7 +311,7 @@ window.removeBgImage = function () {
 // on that card so the user knows the built-in default has been customized.
 const HS_BUILTIN_DEFAULTS = {
   background: { type: 'color', color: '#FFFFFF', imageUrl: null, storagePath: null },
-  topText:    { text: '', font: 'dm-serif', size: 300, color: '#111110' },
+  topText:    { text: 'Sponsored By', font: 'dm-serif', size: 300, color: '#111110' },
   bottomText: { text: '', font: 'dm-serif', size: 300, color: '#111110' },
 };
 
@@ -481,6 +481,11 @@ export function paintTplSlotOverlays(parentEl, state) {
     overlay.style.cssText = `position:absolute;left:${pct(rect.x, HS_W)};top:${pct(rect.y, HS_H)};width:${pct(rect.w, HS_W)};height:${pct(rect.h, HS_H)};`;
     overlay.dataset.idx = i;
 
+    // Resize handle present on all slots so empty ones are also draggable.
+    const handle = document.createElement('div');
+    handle.className = 'tl-slot-handle';
+    overlay.appendChild(handle);
+
     if (slot?.logoSrc) {
       if (slot.bg && slot.bg !== 'transparent') overlay.style.background = slot.bg;
       if (slot.border?.color && slot.ratio !== 'fit') overlay.style.border = `1.5px solid ${slot.border.color}`;
@@ -522,19 +527,15 @@ export function paintTplSlotOverlays(parentEl, state) {
       badge.className = 'tl-slot-size-badge';
       badge.textContent = `${Math.round(rect.w / HS_W * 100)}% × ${Math.round(rect.h / HS_H * 100)}%`;
       overlay.appendChild(badge);
-
-      // Resize handle — always visible on hover
-      const handle = document.createElement('div');
-      handle.className = 'tl-slot-handle';
-      overlay.appendChild(handle);
-
-      wireTlSlotFreeDrag(overlay, handle, i, rect);
     } else {
       const ph = document.createElement('div');
       ph.className = 'tl-slot-placeholder';
       ph.innerHTML = '<span>+</span><span class="tl-slot-ph-label">Add logo</span>';
       overlay.appendChild(ph);
     }
+
+    // Wire free drag/resize for all slots (with or without a logo assigned).
+    wireTlSlotFreeDrag(overlay, handle, i, rect);
 
     overlay.addEventListener('click', e => {
       e.stopPropagation();

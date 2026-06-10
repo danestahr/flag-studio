@@ -1,7 +1,8 @@
 import { HS, UI, alignBtns, eyedropperBtn, fontSelect, getEffectiveState, getEffectiveVariation } from './state.js';
 import { renderStep1, updateStep1Preview, stripSlotImages } from './design.js';
-import { closeTlSlotToolbar, correctTplHAlign, ensureTlSlots, tlSource } from './template-logos.js';
-import { renderEditor, renderVariationPreview } from './variations.js';
+import { closeTlSlotToolbar, ensureTlSlots, snapTlSlotsToDefaults, tlSource } from './template-logos.js';
+import { renderEditor } from './var-editor.js';
+import { renderVariationPreview } from './var-canvas.js';
 import { HS_BANNER_MAX_H, HS_BANNER_MIN_H, HS_FONTS, HS_H, HS_TEMPLATES, HS_W, emptyBanner, emptyTemplateLogos } from '../hole-sign-data.js';
 import { escXml, getTemplateLogoSlots, getTextRegions, renderHoleSignInto } from '../hole-sign-render.js';
 import { uploadLogo } from '../supabase.js';
@@ -255,7 +256,7 @@ export function buildQuickAddBar(position) {
   // Text: hide the option for a band that already has text.
   if (supportsText) {
     const hasText = !!(currentText(position).text || '').trim();
-    if (!hasText) chips.push(`<button class="qa-chip" onclick="quickAdd('text','${position}')">+ ${position === 'bottom' ? 'Bottom' : 'Top'} text</button>`);
+    if (!hasText) chips.push(`<button class="qa-chip" onclick="quickAdd('text','${position}')">+ ${position === 'bottom' ? 'Bottom ' : ''}Text</button>`);
   }
 
   // Logos: when this band already has logos, show only the 1/2/3 count + Remove.
@@ -320,7 +321,7 @@ window.quickAddLogos = function (position) {
   const tl = tlSource();
   if (!tl.count) { tl.count = 1; ensureTlSlots(); }
   tl.vAlign = position;
-  correctTplHAlign();
+  snapTlSlotsToDefaults(tl);
   UI.qaLogosOpen = position;
   quickAddRedraw();
 };
@@ -331,7 +332,7 @@ window.quickAddLogosCount = function (position, n) {
   tl.count = n;
   ensureTlSlots();
   tl.vAlign = position;
-  correctTplHAlign();
+  snapTlSlotsToDefaults(tl);
   UI.qaLogosOpen = position;
   quickAddRedraw();
 };
@@ -362,7 +363,7 @@ export function bandRectFor(kind, state) {
 
 export function applyBandPosition(kind, pos) {
   if (kind !== 'logos') return;
-  { const tl = tlSource(); tl.vAlign = pos; correctTplHAlign(); }
+  { const tl = tlSource(); tl.vAlign = pos; snapTlSlotsToDefaults(tl); }
   if (HS.editingVarId) { renderEditor(); renderVariationPreview(); }
   else renderStep1();
 }
@@ -408,7 +409,7 @@ export function beginBandSnap(previewEl, kind, e, captureEl) {
   const reflowTo = p => {
     if (p === reflowedPos) return;
     reflowedPos = p;
-    tlSource().vAlign = p; correctTplHAlign();
+    tlSource().vAlign = p;
     const st = getEffectiveState(editingVar);
     const bgVar = (editingVar && !editingVar.logoSrc) ? getEffectiveVariation(editingVar) : null;
     const tmp = document.createElement('div');
@@ -539,7 +540,7 @@ export function wireCanvasTextEditing(previewEl) {
     const input = document.createElement('div');
     input.className = 'canvas-edit-input';
     input.contentEditable = 'true';
-    input.dataset.ph = 'Add Text...';
+    input.dataset.ph = 'Write Here...';
     input.textContent = t.text || '';
     input.style.cssText = `width:100%;height:100%;box-sizing:border-box;outline:none;display:flex;align-items:center;justify-content:center;${fontStyle(kind)}`;
     // The SVG text for this band is hidden while editing (no halo), so the live
@@ -572,12 +573,15 @@ export function wireCanvasTextEditing(previewEl) {
   Object.entries(regions).forEach(([kind, rect]) => {
     const t = textObj(kind);
     const isBanner = kind.startsWith('banner');
+    const hasText = !!(t.text && t.text.trim());
     const zone = document.createElement('div');
     zone.className = 'canvas-edit-zone' + (isBanner ? ' is-banner' : '');
     zone.dataset.kind = kind;
     // Banner band is draggable → grab hand on the empty box; text bands are
     // purely editable → text cursor across the band.
-    zone.style.cssText = `position:absolute;left:${pct(rect.x, HS_W)};top:${pct(rect.y, HS_H)};width:${pct(rect.w, HS_W)};height:${pct(rect.h, HS_H)};z-index:3;cursor:${isBanner ? 'default' : 'text'};display:flex;align-items:center;justify-content:center;`;
+    // Empty text bands get a subtle grey background so the zone is visible.
+    const zoneBg = (!isBanner && !hasText) ? 'background:rgba(0,0,0,0.05);border-radius:6px;' : '';
+    zone.style.cssText = `position:absolute;left:${pct(rect.x, HS_W)};top:${pct(rect.y, HS_H)};width:${pct(rect.w, HS_W)};height:${pct(rect.h, HS_H)};z-index:3;cursor:${isBanner ? 'default' : 'text'};display:flex;align-items:center;justify-content:center;${zoneBg}`;
     if (isBanner) zone.addEventListener('click', e => {
       if (!e.target.closest('.canvas-edit-hotspot')) {
         const menuKey = kind.startsWith('bannerTop') ? 'bannerTop' : 'bannerBottom';
@@ -585,12 +589,14 @@ export function wireCanvasTextEditing(previewEl) {
       }
     });
 
-    // Transparent, content-sized hotspot over the actual text: I-beam + click to
-    // edit. Pressing it never starts a banner drag.
+    // Hotspot over the text: I-beam cursor + click to edit.
+    // When the band has text, it's transparent so the SVG text shows through.
+    // When empty, show the "Write Here..." placeholder in a muted grey.
     const hot = document.createElement('div');
     hot.className = 'canvas-edit-hotspot';
-    hot.style.cssText = `max-width:96%;cursor:text;${fontStyle(kind)}color:transparent;`;
-    hot.textContent = t.text && t.text.trim() ? t.text : 'Add Text...';
+    const hotColor = (!isBanner && !hasText) ? 'rgba(0,0,0,0.28)' : 'transparent';
+    hot.style.cssText = `max-width:96%;cursor:text;${fontStyle(kind)}color:${hotColor};`;
+    hot.textContent = hasText ? t.text : 'Write Here...';
     const startEdit = e => {
       e.stopPropagation();
       if (UI.tlJustDragged || zone.querySelector('.canvas-edit-input')) return;

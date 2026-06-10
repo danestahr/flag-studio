@@ -11,6 +11,8 @@ export default defineConfig({
         login: resolve(__dirname, 'login.html'),
         project: resolve(__dirname, 'project.html'),
         flags: resolve(__dirname, 'flags.html'),
+        'flags-variations': resolve(__dirname, 'flags-variations.html'),
+        'flags-gallery': resolve(__dirname, 'flags-gallery.html'),
         'hole-signs': resolve(__dirname, 'hole-signs.html'),
         review: resolve(__dirname, 'review.html'),
         order: resolve(__dirname, 'order.html'),

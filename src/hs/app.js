@@ -44,6 +44,9 @@ export async function init() {
           }
         });
       }
+      if (hsCfg.one_offs && hsCfg.one_offs.length) {
+        HS.defaults = hsCfg.one_offs;
+      }
       if (hsCfg.variations && hsCfg.variations.length) {
         HS.variations = hsCfg.variations;
         HS.variations.forEach(v => {

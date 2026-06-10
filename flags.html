@@ -28,36 +28,25 @@
     </div>
     <div class="sdivider" style="margin:.75rem 1.5rem"></div>
     <div class="steps-nav">
-      <div class="step-item active" data-step="1" onclick="tryGoStep(1)">
+      <div class="step-item active" id="navDesign">
         <div class="step-num"><span>1</span></div>
-        <div><div class="step-label">Design style</div><div class="step-desc">Choose flag layout</div></div>
+        <div><div class="step-label">Design</div><div class="step-desc">Style, colors &amp; logos</div></div>
       </div>
-      <div class="step-item" data-step="2" style="display:none" onclick="tryGoStep(2)">
-        <div class="step-num"><span>2</span></div>
-        <div><div class="step-label">Colors</div><div class="step-desc">Master color scheme</div></div>
-      </div>
-      <div class="step-item" data-step="3" style="display:none" onclick="tryGoStep(3)">
-        <div class="step-num"><span>3</span></div>
-        <div><div class="step-label">Logo library</div><div class="step-desc">Upload logos</div></div>
-      </div>
-      <div class="step-item" data-step="4" onclick="tryGoStep(4)">
+      <div class="step-item" id="navVariations">
         <div class="step-num"><span>2</span></div>
         <div><div class="step-label">Variations</div><div class="step-desc">Build combinations</div></div>
       </div>
-      <div class="step-item" data-step="5" onclick="tryGoStep(5)">
+      <div class="step-item" id="navGallery">
         <div class="step-num"><span>3</span></div>
-        <div><div class="step-label">Gallery &amp; export</div><div class="step-desc">Review &amp; download</div></div>
+        <div><div class="step-label">Gallery</div><div class="step-desc">Review &amp; export</div></div>
       </div>
     </div>
     <div class="sdivider"></div>
     <div class="ssummary">
-      <div class="stitle">Master</div>
+      <div class="stitle">Design</div>
       <div class="srow"><span class="skey">Style</span><span class="sval" id="sumStyle" style="color:var(--gray-400)">—</span></div>
       <div class="srow"><span class="skey">Field</span><span class="sval" id="sumP" style="color:var(--gray-400)">—</span></div>
       <div class="srow"><span class="skey">Stripe</span><span class="sval" id="sumS" style="color:var(--gray-400)">—</span></div>
-      <div class="sdivider" style="margin:.75rem 0"></div>
-      <div class="stitle">Variations</div>
-      <div class="srow"><span class="skey">Count</span><span class="sval" id="sumVC" style="color:var(--gray-400)">—</span></div>
       <div class="srow"><span class="skey">Logos</span><span class="sval" id="sumLC" style="color:var(--gray-400)">—</span></div>
     </div>
     <div id="customerSection" style="display:none"></div>
@@ -77,7 +66,7 @@
       <div class="flag-grid" id="flagGrid"></div>
       <div class="arow">
         <span style="font-size:13px;color:var(--gray-400)" id="s1hint">Pick colors and select a style</span>
-        <button class="btn primary" id="s1next" disabled onclick="goStep(4)">Next: Variations →</button>
+        <button class="btn primary" id="s1next" disabled onclick="goToVariations()">Next: Variations →</button>
       </div>
     </div>
 
@@ -107,9 +96,9 @@
           <div class="upload-zone" onclick="document.getElementById('libFile').click()">
             <div class="uicon">↑</div>
             <div class="utitle">Upload logos</div>
-            <div class="usub">PNG, SVG or JPG<br>Transparent bg recommended</div>
+            <div class="usub">PNG, JPG, SVG or PDF<br>Transparent bg recommended</div>
           </div>
-          <input type="file" id="libFile" accept="image/*" multiple onchange="handleUpload(event)">
+          <input type="file" id="libFile" accept="image/*,.pdf,.ai,.eps" multiple onchange="handleUpload(event)">
           <div class="lib-grid" id="libGrid">
             <div class="lib-empty">No logos yet</div>
           </div>
@@ -130,8 +119,8 @@
       </div>
     </div>
 
-    <!-- Step 4 -->
-    <div class="panel" id="panel-4">
+    <!-- Steps 4 & 5 live on flags-variations.html and flags-gallery.html -->
+    <div class="panel" id="panel-4" style="display:none">
       <div><div class="ptitle">Variations</div><div class="psub">Each variation swaps logos on the same master. Select a variation, then drag logos from the library into zones.</div></div>
       <div class="sides-row">
         <label class="check-label">
@@ -152,7 +141,7 @@
           <div class="var-upload-btn" onclick="document.getElementById('varFile').click()" title="Upload logos">
             <span>+</span>
           </div>
-          <input type="file" id="varFile" accept="image/*" multiple onchange="handleUpload(event)">
+          <input type="file" id="varFile" accept="image/*,.pdf,.ai,.eps" multiple onchange="handleUpload(event)">
         </div>
       </div>
       <div class="s4layout">
@@ -321,6 +310,16 @@
   </div>
 </div>
 
-<script type="module" src="/src/main.js"></script>
+<script type="module" src="/src/flags/design.js"></script>
+<script>
+  document.getElementById('navVariations').addEventListener('click', () => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    if (p) window.location.href = 'flags-variations.html?project=' + p;
+  });
+  document.getElementById('navGallery').addEventListener('click', () => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    if (p) window.location.href = 'flags-gallery.html?project=' + p;
+  });
+</script>
 </body>
 </html>

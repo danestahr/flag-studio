@@ -616,7 +616,7 @@ export async function saveDraftInternal() {
       templateLogos: tplLogos,
     },
     variations,
-    oneOffs: [],
+    defaults: HS.defaults,
   });
   if (HS.projectName) {
     await updateProject(HS.projectId, { name: HS.projectName });
