@@ -37,8 +37,10 @@ export function renderStep2() {
           <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
         </div>
         <div class="canvas-scroll" id="hsCanvasScroll">
-          <div class="canvas-zoom-wrap" id="hsZoomWrap">
-            <div class="hs-sign-preview" id="hsSignPreview"></div>
+          <div class="canvas-scroll-inner">
+            <div class="canvas-zoom-wrap" id="hsZoomWrap">
+              <div class="hs-sign-preview" id="hsSignPreview"></div>
+            </div>
           </div>
         </div>
       </div>

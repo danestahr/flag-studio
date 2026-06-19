@@ -134,7 +134,7 @@ input[type=file] { display:none; }
 .lib-item.uploading .lib-item-name { background:rgba(26,74,46,.7); }
 .lib-empty { font-size:13px; color:var(--gray-400); text-align:center; padding:.5rem 0; grid-column:span 2; }
 
-.canvas-panel { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; }
+.canvas-panel { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; min-width:0; }
 .canvas-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; }
 .canvas-label { font-size:12px; font-weight:500; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-600); }
 .canvas-hint { font-size:12px; color:var(--gray-400); }
@@ -210,7 +210,7 @@ input[type=file] { display:none; }
 
 /* Step 4 */
 .s4layout { display:grid; grid-template-columns:1fr 270px; gap:1.5rem; align-items:start; }
-.var-canvas-panel { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; }
+.var-canvas-panel { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; min-width:0; }
 
 /* Canvas zoom controls (flags + hole signs) */
 .canvas-zoom-row { display:flex; align-items:center; gap:10px; margin-bottom:.5rem; }
@@ -219,9 +219,11 @@ input[type=file] { display:none; }
 .canvas-zoom-reset:hover { color:var(--black); }
 .canvas-zoom-hint { font-size:11px; color:var(--gray-400); margin-left:auto; }
 .canvas-scroll { overflow:auto; max-height:calc(100vh - 280px); border-radius:6px; }
-/* Step-2 canvas: bounded, flex-centred box so the JS-fitted wrap is centred and
-   the whole sign is visible by default (mirrors the Step-1 scroll). */
-#hsCanvasScroll { max-height:none; display:flex; align-items:center; justify-content:center; background:var(--gray-50); border:1px solid var(--gray-100); }
+#hsCanvasScroll { max-height:none; background:var(--gray-50); border:1px solid var(--gray-100); }
+/* Inner centering wrapper: fills the scroll container so flex-centering works when
+   the canvas is smaller, and expands with the canvas when zoomed in so the outer
+   overflow:auto clips correctly without expanding the page. */
+.canvas-scroll-inner { min-width:100%; min-height:100%; display:flex; align-items:center; justify-content:center; }
 .canvas-zoom-wrap { margin:auto; flex-shrink:0; }
 .canvas-zoom-wrap .hs-sign-preview { width:100%; height:100%; }
 .var-strip-wrap { margin-bottom:1rem; }
@@ -403,8 +405,8 @@ input[type=file] { display:none; }
 /* Step-1 variation-logo placeholder: neutral dashed box that reads on any sign bg */
 .hs-logo-placeholder { border-color:rgba(128,128,128,.6) !important; }
 .hs-ph-label { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; color:rgba(128,128,128,.85); background:rgba(255,255,255,.55); padding:2px 7px; border-radius:10px; }
-.hs-design-preview-col { position:sticky; top:calc(64px + 2rem); display:flex; flex-direction:column; gap:.5rem; }
-.hs-step1-scroll { overflow:auto; height:calc(100vh - 180px); background:var(--gray-50); border-radius:var(--rl); border:1px solid var(--gray-100); display:flex; justify-content:center; align-items:center; }
+.hs-design-preview-col { position:sticky; top:calc(64px + 2rem); display:flex; flex-direction:column; gap:.5rem; min-width:0; }
+.hs-step1-scroll { overflow:auto; height:calc(100vh - 180px); background:var(--gray-50); border-radius:var(--rl); border:1px solid var(--gray-100); }
 .hs-step1-zoom-wrap { aspect-ratio:6375/5475; flex-shrink:0; }
 .hs-step1-zoom-wrap #hsStep1Preview { width:100%; height:100%; aspect-ratio:auto; border:none; border-radius:0; }
 .hs-section { display:flex; flex-direction:column; gap:8px; background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; }
