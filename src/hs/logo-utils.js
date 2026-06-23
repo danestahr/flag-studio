@@ -2,6 +2,19 @@ import { HS, UI } from './state.js';
 import { renderVarList } from './variations.js';
 import { renderVariationPreview } from './var-canvas.js';
 import { getLogoZone } from '../hole-sign-render.js';
+import { uploadLogo } from '../supabase.js';
+
+// Remove the background from a logo using @imgly/background-removal (lazy-loaded
+// so the large ONNX model is only downloaded on first use).
+export async function removeBgFromLogo(logo, onProgress) {
+  onProgress?.('loading');
+  const { removeBackground } = await import('@imgly/background-removal');
+  const blob = await removeBackground(logo.src);
+  const file = new File([blob], logo.name.replace(/\.[^.]+$/, '') + ' (no bg).png', { type: 'image/png' });
+  onProgress?.('uploading');
+  const newLogo = await uploadLogo(HS.projectId, file);
+  return newLogo;
+}
 
 // Scan alpha channel on a 256×256 canvas to find opaque pixel bounds (fractions of image size)
 export async function detectArtworkBounds(src) {

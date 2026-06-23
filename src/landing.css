@@ -44,8 +44,8 @@ header { background:var(--green); padding:0 2.5rem; height:64px; display:flex; a
 
 .drafts-empty { font-size:14px; color:var(--gray-400); padding:.5rem 0; }
 
-/* Draft card as link */
-a.draft-card { text-decoration:none; cursor:pointer; }
+/* Draft card */
+div.draft-card { cursor:pointer; }
 
 /* Project picker page */
 .project-name-row { margin-bottom:2rem; }

@@ -1,5 +1,6 @@
-import { HS, UI, alignBtns, eyedropperBtn, fontSelect, getEffectiveState, getEffectiveVariation } from './state.js';
+import { HS, UI, alignBtns, eyedropperBtn, fontSelect, getEffectiveState, getEffectiveVariation, syncAlignBtns } from './state.js';
 import { renderStep1, updateStep1Preview, stripSlotImages } from './design.js';
+import { hideHsToolbar } from './logo-utils.js';
 import { closeTlSlotToolbar, ensureTlSlots, snapTlSlotsToDefaults, tlSource } from './template-logos.js';
 import { renderEditor } from './var-editor.js';
 import { renderVariationPreview } from './var-canvas.js';
@@ -35,7 +36,7 @@ export function renderBannerTextControls(which, key, label, t) {
   return `
     <div class="hs-section">
       <div class="hs-section-title">${label} <span class="hs-optional">(optional)</span></div>
-      <input class="hexin" style="width:100%" placeholder="Add Text..." value="${escXml(t.text)}"
+      <input class="hexin" style="width:100%" placeholder="${key === 'topText' ? 'Sponsored by…' : 'Subtitle…'}" value="${escXml(t.text)}"
         oninput="setBannerTextProp('${which}','${key}','text',this.value)">
       ${fontSelect(`setBannerTextProp('${which}','${key}','font',this.value)`, t.font)}
       ${alignBtns(t.align, `setBannerTextProp('${which}','${key}','align'`)}
@@ -76,13 +77,14 @@ export function renderBannerSection(which) {
   if (bg.type === 'image') {
     if (bg.imageUrl) {
       bgControls = `
-        <div class="hs-bg-img-row" style="margin-top:4px">
-          <img src="${bg.imageUrl}" style="width:60px;height:40px;object-fit:cover;border-radius:6px;border:1px solid var(--gray-100)">
-          <button class="btn sm" onclick="removeBannerImage('${which}')">Remove</button>
+        <div class="banner-img-drag-wrap" id="bannerImgWrap${cap}"
+             onpointerdown="bannerImgDragStart(event,'${which}')"
+             onwheel="bannerImgWheel(event,'${which}')">
+          <div class="banner-img-drag-thumb" id="bannerImgThumb${cap}"
+               style="background-image:url('${bg.imageUrl.replace(/'/g,'%27')}');background-position:${bg.imageX??50}% ${bg.imageY??50}%;background-size:${bg.imageScale??100}% auto;"></div>
+          <div class="banner-img-drag-hint">Drag to reposition · Scroll to scale</div>
         </div>
-        <div class="tl-row"><div class="tl-row-label">Image X</div><div class="tl-size-slider"><input type="range" min="0" max="100" value="${bg.imageX ?? 50}" oninput="setBannerImagePos('${which}','imageX',this.value)"></div></div>
-        <div class="tl-row"><div class="tl-row-label">Image Y</div><div class="tl-size-slider"><input type="range" min="0" max="100" value="${bg.imageY ?? 50}" oninput="setBannerImagePos('${which}','imageY',this.value)"></div></div>
-        <div class="tl-row"><div class="tl-row-label">Scale</div><div class="tl-size-slider"><input type="range" min="100" max="300" value="${bg.imageScale ?? 100}" oninput="setBannerImagePos('${which}','imageScale',this.value)"><span class="tl-size-value" id="hsBanner${cap}ScaleVal">${bg.imageScale ?? 100}%</span></div></div>`;
+        <button class="btn sm" style="margin-top:6px" onclick="removeBannerImage('${which}')">Remove image</button>`;
     } else {
       bgControls = `
         <div style="margin-top:4px">
@@ -184,6 +186,54 @@ window.setBannerImagePos = function (which, key, val) {
   }
   redrawBannerPreview();
 };
+window.bannerImgDragStart = function (e, which) {
+  e.preventDefault();
+  const cap = which === 'bottom' ? 'Bottom' : 'Top';
+  const wrap  = document.getElementById('bannerImgWrap'  + cap);
+  const thumb = document.getElementById('bannerImgThumb' + cap);
+  if (!wrap || !thumb) return;
+  const b = bannerSource(which);
+  if (!b.bg) b.bg = {};
+  const bg = b.bg;
+  const x0 = e.clientX, y0 = e.clientY;
+  const ix0 = bg.imageX ?? 50, iy0 = bg.imageY ?? 50;
+  wrap.setPointerCapture(e.pointerId);
+  let raf = null;
+  function onMove(ev) {
+    if (raf) return;
+    raf = requestAnimationFrame(() => { raf = null; });
+    const dx = (ev.clientX - x0) / wrap.offsetWidth  * 100;
+    const dy = (ev.clientY - y0) / wrap.offsetHeight * 100;
+    bg.imageX = Math.max(0, Math.min(100, ix0 - dx));
+    bg.imageY = Math.max(0, Math.min(100, iy0 - dy));
+    thumb.style.backgroundPosition = `${bg.imageX}% ${bg.imageY}%`;
+    if (HS.editingVarId) renderVariationPreview(); else updateStep1Preview();
+  }
+  function onUp() {
+    wrap.removeEventListener('pointermove', onMove);
+    wrap.removeEventListener('pointerup', onUp);
+    if (HS.editingVarId) renderVariationPreview(); else updateStep1Preview();
+  }
+  wrap.addEventListener('pointermove', onMove);
+  wrap.addEventListener('pointerup', onUp);
+};
+
+window.bannerImgWheel = function (e, which) {
+  e.preventDefault();
+  const cap = which === 'bottom' ? 'Bottom' : 'Top';
+  const thumb = document.getElementById('bannerImgThumb' + cap);
+  const b = bannerSource(which);
+  if (!b.bg) b.bg = {};
+  const bg = b.bg;
+  const delta = e.deltaY > 0 ? -5 : 5;
+  bg.imageScale = Math.max(100, Math.min(300, (bg.imageScale ?? 100) + delta));
+  if (thumb) thumb.style.backgroundSize = `${bg.imageScale}% auto`;
+  clearTimeout(window._bannerWheelT);
+  window._bannerWheelT = setTimeout(() => {
+    if (HS.editingVarId) renderVariationPreview(); else updateStep1Preview();
+  }, 80);
+};
+
 window.setBannerSpacing = function (which, val) {
   const cap = which === 'bottom' ? 'Bot' : 'Top';
   bannerSource(which).spacing = parseInt(val, 10) || 0;
@@ -206,6 +256,7 @@ window.setBannerTextProp = function (which, key, prop, val) {
   } else {
     obj[prop] = val;
     redrawBannerPreview();
+    if (prop === 'align') syncAlignBtns(val);
   }
 };
 window.setBannerTextColorHex = function (which, key, val) {
@@ -531,18 +582,33 @@ export function wireCanvasTextEditing(previewEl) {
   const rerenderLive = () => { UI.canvasRerendering = true; if (editing) renderVariationPreview(); else updateStep1Preview(); UI.canvasRerendering = false; };
   const rerenderFinal = () => { if (editing) { renderEditor(); renderVariationPreview(); } else updateStep1Preview(); };
 
-  const fontStyle = kind => `text-align:${textObj(kind).align || 'center'};overflow-wrap:anywhere;word-break:break-word;white-space:pre-wrap;line-height:1.1;color:${textObj(kind).color || '#111110'};font-family:${fam(textObj(kind).font)};font-size:${Math.max(9, Math.round((textObj(kind).size || 200) * sc))}px;`;
+  // Map text alignment to both text-align and justify-content so the flex
+  // container positions the text block at the correct edge rather than always
+  // centering it (which would override left/right alignment visually).
+  const alignJc = a => a === 'left' ? 'flex-start' : a === 'right' ? 'flex-end' : 'center';
+  const fontStyle = kind => {
+    const t = textObj(kind);
+    const align = t.align || 'center';
+    return `text-align:${align};justify-content:${alignJc(align)};overflow-wrap:anywhere;word-break:break-word;white-space:pre-wrap;line-height:1.1;color:${t.color || '#111110'};font-family:${fam(t.font)};font-size:${Math.max(9, Math.round((t.size || 200) * sc))}px;`;
+  };
 
   const enterEdit = (zone, kind) => {
+    hideHsToolbar();
     const t = textObj(kind);
     // contenteditable (flex-centered) so the text wraps and stays vertically
     // centered in place — it doesn't jump to the top the way a textarea would.
     const input = document.createElement('div');
     input.className = 'canvas-edit-input';
     input.contentEditable = 'true';
-    input.dataset.ph = 'Write Here...';
+    input.dataset.ph = kind === 'top' ? 'Sponsored by…'
+      : kind === 'bottom' ? 'Club name, tagline…'
+      : kind === 'bannerTopTitle' || kind === 'bannerBotTitle' ? 'Sponsored by…'
+      : 'Subtitle…';
     input.textContent = t.text || '';
-    input.style.cssText = `width:100%;height:100%;box-sizing:border-box;outline:none;display:flex;align-items:center;justify-content:center;${fontStyle(kind)}`;
+    // The input is transparent — the SVG text stays visible as the display layer.
+    // Only the cursor and selection highlight come from the HTML side.
+    const textColor = textObj(kind).color || '#111110';
+    input.style.cssText = `width:100%;height:100%;box-sizing:border-box;outline:none;display:flex;align-items:center;${fontStyle(kind)}color:transparent;caret-color:${textColor};`;
     // The SVG text for this band is hidden while editing (no halo), so the live
     // editor sits over the band background without needing an opaque cover.
     zone.innerHTML = '';
@@ -565,7 +631,27 @@ export function wireCanvasTextEditing(previewEl) {
       rerenderLive(); // text adapts immediately; input is re-created + re-focused
     });
     input.addEventListener('keydown', ev => {
-      if (ev.key === 'Enter' || ev.key === 'Escape') { ev.preventDefault(); finalize(); }
+      if (ev.key === 'Escape') { ev.preventDefault(); finalize(); return; }
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        if (ev.shiftKey) {
+          // Soft return: insert \n at cursor; white-space:pre-wrap renders it.
+          const sel = window.getSelection();
+          if (sel && sel.rangeCount) {
+            const range = sel.getRangeAt(0);
+            range.deleteContents();
+            const node = document.createTextNode('\n');
+            range.insertNode(node);
+            range.setStartAfter(node);
+            range.setEndAfter(node);
+            sel.removeAllRanges();
+            sel.addRange(range);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        } else {
+          finalize();
+        }
+      }
     });
     input.addEventListener('blur', () => { if (!UI.canvasRerendering) finalize(); });
   };
@@ -581,7 +667,10 @@ export function wireCanvasTextEditing(previewEl) {
     // purely editable → text cursor across the band.
     // Empty text bands get a subtle grey background so the zone is visible.
     const zoneBg = (!isBanner && !hasText) ? 'background:rgba(0,0,0,0.05);border-radius:6px;' : '';
-    zone.style.cssText = `position:absolute;left:${pct(rect.x, HS_W)};top:${pct(rect.y, HS_H)};width:${pct(rect.w, HS_W)};height:${pct(rect.h, HS_H)};z-index:3;cursor:${isBanner ? 'default' : 'text'};display:flex;align-items:center;justify-content:center;${zoneBg}`;
+    // Banners always center their content; body text zones match the text alignment
+    // so the hotspot / editor sits at the same edge as the rendered SVG text.
+    const zoneJc = isBanner ? 'center' : alignJc(t.align || 'center');
+    zone.style.cssText = `position:absolute;left:${pct(rect.x, HS_W)};top:${pct(rect.y, HS_H)};width:${pct(rect.w, HS_W)};height:${pct(rect.h, HS_H)};z-index:3;cursor:${isBanner ? 'default' : 'text'};display:flex;align-items:center;justify-content:${zoneJc};${zoneBg}`;
     if (isBanner) zone.addEventListener('click', e => {
       if (!e.target.closest('.canvas-edit-hotspot')) {
         const menuKey = kind.startsWith('bannerTop') ? 'bannerTop' : 'bannerBottom';
@@ -596,12 +685,18 @@ export function wireCanvasTextEditing(previewEl) {
     hot.className = 'canvas-edit-hotspot';
     const hotColor = (!isBanner && !hasText) ? 'rgba(0,0,0,0.28)' : 'transparent';
     hot.style.cssText = `max-width:96%;cursor:text;${fontStyle(kind)}color:${hotColor};`;
-    hot.textContent = hasText ? t.text : 'Write Here...';
+    const phText = kind === 'top' ? 'Sponsored by…'
+      : kind === 'bottom' ? 'Club name, tagline…'
+      : kind === 'bannerTopTitle' || kind === 'bannerBotTitle' ? 'Sponsored by…'
+      : 'Subtitle…';
+    hot.textContent = hasText ? t.text : phText;
     const startEdit = e => {
       e.stopPropagation();
       if (UI.tlJustDragged || zone.querySelector('.canvas-edit-input')) return;
       UI.canvasEdit = { kind, caret: null };
       if (!editing) window.openHsMenuSection?.(isBanner ? (kind.startsWith('bannerTop') ? 'bannerTop' : 'bannerBottom') : kind);
+      // The SVG text stays visible (no hideText). The HTML input is transparent
+      // so there is no halo — just place the editor directly.
       enterEdit(zone, kind);
     };
     hot.addEventListener('pointerdown', e => e.stopPropagation());

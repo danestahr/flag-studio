@@ -9,6 +9,29 @@ import { uploadLogo } from '../supabase.js';
 
 // ── Template logo controls ────────────────────────────────
 
+const IC = {
+  top:    `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="1" width="12" height="2.5" rx="0.5"/><rect x="3" y="5" width="8" height="6.5" rx="0.5" opacity="0.45"/></svg>`,
+  bottom: `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="3" y="2.5" width="8" height="6.5" rx="0.5" opacity="0.45"/><rect x="1" y="10.5" width="12" height="2.5" rx="0.5"/></svg>`,
+  left:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="2" width="7.5" height="4" rx="0.5"/><rect x="1" y="8" width="5.5" height="4" rx="0.5"/></svg>`,
+  center: `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="2.5" y="4" width="4" height="6" rx="0.5"/><rect x="7.5" y="4" width="4" height="6" rx="0.5"/></svg>`,
+  spread: `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="0.5" y="4" width="4" height="6" rx="0.5"/><rect x="9.5" y="4" width="4" height="6" rx="0.5"/></svg>`,
+  right:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="5.5" y="2" width="7.5" height="4" rx="0.5"/><rect x="7.5" y="8" width="5.5" height="4" rx="0.5"/></svg>`,
+};
+
+function slotAssignRow(tl, i) {
+  const slot = (tl.slots || [])[i];
+  const src = slot?.logoSrcTight || slot?.logoSrc;
+  return `
+    <div class="tl-assign-row">
+      <span class="tl-assign-label">Slot ${i + 1}</span>
+      ${src
+        ? `<img src="${escXml(src)}" class="tl-assign-thumb" alt="">`
+        : `<span class="tl-assign-empty">–</span>`}
+      <button class="btn sm tl-assign-btn" data-slot="${i}" onclick="openTlSlotPicker(${i})">${src ? 'Replace' : '+ Add logo'}</button>
+      ${src ? `<button class="btn sm tl-assign-rm" onclick="removeTlSlot(${i})" title="Remove">✕</button>` : ''}
+    </div>`;
+}
+
 export function renderTemplateLogoControls() {
   const tl = tlSource();
   const countBtns = [0,1,2,3].map(n => `<button class="hs-tog-btn${tl.count===n?' active':''}" onclick="setTplCount(${n})">${n||'Off'}</button>`).join('');
@@ -21,6 +44,7 @@ export function renderTemplateLogoControls() {
   }
   const sz = normalizeTplLogoSize(tl.size);
   const pct = Math.round((sz - HS_TPL_LOGO_MIN) / (HS_TPL_LOGO_MAX - HS_TPL_LOGO_MIN) * 100);
+  const slotRows = Array.from({ length: tl.count }, (_, i) => slotAssignRow(tl, i)).join('');
   return `
     <div class="hs-section">
       <div class="hs-section-title">Template logos</div>
@@ -35,22 +59,29 @@ export function renderTemplateLogoControls() {
       <div class="tl-row">
         <div class="tl-row-label">Position</div>
         <div class="hs-bg-toggle">
-          <button class="hs-tog-btn${tl.vAlign !== 'bottom' ? ' active' : ''}" onclick="setTplVAlign('top')">Top</button>
-          <button class="hs-tog-btn${tl.vAlign === 'bottom' ? ' active' : ''}" onclick="setTplVAlign('bottom')">Bottom</button>
+          <button class="hs-tog-btn hs-tog-icon${tl.vAlign !== 'bottom' ? ' active' : ''}" onclick="setTplVAlign('top')" title="Top">${IC.top}</button>
+          <button class="hs-tog-btn hs-tog-icon${tl.vAlign === 'bottom' ? ' active' : ''}" onclick="setTplVAlign('bottom')" title="Bottom">${IC.bottom}</button>
         </div>
       </div>
       <div class="tl-row">
         <div class="tl-row-label">Alignment</div>
         <div class="hs-bg-toggle">
-          <button class="hs-tog-btn${tl.hAlign === 'left' ? ' active' : ''}" onclick="setTplHAlign('left')">Left</button>
-          <button class="hs-tog-btn${tl.hAlign === 'spread' || !['left','right'].includes(tl.hAlign) ? ' active' : ''}" onclick="setTplHAlign('spread')">Spread</button>
-          <button class="hs-tog-btn${tl.hAlign === 'right' ? ' active' : ''}" onclick="setTplHAlign('right')">Right</button>
+          <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'left' && tl.stack !== 'horizontal' ? ' active' : ''}" onclick="setTplHAlign('left')" title="Left">${IC.left}</button>
+          <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'center' && tl.stack === 'horizontal' ? ' active' : ''}" onclick="setTplHAlign('center')" title="Center">${IC.center}</button>
+          <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'spread' ? ' active' : ''}" onclick="setTplHAlign('spread')" title="Spread">${IC.spread}</button>
+          <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'right' && tl.stack !== 'horizontal' ? ' active' : ''}" onclick="setTplHAlign('right')" title="Right">${IC.right}</button>
         </div>
       </div>
-      <div class="tl-hint">Drag slots in the preview to reposition and resize. Click + to assign a logo.</div>
+      <div class="tl-assign-rows">${slotRows}</div>
+      <div class="tl-hint">Drag slots in the preview to reposition and resize.</div>
       <button class="btn sm" style="margin-top:6px" onclick="resetTlFreePositions()">Reset to defaults</button>
     </div>`;
 }
+
+window.openTlSlotPicker = function (i) {
+  const btn = document.querySelector(`.tl-assign-btn[data-slot="${i}"]`);
+  openTlLibPicker(i, btn || document.body);
+};
 
 // The same template-logo controls power Step 1 (project default) and the
 // per-variation editor (HS.editingDraft.templateLogos). `tlSource` returns the
@@ -130,6 +161,8 @@ window.setTplSize = function (k) {
   const tl = tlSource();
   const n = normalizeTplLogoSize(parseInt(k, 10));
   tl.size = n;
+  // Reflow free-positioned slots so their stored freeW/freeH match the new size.
+  snapTlSlotsToDefaults(tl);
   const lbl = document.getElementById('tlSizeValue');
   if (lbl) {
     const pct = Math.round((n - HS_TPL_LOGO_MIN) / (HS_TPL_LOGO_MAX - HS_TPL_LOGO_MIN) * 100);
@@ -140,6 +173,7 @@ window.setTplSize = function (k) {
 window.setTplVAlign = function (k) {
   const tl = tlSource();
   tl.vAlign = k;
+  delete tl.customPositions;
   const defaults = getDefaultSlotRects(tl);
   (tl.slots || []).forEach((s, i) => {
     if (!s) return;
@@ -151,7 +185,9 @@ window.setTplVAlign = function (k) {
 window.setTplHAlign = function (k) {
   const tl = tlSource();
   tl.hAlign = k;
-  if (k === 'spread') tl.stack = 'horizontal';
+  delete tl.customPositions;
+  if (k === 'spread' || k === 'center') tl.stack = 'horizontal';
+  else delete tl.stack;
   const defaults = getDefaultSlotRects(tl);
   (tl.slots || []).forEach((s, i) => {
     if (!s) return;
@@ -163,6 +199,7 @@ window.setTplHAlign = function (k) {
 
 window.resetTlFreePositions = function () {
   const tl = tlSource();
+  delete tl.customPositions;
   const defaults = getDefaultSlotRects(tl);
   (tl.slots || []).forEach((s, i) => {
     if (!s) return;
@@ -260,7 +297,7 @@ export function wireTlSlotDragResize(overlay, img, handle, idx) {
 // Drag and resize the slot box itself (sets per-slot freeX/freeY/freeW/freeH).
 // Pointer on slot body → move; pointer on handle → resize.
 // signRect is the slot's current position in sign coords at wire-time.
-export function wireTlSlotFreeDrag(overlay, handle, idx, signRect) {
+export function wireTlSlotFreeDrag(overlay, handle, idx, signRect, onTap) {
   let mode = null, startClientX, startClientY;
   let startSignX, startSignY, startSignW, startSignH;
   const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
@@ -312,8 +349,9 @@ export function wireTlSlotFreeDrag(overlay, handle, idx, signRect) {
     } else {
       s.freeX = s.freeX ?? signRect.x;
       s.freeY = s.freeY ?? signRect.y;
+      const ratio = startSignW / Math.max(1, startSignH);
       s.freeW = Math.max(300, startSignW + dxSign);
-      s.freeH = Math.max(150, startSignH + dySign);
+      s.freeH = s.freeW / ratio;
       overlay.style.width  = pct(s.freeW, HS_W);
       overlay.style.height = pct(s.freeH, HS_H);
     }
@@ -324,8 +362,13 @@ export function wireTlSlotFreeDrag(overlay, handle, idx, signRect) {
 
   const onUp = () => {
     if (!mode) return;
+    const wasDrag = UI.tlJustDragged;
+    if (wasDrag) tlSource().customPositions = true;
     mode = null;
     setTimeout(() => { UI.tlJustDragged = false; }, 0);
+    // Fire onTap before redrawTplPreview so the overlay is still in the DOM
+    // when the picker reads getBoundingClientRect() for positioning.
+    if (!wasDrag && onTap) onTap();
     redrawTplPreview();
   };
   overlay.addEventListener('pointerup', onUp);
@@ -466,17 +509,100 @@ export function assignTlSlot(idx, logo) {
   redrawTplPreview();
 }
 
-export function openTlSidePanel(idx) {
-  closeTlSidePanel();
+// Renders the slot visual-options body as an HTML string for use in the
+// sidebar menu. Also used by openTlSidePanel for the floating panel variant.
+export function renderTplSlotBody(idx) {
   const slot = tlSource().slots[idx];
-  if (!slot) return;
+  if (!slot?.logoSrc) return '<div class="hs-section" style="font-size:13px;color:var(--gray-400)">No logo assigned to this slot.</div>';
   const hasBg = !!(slot.bg && slot.bg !== 'transparent');
   const bgColor = hasBg ? slot.bg : '#FFFFFF';
   const hasBorder = !!(slot.border && slot.border.color);
   const borderColor = hasBorder ? slot.border.color : '#000000';
   const ratio = slot.ratio || '2:1';
-  const ratioOpt = (val, label) =>
-    `<option value="${val}"${ratio === val ? ' selected' : ''}>${label}</option>`;
+  const ratioOpt = (val, label) => `<option value="${val}"${ratio === val ? ' selected' : ''}>${label}</option>`;
+  return `
+    <div class="hs-editor-section">
+      <div class="hs-editor-label">Ratio</div>
+      <select class="tl-select" onchange="setTlSlotRatio(${idx}, this.value)">
+        ${ratioOpt('fit','Fit logo')}${ratioOpt('1:1','1:1')}${ratioOpt('2:1','2:1')}${ratioOpt('3:1','3:1')}${ratioOpt('4:1','4:1')}
+      </select>
+    </div>
+    <div class="hs-editor-section">
+      <div class="hs-editor-label">Fit</div>
+      <div class="hs-bg-toggle">
+        <button class="hs-tog-btn${(slot.fit||'width')==='width'?' active':''}" onclick="setTlSlotFit(${idx},'width')">Width</button>
+        <button class="hs-tog-btn${slot.fit==='height'?' active':''}" onclick="setTlSlotFit(${idx},'height')">Height</button>
+      </div>
+    </div>
+    <div class="hs-editor-section">
+      <div class="hs-editor-label">Scale</div>
+      <input type="range" id="tlSpScale" min="10" max="400" value="${slot.scale ?? 100}"
+        oninput="setTlSlotScale(${idx}, this.value); document.getElementById('tlSpScaleLabel').textContent=this.value+'%'">
+      <div style="display:flex;justify-content:space-between">
+        <span style="font-size:11px;color:var(--gray-400)">10%</span>
+        <span id="tlSpScaleLabel" style="font-size:11px;color:var(--gray-600)">${slot.scale ?? 100}%</span>
+        <span style="font-size:11px;color:var(--gray-400)">400%</span>
+      </div>
+    </div>
+    <div class="hs-editor-section">
+      <div class="tl-toggle-row">
+        <div class="hs-editor-label" style="margin:0">Background</div>
+        <label class="tl-switch">
+          <input type="checkbox"${hasBg?' checked':''} onchange="setTlSlotBgMode(${idx}, this.checked?'color':'transparent')">
+          <span class="tl-switch-slider"></span>
+        </label>
+      </div>
+      ${hasBg ? `
+      <div class="color-row">
+        <input type="color" class="hs-color-swatch" id="tlSpBgSwatch" value="${bgColor}"
+          oninput="setTlSlotBgColor(${idx}, this.value)">
+        <input type="text" class="hexin" id="tlSpBgHex" style="flex:1" maxlength="7" value="${bgColor}"
+          oninput="setTlSlotBgHex(${idx}, this.value)">
+        ${eyedropperBtn('tlSpBgSwatch')}
+      </div>` : ''}
+    </div>
+    ${ratio === 'fit' ? '' : `
+    <div class="hs-editor-section">
+      <div class="tl-toggle-row">
+        <div class="hs-editor-label" style="margin:0">Border</div>
+        <label class="tl-switch">
+          <input type="checkbox"${hasBorder?' checked':''} onchange="setTlSlotBorderMode(${idx}, this.checked?'on':'off')">
+          <span class="tl-switch-slider"></span>
+        </label>
+      </div>
+      ${hasBorder ? `
+      <div class="color-row">
+        <input type="color" class="hs-color-swatch" id="tlSpBorderSwatch" value="${borderColor}"
+          oninput="setTlSlotBorderColor(${idx}, this.value)">
+        <input type="text" class="hexin" id="tlSpBorderHex" style="flex:1" maxlength="7" value="${borderColor}"
+          oninput="setTlSlotBorderHex(${idx}, this.value)">
+        ${eyedropperBtn('tlSpBorderSwatch')}
+      </div>` : ''}
+    </div>`}
+    <div class="hs-editor-section">
+      <button class="btn sm" onclick="resetTlSlot(${idx})">Reset position</button>
+      <button class="btn sm" style="color:#dc2626;border-color:#fecaca;margin-top:4px" onclick="removeTlSlot(${idx})">Remove logo</button>
+    </div>`;
+}
+
+export function openTlSidePanel(idx) {
+  // If the slot-options level is already open in the sidebar menu, refresh in-place
+  // rather than opening a competing floating panel.
+  if (!HS.editingVarId && UI.hsMenu === 'tplSlot') {
+    UI.hsMenuSlotIdx = idx;
+    window._refreshDesignTplSlot?.();
+    return;
+  }
+  if (HS.editingVarId && UI.hsVarMenu === 'tplSlot') {
+    UI.hsVarMenuSlotIdx = idx;
+    window._refreshVarTplSlot?.();
+    return;
+  }
+  // Floating panel fallback (used when accessed from canvas hover-Edit button
+  // before navigating to the tplSlot menu level).
+  closeTlSidePanel();
+  const slot = tlSource().slots[idx];
+  if (!slot) return;
   const panel = document.createElement('div');
   panel.id = 'tlSidePanel';
   panel.className = 'tl-side-panel';
@@ -485,66 +611,7 @@ export function openTlSidePanel(idx) {
       <div class="tl-sp-title">Slot ${idx + 1}</div>
       <button class="tl-sp-close" onclick="closeTlSidePanel()">✕</button>
     </div>
-    <div class="tl-sp-body">
-      <div class="hs-editor-section">
-        <div class="hs-editor-label">Ratio</div>
-        <select class="tl-select" onchange="setTlSlotRatio(${idx}, this.value)">
-          ${ratioOpt('fit','Fit logo')}${ratioOpt('1:1','1:1')}${ratioOpt('2:1','2:1')}${ratioOpt('3:1','3:1')}${ratioOpt('4:1','4:1')}
-        </select>
-      </div>
-      <div class="hs-editor-section">
-        <div class="hs-editor-label">Fit</div>
-        <div class="hs-bg-toggle">
-          <button class="hs-tog-btn${(slot.fit||'width')==='width'?' active':''}" onclick="setTlSlotFit(${idx},'width')">Width</button>
-          <button class="hs-tog-btn${slot.fit==='height'?' active':''}" onclick="setTlSlotFit(${idx},'height')">Height</button>
-        </div>
-        <div style="font-size:11px;color:var(--gray-400);margin-top:4px">Drag to reposition and the corner handle to resize. The safe-area padding stays in effect at scale 100%.</div>
-      </div>
-      <div class="hs-editor-section">
-        <div class="hs-editor-label">Scale</div>
-        <input type="range" id="tlSpScale" min="10" max="400" value="${slot.scale ?? 100}" oninput="setTlSlotScale(${idx}, this.value); document.getElementById('tlSpScaleLabel').textContent=this.value+'%'">
-        <div style="display:flex;justify-content:space-between"><span style="font-size:11px;color:var(--gray-400)">10%</span><span id="tlSpScaleLabel" style="font-size:11px;color:var(--gray-600)">${slot.scale ?? 100}%</span><span style="font-size:11px;color:var(--gray-400)">400%</span></div>
-      </div>
-      <div class="hs-editor-section">
-        <div class="tl-toggle-row">
-          <div class="hs-editor-label" style="margin:0">Background</div>
-          <label class="tl-switch">
-            <input type="checkbox"${hasBg?' checked':''} onchange="setTlSlotBgMode(${idx}, this.checked?'color':'transparent')">
-            <span class="tl-switch-slider"></span>
-          </label>
-        </div>
-        ${hasBg ? `
-        <div class="color-row">
-          <input type="color" class="hs-color-swatch" id="tlSpBgSwatch" value="${bgColor}"
-            oninput="setTlSlotBgColor(${idx}, this.value)">
-          <input type="text" class="hexin" id="tlSpBgHex" style="flex:1" maxlength="7" value="${bgColor}"
-            oninput="setTlSlotBgHex(${idx}, this.value)">
-          ${eyedropperBtn('tlSpBgSwatch')}
-        </div>` : ''}
-      </div>
-      ${ratio === 'fit' ? '' : `
-      <div class="hs-editor-section">
-        <div class="tl-toggle-row">
-          <div class="hs-editor-label" style="margin:0">Border</div>
-          <label class="tl-switch">
-            <input type="checkbox"${hasBorder?' checked':''} onchange="setTlSlotBorderMode(${idx}, this.checked?'on':'off')">
-            <span class="tl-switch-slider"></span>
-          </label>
-        </div>
-        ${hasBorder ? `
-        <div class="color-row">
-          <input type="color" class="hs-color-swatch" id="tlSpBorderSwatch" value="${borderColor}"
-            oninput="setTlSlotBorderColor(${idx}, this.value)">
-          <input type="text" class="hexin" id="tlSpBorderHex" style="flex:1" maxlength="7" value="${borderColor}"
-            oninput="setTlSlotBorderHex(${idx}, this.value)">
-          ${eyedropperBtn('tlSpBorderSwatch')}
-        </div>` : ''}
-      </div>`}
-      <div class="hs-editor-section">
-        <button class="btn sm" onclick="resetTlSlot(${idx})">Reset position</button>
-        <button class="btn sm" style="color:#dc2626;border-color:#fecaca" onclick="removeTlSlot(${idx})">Remove logo</button>
-      </div>
-    </div>`;
+    <div class="tl-sp-body">${renderTplSlotBody(idx)}</div>`;
   document.body.appendChild(panel);
 }
 
@@ -617,6 +684,8 @@ window.setTlSlotRatio = function (idx, val) {
   // Update slot width to match the new ratio, keeping the current height.
   if (slot.freeH != null) slot.freeW = Math.round(slotWidthForRatio(slot, slot.freeH));
   redrawTplPreview();
+  // Re-open the panel to show/hide the border section (hidden when ratio='fit').
+  openTlSidePanel(idx);
 };
 window.setTlSlotBorderMode = function (idx, mode) {
   const slot = activeSlot(idx); if (!slot) return;

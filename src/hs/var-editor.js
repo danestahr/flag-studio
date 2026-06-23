@@ -1,7 +1,7 @@
-import { HS, UI, alignBtns, fontSelect, mergeBanner, getEffectiveState } from './state.js';
+import { HS, UI, alignBtns, eyedropperBtn, fontSelect, mergeBanner, getEffectiveState, syncAlignBtns } from './state.js';
 import { cloneTemplateLogos, loadCustomTemplates, menuRow } from './design.js';
 import { renderBannerSection } from './banner.js';
-import { closeTlSlotToolbar, renderTemplateLogoControls } from './template-logos.js';
+import { closeTlSlotToolbar, renderTemplateLogoControls, renderTplSlotBody } from './template-logos.js';
 import { cropSvgToArtwork } from './logo-utils.js';
 import { HS_TEMPLATES } from '../hole-sign-data.js';
 import { escXml } from '../hole-sign-render.js';
@@ -187,6 +187,7 @@ window.setDraftText = function (which, key, val) {
     if (hexInput) hexInput.value = value;
   }
   renderVariationPreview();
+  if (key === 'align') syncAlignBtns(val);
 };
 
 window.setDraftTextColorHex = function (which, val) {
@@ -216,11 +217,12 @@ export function renderDraftTextControls(which, label, optional) {
           oninput="setDraftText('${which}','size',this.value)" style="flex:1">
         <span id="hsDraft${which}SizeLabel" style="font-size:12px;color:var(--gray-600);min-width:50px">${st.size}pt</span>
       </div>
-      <div style="display:flex;align-items:center;gap:8px">
+      <div class="color-row">
         <input type="color" class="hs-color-swatch" id="hsDraft${which}Swatch" value="${st.color}"
           oninput="setDraftText('${which}','color',this.value)">
         <input type="text" class="hexin" id="hsDraft${which}Hex" style="flex:1" maxlength="7" value="${st.color}"
           oninput="setDraftTextColorHex('${which}',this.value)">
+        ${eyedropperBtn('hsDraft' + which + 'Swatch')}
       </div>
     </div>`;
 }
@@ -228,7 +230,8 @@ export function renderDraftTextControls(which, label, optional) {
 const HS_VAR_MENU_TITLES = {
   template: 'Template', background: 'Background',
   bannerTop: 'Top banner', bannerBottom: 'Bottom banner',
-  top: 'Top text', bottom: 'Bottom text', logos: 'Template logos', sponsor: 'Sponsor name',
+  top: 'Top text', bottom: 'Bottom text', logos: 'Template logos', sponsor: 'Sponsor text',
+  tplSlot: 'Logo options',
 };
 
 export function buildVarTemplateSection(d, customs) {
@@ -274,6 +277,12 @@ export function buildVarBackgroundSection(d) {
 window.openHsVarMenu = function (key) { UI.hsVarMenu = key; UI.hsVarMenuAnimate = true; renderEditor(); };
 window.closeHsVarMenu = function ()  { UI.hsVarMenu = null; UI.hsVarMenuAnimate = true; renderEditor(); };
 
+// Bridge for template-logos.js to refresh the tplSlot section in the var editor
+// without a circular import.
+window._refreshVarTplSlot = function () {
+  if (UI.hsVarMenu === 'tplSlot') renderEditor();
+};
+
 export function renderEditor() {
   const list = document.getElementById('hsVarList');
   if (!list) return;
@@ -284,12 +293,10 @@ export function renderEditor() {
   const customs = loadCustomTemplates();
   const activeTmpl = HS_TEMPLATES.find(t => t.id === d.templateStyle) || HS_TEMPLATES[0];
   const isCustomized = !!(v.template || v.sponsorText || (v.templateId && v.templateId !== HS.templateStyle));
-  const sponsorVisible = !v.logoSrc;
 
   if (UI.hsVarMenu === 'logos' && activeTmpl.id === 'hole-sign-logo-only') UI.hsVarMenu = null;
   if ((UI.hsVarMenu === 'top' || UI.hsVarMenu === 'bottom') && !activeTmpl.supportsText) UI.hsVarMenu = null;
   if (UI.hsVarMenu === 'banner') UI.hsVarMenu = 'bannerTop';
-  if (UI.hsVarMenu === 'sponsor' && !sponsorVisible) UI.hsVarMenu = null;
 
   let body;
   if (UI.hsVarMenu === null) {
@@ -310,9 +317,7 @@ export function renderEditor() {
       const c = d.templateLogos?.count ?? 0;
       rows.push(menuRow('logos', 'Template logos', c ? `${c} logo${c > 1 ? 's' : ''}` : 'Off', 'openHsVarMenu'));
     }
-    if (sponsorVisible) {
-      rows.push(menuRow('sponsor', 'Sponsor name', d.sponsorText?.text ? escXml(d.sponsorText.text) : 'Empty', 'openHsVarMenu'));
-    }
+    rows.push(menuRow('sponsor', 'Sponsor text', d.sponsorText?.text ? escXml(d.sponsorText.text) : 'Empty', 'openHsVarMenu'));
     body = `
       <div class="hs-menu-list">${rows.join('')}</div>
       <div class="var-editor-actions">
@@ -329,11 +334,13 @@ export function renderEditor() {
     else if (UI.hsVarMenu === 'top')        section = renderDraftTextControls('top', 'Top text', true);
     else if (UI.hsVarMenu === 'bottom')     section = renderDraftTextControls('bottom', 'Bottom text', true);
     else if (UI.hsVarMenu === 'logos')      section = renderTemplateLogoControls();
-    else if (UI.hsVarMenu === 'sponsor')    section = renderDraftTextControls('sponsor', 'Sponsor name', true)
-      + '<div style="font-size:11px;color:var(--gray-400);margin-top:-8px;margin-bottom:8px;padding:0 2px">Displayed in the logo zone when no logo is uploaded.</div>';
+    else if (UI.hsVarMenu === 'tplSlot')   section = `<div class="hs-section">${renderTplSlotBody(UI.hsVarMenuSlotIdx ?? 0)}</div>`;
+    else if (UI.hsVarMenu === 'sponsor')    section = renderDraftTextControls('sponsor', 'Sponsor text', true)
+      + '<div style="font-size:11px;color:var(--gray-400);margin-top:-8px;margin-bottom:8px;padding:0 2px">Displayed in the logo zone when no logo is set for this variation.</div>';
+    const backFn = UI.hsVarMenu === 'tplSlot' ? "openHsVarMenu('logos')" : 'closeHsVarMenu()';
     body = `
       <div class="hs-menu-section-header">
-        <button class="hs-menu-back" onclick="closeHsVarMenu()">← Back</button>
+        <button class="hs-menu-back" onclick="${backFn}">← Back</button>
         <span class="hs-menu-section-title">${HS_VAR_MENU_TITLES[UI.hsVarMenu] || ''}</span>
       </div>
       ${section}`;

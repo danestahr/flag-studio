@@ -107,6 +107,7 @@ input[type=color]::-webkit-color-swatch-wrapper { padding:0; border-radius:50%; 
 input[type=color]::-webkit-color-swatch { border:none; border-radius:50%; }
 .hexin { flex:1; height:34px; border:1px solid var(--gray-200); border-radius:var(--r); padding:0 10px; font-size:13px; font-family:'DM Sans',sans-serif; color:var(--black); background:var(--white); outline:none; }
 .hexin:focus { border-color:var(--green); }
+.hexin::placeholder { color:var(--gray-200); }
 .cpop-apply { width:100%; padding:8px; background:var(--green); color:white; border:none; border-radius:var(--r); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; cursor:pointer; }
 .cpop-apply:hover { background:var(--green-light); }
 input[type=range] { -webkit-appearance:none; appearance:none; width:100%; height:4px; background:var(--gray-200); border-radius:2px; outline:none; cursor:pointer; }
@@ -241,6 +242,10 @@ input[type=file] { display:none; }
 .var-lib-del { position:absolute; top:2px; right:2px; width:18px; height:18px; background:rgba(0,0,0,.6); color:#fff; border:none; border-radius:50%; font-size:13px; line-height:1; cursor:pointer; display:none; align-items:center; justify-content:center; padding:0; z-index:2; }
 .var-lib-item:hover .var-lib-del { display:flex; }
 .var-lib-del:hover { background:#dc2626; }
+.var-lib-bgrem { position:absolute; bottom:2px; left:2px; width:18px; height:18px; background:rgba(0,0,0,.6); color:#fff; border:none; border-radius:50%; font-size:10px; line-height:1; cursor:pointer; display:none; align-items:center; justify-content:center; padding:0; z-index:2; }
+.var-lib-item:hover .var-lib-bgrem { display:flex; }
+.var-lib-bgrem:hover { background:var(--green); }
+.var-lib-bgrem:disabled { opacity:.6; cursor:default; }
 .var-upload-btn { width:52px; height:52px; border:1.5px dashed var(--gray-200); border-radius:8px; background:transparent; flex-shrink:0; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:22px; color:var(--gray-400); transition:border-color .15s, color .15s; }
 .var-upload-btn:hover { border-color:var(--green-light); color:var(--green); }
 .var-lib-item img, .var-lib-item .file-type-badge { width:100%; height:100%; object-fit:contain; padding:5px; pointer-events:none; }
@@ -343,6 +348,16 @@ input[type=file] { display:none; }
 
 /* ── Hole Signs ─────────────────────────────────────────────────────────────── */
 .hs-design-layout { display:grid; grid-template-columns:1fr 280px; gap:2rem; align-items:start; }
+.hs-ob-wrap { display:flex; flex-direction:column; gap:1.5rem; }
+.hs-ob-header { }
+.hs-ob-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:16px; }
+.hs-ob-card { border:2px solid var(--gray-200); border-radius:var(--rl); overflow:hidden; cursor:pointer; transition:border-color .15s,box-shadow .15s; background:var(--white); }
+.hs-ob-card:hover { border-color:var(--green); box-shadow:0 4px 16px rgba(0,0,0,.09); }
+.hs-ob-thumb { aspect-ratio:6375/5475; background:var(--gray-50); position:relative; overflow:hidden; }
+.hs-ob-thumb svg { width:100%; height:100%; display:block; }
+.hs-ob-info { padding:10px 12px 12px; }
+.hs-ob-name { font-size:13px; font-weight:600; color:var(--black); margin-bottom:2px; }
+.hs-ob-desc { font-size:11px; color:var(--gray-500); line-height:1.4; }
 .hs-design-controls { display:flex; flex-direction:column; gap:1rem; }
 
 /* Design-options menu (Step 1 controls behave as a list → section drawer) */
@@ -398,8 +413,10 @@ input[type=file] { display:none; }
    the "halo" on the banner text. */
 .canvas-edit-zone:not(.is-banner):hover { background:rgba(128,128,128,.16); }
 .canvas-edit-hotspot { border-radius:4px; }
-.canvas-edit-input { border-radius:4px; background:rgba(128,128,128,.16); }
-.canvas-edit-zone.is-banner .canvas-edit-input { background:transparent; }
+.canvas-edit-input { border-radius:4px; background:transparent; padding:0; }
+/* The input text is transparent; only caret + selection show from the HTML layer.
+   Keep selection semi-transparent so the SVG text underneath stays legible. */
+.canvas-edit-input::selection { background:rgba(59,130,246,.35); color:transparent; }
 .canvas-edit-input:empty:before { content:attr(data-ph); opacity:.5; }
 
 /* Step-1 variation-logo placeholder: neutral dashed box that reads on any sign bg */
@@ -416,6 +433,15 @@ input[type=file] { display:none; }
 .hs-tog-btn { padding:6px 16px; border:1.5px solid var(--gray-200); border-radius:20px; background:transparent; font-size:13px; font-weight:500; cursor:pointer; color:var(--gray-600); font-family:inherit; transition:all .15s; }
 .hs-tog-btn:hover { border-color:var(--gray-400); }
 .hs-tog-btn.active { background:var(--green); border-color:var(--green); color:white; }
+.hs-tog-icon { padding:6px 10px; display:inline-flex; align-items:center; justify-content:center; line-height:0; }
+.hs-tog-icon-btn { padding:7px 12px; display:inline-flex; align-items:center; justify-content:center; }
+.tl-assign-rows { display:flex; flex-direction:column; gap:6px; margin:8px 0 4px; }
+.tl-assign-row { display:flex; align-items:center; gap:6px; }
+.tl-assign-label { font-size:11px; color:var(--gray-500); min-width:38px; }
+.tl-assign-thumb { width:36px; height:24px; object-fit:contain; border:1px solid var(--gray-200); border-radius:4px; background:#f9f9f9; flex-shrink:0; }
+.tl-assign-empty { font-size:11px; color:var(--gray-300); width:36px; text-align:center; }
+.tl-assign-btn { flex:1; }
+.tl-assign-rm { color:#dc2626; border-color:#fecaca; padding:4px 8px; }
 .hs-bg-img-row { display:flex; align-items:center; gap:.75rem; }
 .hs-color-swatch { width:34px; height:34px; border-radius:8px; border:1.5px solid var(--gray-200); cursor:pointer; padding:2px; background:none; }
 .hs-font-btns { display:flex; gap:6px; flex-wrap:wrap; }
@@ -472,6 +498,11 @@ input[type=file] { display:none; }
 .hs-var-tmpl-opt-empty { padding:8px 10px; font-size:12px; color:var(--gray-400); font-style:italic; }
 .hs-var-tmpl-sep { height:1px; background:var(--gray-100); margin:4px 0; }
 .hs-sign-preview { position:relative; aspect-ratio:6375/5475; background:var(--gray-100); border-radius:var(--rl); overflow:hidden; }
+.hs-sign-preview .dzone { overflow:visible; }
+.logo-processing-spinner { position:absolute; inset:0; background:rgba(0,0,0,.4); display:flex; align-items:center; justify-content:center; z-index:30; border-radius:4px; pointer-events:none; }
+.logo-processing-spinner::after { content:''; width:22px; height:22px; border:2.5px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:logo-spin .65s linear infinite; }
+@keyframes logo-spin { to { transform:rotate(360deg); } }
+.var-card.drag-over { border-color:var(--green) !important; background:rgba(0,180,80,.06); }
 .hs-vthumb { width:60px; aspect-ratio:6375/5475; border-radius:4px; overflow:hidden; background:var(--gray-50); flex-shrink:0; }
 .hs-vthumb svg { width:100%; height:100%; display:block; }
 .hs-vthumb-img img, .hs-vthumb-img .file-type-badge { width:100%; height:100%; object-fit:contain; display:block; }
@@ -526,6 +557,10 @@ input[type=file] { display:none; }
 .color-row { display:flex; align-items:center; gap:8px; }
 .eyedropper-btn { width:34px; height:34px; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--white); border:1.5px solid var(--gray-200); border-radius:8px; color:var(--gray-600); cursor:pointer; padding:0; transition:border-color .15s, color .15s; }
 .eyedropper-btn:hover { border-color:var(--gray-400); color:var(--black); }
+.banner-img-drag-wrap { position:relative; border-radius:6px; overflow:hidden; cursor:grab; border:1px solid var(--gray-200); margin-top:6px; touch-action:none; }
+.banner-img-drag-wrap:active { cursor:grabbing; }
+.banner-img-drag-thumb { height:64px; background-repeat:no-repeat; }
+.banner-img-drag-hint { position:absolute; bottom:0; left:0; right:0; text-align:center; font-size:9px; color:rgba(255,255,255,.85); padding:3px 0; background:linear-gradient(transparent,rgba(0,0,0,.45)); pointer-events:none; letter-spacing:.02em; }
 .tl-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:4px; }
 .tl-switch { position:relative; display:inline-block; width:34px; height:20px; flex-shrink:0; }
 .tl-switch input { opacity:0; width:0; height:0; }

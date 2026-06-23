@@ -1,6 +1,6 @@
 import { HS } from './state.js';
 import { listHsDefaults, uploadHsDefault, deleteHsDefault, saveHsOneOffs } from '../supabase.js';
-import { renderDefaultsList } from './variations.js';
+import { renderVarList as renderDefaultsList } from './variations.js';
 import { logoThumbHtml } from '../media-utils.js';
 
 // ── Defaults panel state ───────────────────────────────────

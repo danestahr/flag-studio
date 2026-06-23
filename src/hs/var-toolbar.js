@@ -1,5 +1,5 @@
 import { HS, UI } from './state.js';
-import { fillHsLogo, hideHsToolbar, prepareLogo, applyFillToVariation } from './logo-utils.js';
+import { fillHsLogo, hideHsToolbar, prepareLogo, applyFillToVariation, removeBgFromLogo, detectArtworkBounds, cropSvgToArtwork } from './logo-utils.js';
 import { uploadLogo } from '../supabase.js';
 import { buildLibStrip, renderVarList } from './variations.js';
 import { renderVariationPreview } from './var-canvas.js';
@@ -15,6 +15,8 @@ export function ensureHsToolbar() {
   t.innerHTML = `
     <button class="dz-tb-btn" id="hsTbFill">Fill</button>
     <div class="dz-tb-sep" id="hsTbFillSep"></div>
+    <button class="dz-tb-btn" id="hsTbRemoveBg">Remove BG</button>
+    <div class="dz-tb-sep" id="hsTbRemoveBgSep"></div>
     <button class="dz-tb-btn" id="hsTbRemove">Remove</button>
     <div class="dz-tb-sep" id="hsTbSep"></div>
     <div style="position:relative">
@@ -25,6 +27,54 @@ export function ensureHsToolbar() {
   document.body.appendChild(t);
 
   document.getElementById('hsTbFill').addEventListener('click', fillHsLogo);
+
+  document.getElementById('hsTbRemoveBg').addEventListener('click', async () => {
+    const v = UI.hsActiveZone?.variation;
+    if (!v?.logoSrc) return;
+    const btn = document.getElementById('hsTbRemoveBg');
+    const origText = btn.textContent;
+    btn.textContent = '…';
+    btn.disabled = true;
+    // Spinner overlay on the dzone while processing
+    const dz = UI.hsActiveZone?.dzone;
+    const spinner = document.createElement('div');
+    spinner.className = 'logo-processing-spinner';
+    dz?.appendChild(spinner);
+    try {
+      const oldId = v.logoId;
+      const logo = HS.library.find(l => l.id === oldId) || { src: v.logoSrc, name: 'logo.png' };
+      const newLogo = await removeBgFromLogo(logo, s => { btn.textContent = s === 'uploading' ? '↑' : '…'; });
+      // Replace in-place — no new library entry
+      const origIdx = HS.library.findIndex(l => l.id === oldId);
+      if (origIdx >= 0) HS.library.splice(origIdx, 1, newLogo);
+      else HS.library.push(newLogo);
+      HS.variations.forEach(vv => {
+        if (vv.logoId === oldId) {
+          vv.logoId = newLogo.id;
+          vv.logoSrc = newLogo.src;
+          delete vv.logoSrcTight; delete vv.logoAspect; delete vv.logoArtworkBounds;
+        }
+      });
+      v.logoId = newLogo.id;
+      v.logoSrc = newLogo.src;
+      // Shrink bounding box to actual pixel extents
+      const bounds = await detectArtworkBounds(newLogo.src).catch(() => null);
+      if (bounds) {
+        const tight = await cropSvgToArtwork(newLogo.src, bounds).catch(() => null);
+        if (tight) { v.logoSrcTight = tight.url; v.logoAspect = tight.aspect; v.logoArtworkBounds = bounds; }
+      }
+      v.logoData = { x: 50, y: 50, w: 90 };
+      await prepareLogo(v, newLogo.src);
+      applyFillToVariation(v);
+      buildLibStrip();
+      renderVarList();
+      renderVariationPreview();
+    } catch (err) { console.error('BG removal failed', err); }
+    spinner.remove();
+    btn.textContent = origText;
+    btn.disabled = false;
+    hideHsToolbar();
+  });
 
   document.getElementById('hsTbRemove').addEventListener('click', () => {
     if (!UI.hsActiveZone) return;
@@ -128,8 +178,10 @@ export function renderHsLibPicker() {
       };
     }
     hideHsToolbar();
-    renderVarList();
-    renderVariationPreview();
+    // Open the variation editor directly at the sponsor text section so the
+    // user can edit the text immediately without extra clicks.
+    window.startEditVar?.(v.id);
+    window.openHsVarMenu?.('sponsor');
   });
 }
 
@@ -139,10 +191,12 @@ export function showHsToolbar(dz, openPicker = false) {
   const hasLogo = !!v?.logoSrc;
   const hasText = !!(v?.sponsorText?.text && v.sponsorText.text.trim());
   const hasContent = hasLogo || hasText;
-  document.getElementById('hsTbFill').style.display    = hasLogo ? '' : 'none';
-  document.getElementById('hsTbFillSep').style.display = hasLogo ? '' : 'none';
-  document.getElementById('hsTbRemove').style.display  = hasContent ? '' : 'none';
-  document.getElementById('hsTbSep').style.display     = hasContent ? '' : 'none';
+  document.getElementById('hsTbFill').style.display         = hasLogo ? '' : 'none';
+  document.getElementById('hsTbFillSep').style.display      = hasLogo ? '' : 'none';
+  document.getElementById('hsTbRemoveBg').style.display     = hasLogo ? '' : 'none';
+  document.getElementById('hsTbRemoveBgSep').style.display  = hasLogo ? '' : 'none';
+  document.getElementById('hsTbRemove').style.display       = hasContent ? '' : 'none';
+  document.getElementById('hsTbSep').style.display          = hasContent ? '' : 'none';
   document.getElementById('hsTbReplace').textContent   = hasLogo ? 'Replace ▾' : hasText ? 'Change ▾' : 'Add logo or text ▾';
 
   const picker = document.getElementById('hsLibPicker');

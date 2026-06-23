@@ -9,12 +9,9 @@ import JSZip from 'jszip';
 export function renderGallery() {
   const panel = document.getElementById('panel-3');
   panel.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:flex-start">
-      <div>
-        <div class="ptitle">Gallery & export</div>
-        <div class="psub">Review all variations and export or share.</div>
-      </div>
-      <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()">Save draft</button>
+    <div>
+      <div class="ptitle">Gallery & export</div>
+      <div class="psub">Review all variations and export or share.</div>
     </div>
     <div class="s5layout">
       <div>
@@ -30,9 +27,6 @@ export function renderGallery() {
           </button>
           <button class="btn sm" id="hsExpPng" onclick="exportHsPNG()">
             <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG
-          </button>
-          <button class="btn sm" id="hsExpSvg" onclick="exportHsSVG()">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>SVG
           </button>
         </div>
         <button class="btn sm" style="width:100%;justify-content:center" onclick="exportHsAllPNG()">Export all PNG</button>

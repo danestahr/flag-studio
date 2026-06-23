@@ -2,7 +2,7 @@ import { HS, UI, mergeBanner } from './state.js';
 import { renderStep1, updateStep1Preview } from './design.js';
 import { renderStep2, renderVarList } from './variations.js';
 import { cropSvgToArtwork } from './logo-utils.js';
-import { renderGallery } from './export.js';
+import { renderGallery, saveDraftInternal } from './export.js';
 import { emptyTemplateLogos } from '../hole-sign-data.js';
 import { getFeedback, loadHoleSignConfig, loadLogosForProject, loadOrderIntake, loadProject, supabase, updateProject } from '../supabase.js';
 
@@ -21,6 +21,10 @@ export async function init() {
 
     HS.projectName = project.name || '';
     HS.library = logos;
+
+    if (!hsCfg) {
+      UI.hsOnboarding = true;
+    }
 
     if (hsCfg) {
       const c = hsCfg.colors || {};
@@ -148,6 +152,10 @@ export function renderCustomerSection(intake) {
 
 // ── Nav ────────────────────────────────────────────────────
 export function goStep(n) {
+  // Auto-save on every step transition — fire-and-forget, no UI feedback needed
+  // since the step buttons already provide navigation confirmation.
+  if (HS.projectId) saveDraftInternal().catch(() => {});
+
   document.querySelectorAll('.panel').forEach((p, i) => p.classList.toggle('visible', i === n - 1));
   document.querySelectorAll('.step-item').forEach((s, i) => {
     s.classList.remove('active', 'done');

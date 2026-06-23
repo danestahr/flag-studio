@@ -127,16 +127,31 @@ export function fontSelect(onchange, current) {
   </select>`;
 }
 
-// Align toggle buttons. `setter` is a partial call string up to (but not
-// including) the value arg+closing paren, e.g. "setHsTextProp('top','align'".
-// Each button appends ,'left'/'center'/'right') to complete the call.
+const ALIGN_LEFT_ICON   = `<svg viewBox="0 0 16 12" width="15" height="12" fill="currentColor" style="display:block;pointer-events:none"><rect x="0" y="0" width="16" height="2" rx="1"/><rect x="0" y="5" width="10" height="2" rx="1"/><rect x="0" y="10" width="13" height="2" rx="1"/></svg>`;
+const ALIGN_CENTER_ICON = `<svg viewBox="0 0 16 12" width="15" height="12" fill="currentColor" style="display:block;pointer-events:none"><rect x="0" y="0" width="16" height="2" rx="1"/><rect x="3" y="5" width="10" height="2" rx="1"/><rect x="1.5" y="10" width="13" height="2" rx="1"/></svg>`;
+const ALIGN_RIGHT_ICON  = `<svg viewBox="0 0 16 12" width="15" height="12" fill="currentColor" style="display:block;pointer-events:none"><rect x="0" y="0" width="16" height="2" rx="1"/><rect x="6" y="5" width="10" height="2" rx="1"/><rect x="3" y="10" width="13" height="2" rx="1"/></svg>`;
+
+// After clicking an alignment button, directly toggle the active class on all
+// visible alignment toggle buttons. Alignment buttons are identified by having
+// ,'align', in their onclick attribute — this distinguishes them from other
+// toggle groups (Color/Image, On/Off) that share the same .hs-tog-btn class.
+export function syncAlignBtns(val) {
+  document.querySelectorAll('.hs-bg-toggle .hs-tog-btn').forEach(btn => {
+    const oc = btn.getAttribute('onclick') || '';
+    if (!oc.includes(",'align',")) return;
+    btn.classList.toggle('active', oc.endsWith(`,'${val}')`));
+  });
+}
+
+// Align toggle buttons using icons. `setter` is a partial call string up to
+// (but not including) the value arg+closing paren.
 export function alignBtns(align, setter) {
   const a = align || 'center';
   return `
     <div class="hs-bg-toggle">
-      <button class="hs-tog-btn${a === 'left'   ? ' active' : ''}" onclick="${setter},'left')"   title="Left align">Left</button>
-      <button class="hs-tog-btn${a === 'center' ? ' active' : ''}" onclick="${setter},'center')" title="Center">Center</button>
-      <button class="hs-tog-btn${a === 'right'  ? ' active' : ''}" onclick="${setter},'right')"  title="Right align">Right</button>
+      <button class="hs-tog-btn hs-tog-icon-btn${a === 'left'   ? ' active' : ''}" onclick="${setter},'left')"   title="Left align">${ALIGN_LEFT_ICON}</button>
+      <button class="hs-tog-btn hs-tog-icon-btn${a === 'center' ? ' active' : ''}" onclick="${setter},'center')" title="Center">${ALIGN_CENTER_ICON}</button>
+      <button class="hs-tog-btn hs-tog-icon-btn${a === 'right'  ? ' active' : ''}" onclick="${setter},'right')"  title="Right align">${ALIGN_RIGHT_ICON}</button>
     </div>`;
 }
 
@@ -146,7 +161,7 @@ export function renderTextControls(which, textState) {
   return `
     <div class="hs-section">
       <div class="hs-section-title">${cap === 'Top' ? 'Text' : 'Bottom text'} <span class="hs-optional">(optional)</span></div>
-      <input class="hexin" style="width:100%" placeholder="Write Here..." value="${escXml(textState.text)}"
+      <input class="hexin" style="width:100%" placeholder="${which === 'top' ? 'Sponsored by…' : 'Club name, tagline…'}" value="${escXml(textState.text)}"
         oninput="setHsTextProp('${which}','text',this.value)">
       ${fontSelect(`setHsTextProp('${which}','font',this.value)`, textState.font)}
       ${alignBtns(textState.align, `setHsTextProp('${which}','align'`)}

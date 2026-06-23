@@ -1,7 +1,7 @@
 import { HS, UI, getEffectiveState, getEffectiveVariation } from './state.js';
 import { goStep, updateSidebar } from './app.js';
 import { cloneTemplateLogos, loadCustomTemplates } from './design.js';
-import { applyFillToVariation, hideHsToolbar, prepareLogo } from './logo-utils.js';
+import { applyFillToVariation, hideHsToolbar, prepareLogo, removeBgFromLogo } from './logo-utils.js';
 import { HS_TEMPLATES } from '../hole-sign-data.js';
 import { logoThumbHtml } from '../media-utils.js';
 import { escXml, renderHoleSignInto } from '../hole-sign-render.js';
@@ -48,11 +48,7 @@ export function renderStep2() {
         <div class="var-list-title">Variations</div>
         <div class="var-list" id="hsVarList"></div>
         <button class="add-var" onclick="addEmptyHsVar()">+ Add variation</button>
-        <div class="hs-defaults-divider">
-          <span>Default signs</span>
-        </div>
-        <div class="hs-defaults-list" id="hsDefaultsList"></div>
-        <button class="add-var" onclick="openDefaultsPanel()">+ Add default signs</button>
+        <button class="add-var" onclick="openDefaultsPanel()" style="margin-top:4px">+ Add default sign</button>
       </div>
     </div>
     <div class="arow">
@@ -68,7 +64,6 @@ export function renderStep2() {
 
   buildLibStrip();
   renderVarList();
-  renderDefaultsList();
   if (HS.variations.length && !HS.activeVarId) {
     HS.activeVarId = HS.variations[0].id;
   }
@@ -88,14 +83,41 @@ export function buildLibStrip() {
     el.className = 'var-lib-item';
     el.title = logo.name;
     el.draggable = true;
-    el.innerHTML = `${logoThumbHtml(logo.src, logo.name)}<button class="var-lib-del" title="Delete">×</button>`;
+    el.innerHTML = `${logoThumbHtml(logo.src, logo.name)}<button class="var-lib-del" title="Delete">×</button><button class="var-lib-bgrem" title="Remove background">✦</button>`;
     el.addEventListener('click', e => {
-      if (e.target.classList.contains('var-lib-del')) return;
+      if (e.target.classList.contains('var-lib-del') || e.target.classList.contains('var-lib-bgrem')) return;
       addVariationForLogo(logo);
     });
     el.querySelector('.var-lib-del').addEventListener('click', e => {
       e.stopPropagation();
       deleteHsLibLogo(logo);
+    });
+    el.querySelector('.var-lib-bgrem').addEventListener('click', async e => {
+      e.stopPropagation();
+      const btn = e.currentTarget;
+      btn.textContent = '…';
+      btn.disabled = true;
+      try {
+        const newLogo = await removeBgFromLogo(logo, s => { btn.textContent = s === 'uploading' ? '↑' : '…'; });
+        // Replace in-place so no new library entry is created
+        const origIdx = HS.library.indexOf(logo);
+        if (origIdx >= 0) HS.library.splice(origIdx, 1, newLogo);
+        else HS.library.push(newLogo);
+        HS.variations.forEach(vv => {
+          if (vv.logoId === logo.id) {
+            vv.logoId = newLogo.id;
+            vv.logoSrc = newLogo.src;
+            delete vv.logoSrcTight; delete vv.logoAspect; delete vv.logoArtworkBounds;
+          }
+        });
+        buildLibStrip();
+        renderVarList();
+      } catch (err) {
+        console.error('Background removal failed', err);
+      } finally {
+        btn.textContent = '✦';
+        btn.disabled = false;
+      }
     });
     el.addEventListener('dragstart', () => { UI.hsDragLogoId = logo.id; el.classList.add('dragging'); });
     el.addEventListener('dragend',   () => { UI.hsDragLogoId = null;    el.classList.remove('dragging'); });
@@ -174,7 +196,6 @@ window.selectHsDefault = function (id) {
   UI.activeDefaultId = id;
   HS.activeVarId = null;
   renderVarList();
-  renderDefaultsList();
   renderVariationPreview();
   renderVarTmplRow();
 };
@@ -289,11 +310,8 @@ export function renderVarList() {
     renderEditor();
     return;
   }
-  if (!HS.variations.length) {
-    list.innerHTML = '<div style="font-size:13px;color:var(--gray-400);text-align:center;padding:1rem 0">No variations yet. Upload a logo to add one.</div>';
-    return;
-  }
-  list.innerHTML = HS.variations.map(v => {
+
+  const varHtml = HS.variations.map(v => {
     const isCustomized = !!(v.template || v.sponsorText || (v.templateId && v.templateId !== HS.templateStyle));
     const fb = HS.feedback?.find(f => f.variation_id === v.id);
     const fbClass = fb?.status === 'needs_edits' && !fb?.resolved ? ' needs-edits'
@@ -305,7 +323,7 @@ export function renderVarList() {
         : '<span class="var-status-tile not-reviewed">Not reviewed</span>';
     const qty = v.qty ?? 1;
     return `
-    <div class="var-card${v.id === HS.activeVarId ? ' active' : ''}${fbClass}" onclick="selectHsVariation('${v.id}')">
+    <div class="var-card${v.id === HS.activeVarId ? ' active' : ''}${fbClass}" data-varid="${v.id}" onclick="selectHsVariation('${v.id}')">
       <div class="var-card-left">
         <div class="hs-vthumb" id="hsvt-${v.id}"></div>
         <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
@@ -327,7 +345,66 @@ export function renderVarList() {
     </div>`;
   }).join('');
 
+  const defaultHtml = HS.defaults.map(d => {
+    const qty = d.qty ?? 1;
+    return `
+    <div class="var-card${d.id === UI.activeDefaultId ? ' active' : ''}" onclick="selectHsDefault('${d.id}')">
+      <div class="var-card-left">
+        <div class="hs-vthumb hs-vthumb-img" style="background:#fff">
+          ${logoThumbHtml(d.src, escXml(d.name))}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
+          <span class="vname" style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escXml(d.name)}">${escXml(d.name)}</span>
+          <span class="var-status-tile not-reviewed">Not reviewed</span>
+          <div class="var-qty-row" onclick="event.stopPropagation()">
+            <label class="var-qty-label">Qty</label>
+            <input class="var-qty-input" type="number" min="1" step="1" value="${qty}"
+              onchange="setHsDefaultQty('${d.id}', this.value)">
+          </div>
+        </div>
+      </div>
+      <div class="var-btns">
+        <button class="vbtn" title="Remove" onclick="event.stopPropagation();removeHsDefault('${d.id}')">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  if (!varHtml && !defaultHtml) {
+    list.innerHTML = '<div style="font-size:13px;color:var(--gray-400);text-align:center;padding:1rem 0">No variations yet. Upload a logo to add one.</div>';
+    return;
+  }
+  list.innerHTML = varHtml + defaultHtml;
+
   HS.variations.forEach(v => {
+    const card = list.querySelector(`.var-card[data-varid="${v.id}"]`);
+    if (card) {
+      card.addEventListener('dragover', e => { e.preventDefault(); card.classList.add('drag-over'); });
+      card.addEventListener('dragleave', e => { if (!card.contains(e.relatedTarget)) card.classList.remove('drag-over'); });
+      card.addEventListener('drop', e => {
+        e.preventDefault();
+        card.classList.remove('drag-over');
+        const logo = UI.hsDragLogoId ? HS.library.find(l => l.id === UI.hsDragLogoId) : null;
+        if (!logo) return;
+        UI.hsDragLogoId = null;
+        v.logoId = logo.id;
+        v.logoSrc = logo.src;
+        delete v.logoSrcTight; delete v.sponsorText;
+        if (!v.logoData) v.logoData = { x: 50, y: 50, w: 90 };
+        // Update only this card's thumbnail — avoids tearing down all event listeners
+        const refreshThumb = () => {
+          const thumb = document.getElementById('hsvt-' + v.id);
+          if (thumb) renderHoleSignInto(thumb, getEffectiveState(v), getEffectiveVariation(v));
+        };
+        refreshThumb();
+        if (HS.activeVarId === v.id) renderVariationPreview();
+        prepareLogo(v, logo.src).then(() => {
+          applyFillToVariation(v);
+          refreshThumb();
+          if (HS.activeVarId === v.id) renderVariationPreview();
+        }).catch(() => {});
+      });
+    }
+
     const el = document.getElementById('hsvt-' + v.id);
     if (!el) return;
     el.classList.add('loading');
@@ -366,41 +443,9 @@ window.deleteHsVar = function (id) {
   renderVariationPreview();
 };
 
-export function renderDefaultsList() {
-  const list = document.getElementById('hsDefaultsList');
-  if (!list) return;
-  if (!HS.defaults.length) {
-    list.innerHTML = '<div style="font-size:12px;color:var(--gray-400);padding:4px 0 2px">None selected.</div>';
-    return;
-  }
-  list.innerHTML = HS.defaults.map(d => {
-    const qty = d.qty ?? 1;
-    return `
-    <div class="var-card${d.id === UI.activeDefaultId ? ' active' : ''}" onclick="selectHsDefault('${d.id}')">
-      <div class="var-card-left">
-        <div class="hs-vthumb hs-vthumb-img" style="background:#fff">
-          ${logoThumbHtml(d.src, escXml(d.name))}
-        </div>
-        <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
-          <span class="vname" style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escXml(d.name)}">${escXml(d.name)}</span>
-          <span class="var-status-tile not-reviewed">Not reviewed</span>
-          <div class="var-qty-row" onclick="event.stopPropagation()">
-            <label class="var-qty-label">Qty</label>
-            <input class="var-qty-input" type="number" min="1" step="1" value="${qty}"
-              onchange="setHsDefaultQty('${d.id}', this.value)">
-          </div>
-        </div>
-      </div>
-      <div class="var-btns">
-        <button class="vbtn" title="Remove" onclick="event.stopPropagation();removeHsDefault('${d.id}')">✕</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-
 window.removeHsDefault = function (id) {
   HS.defaults = HS.defaults.filter(d => d.id !== id);
-  renderDefaultsList();
+  renderVarList();
   saveHsOneOffs(HS.projectId, HS.defaults).catch(() => {});
 };
 

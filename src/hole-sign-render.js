@@ -233,8 +233,29 @@ export function getTextRegions(state, templateId, forceText = []) {
 export function getLogoZone(state, templateId) {
   const tid = templateId || state.templateStyle || 'hole-sign-1';
   if (tid === 'hole-sign-full-graphic') return { x: 0, y: 0, w: HS_W, h: HS_H };
-  const { logoY, logoH } = computeLayout(state, tid);
-  return { x: HS_MARGIN, y: logoY, w: HS_W - 2 * HS_MARGIN, h: logoH };
+  const { logoY, logoH, stripY, stripH } = computeLayout(state, tid);
+  const x = HS_MARGIN, w = HS_W - 2 * HS_MARGIN;
+  if (tid === 'hole-sign-logo-only') return { x, y: logoY, w, h: logoH };
+
+  // When the user has manually repositioned template logo slots, give them the
+  // full zone — they've chosen the layout and know what they're doing.
+  if (state.templateLogos?.customPositions) return { x, y: logoY, w, h: logoH };
+
+  // For default strip placement, carve the strip out so sponsor logos and
+  // template logos can never overlap.
+  const tll = computeTemplateLogoLayout(state.templateLogos);
+  if (!tll || stripH <= 0) return { x, y: logoY, w, h: logoH };
+
+  const gap = HS_GAP;
+  const vAlign = state.templateLogos?.vAlign || 'top';
+  if (vAlign === 'bottom') {
+    // Strip at bottom: variation zone ends just above it.
+    return { x, y: logoY, w, h: Math.max(0, stripY - logoY - gap) };
+  } else {
+    // Strip at top: variation zone starts just below it.
+    const newY = stripY + stripH + gap;
+    return { x, y: newY, w, h: Math.max(0, logoY + logoH - newY) };
+  }
 }
 
 
@@ -244,23 +265,25 @@ export function getLogoZone(state, templateId) {
 function wrapText(text, maxW, fontSize) {
   const charW = fontSize * 0.5;
   const maxChars = Math.max(1, Math.floor(maxW / charW));
-  // Pre-split any single word longer than a line so it hard-wraps instead of
-  // bleeding off the edge.
-  const words = [];
-  String(text || '').split(/\s+/).filter(Boolean).forEach(w => {
-    while (w.length > maxChars) { words.push(w.slice(0, maxChars)); w = w.slice(maxChars); }
-    words.push(w);
-  });
-  if (!words.length) return [];
-  const lines = [];
-  let cur = words[0];
-  for (let i = 1; i < words.length; i++) {
-    const candidate = cur + ' ' + words[i];
-    if (candidate.length <= maxChars) cur = candidate;
-    else { lines.push(cur); cur = words[i]; }
+  const results = [];
+  // Split on explicit newlines first so Shift+Enter hard-breaks are honoured,
+  // then word-wrap each paragraph independently.
+  for (const para of String(text || '').split('\n')) {
+    const words = [];
+    para.split(/\s+/).filter(Boolean).forEach(w => {
+      while (w.length > maxChars) { words.push(w.slice(0, maxChars)); w = w.slice(maxChars); }
+      words.push(w);
+    });
+    if (!words.length) { results.push(''); continue; }
+    let cur = words[0];
+    for (let i = 1; i < words.length; i++) {
+      const candidate = cur + ' ' + words[i];
+      if (candidate.length <= maxChars) cur = candidate;
+      else { results.push(cur); cur = words[i]; }
+    }
+    results.push(cur);
   }
-  lines.push(cur);
-  return lines;
+  return results;
 }
 
 // Resolved absolute rects for each template-logo slot. Returns [] when off.
@@ -433,10 +456,29 @@ export function makeHoleSignSvg(state, variation) {
   parts.push(`<?xml version="1.0" encoding="UTF-8"?>`);
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${viewBox}" width="${HS_W}" height="${HS_H}">`);
 
-  // Background
-  parts.push(`<rect x="0" y="0" width="${HS_W}" height="${HS_H}" fill="${escXml(bg.color || '#FFFFFF')}"/>`);
+  // Collect SVG defs (filters, etc.) emitted before any element that uses them.
+  const svgDefs = [];
+  if (bg.type === 'image' && bg.imageUrl && bg.imageGreyscale) {
+    svgDefs.push(`<filter id="hsBgGrey"><feColorMatrix type="saturate" values="0"/></filter>`);
+  }
+  if (svgDefs.length) parts.push(`<defs>${svgDefs.join('')}</defs>`);
+
+  // Background: only apply the stored color when type is 'color'; image mode
+  // uses a white base so the color isn't inadvertently visible through a
+  // partially transparent image.
+  const bgFill = bg.type === 'image' ? '#FFFFFF' : (bg.color || '#FFFFFF');
+  parts.push(`<rect x="0" y="0" width="${HS_W}" height="${HS_H}" fill="${escXml(bgFill)}"/>`);
   if (bg.type === 'image' && bg.imageUrl) {
-    parts.push(`<image href="${escXml(bg.imageUrl)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid slice"/>`);
+    const imgOp = (bg.imageOpacity ?? 100) / 100;
+    const filterAttr = bg.imageGreyscale ? ` filter="url(#hsBgGrey)"` : '';
+    const opacityAttr = imgOp < 1 ? ` opacity="${imgOp.toFixed(3)}"` : '';
+    parts.push(`<image href="${escXml(bg.imageUrl)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid slice"${filterAttr}${opacityAttr}/>`);
+    const overlayAlpha = (bg.overlayEnabled !== false) ? (bg.overlayOpacity ?? 50) / 100 : 0;
+    if (overlayAlpha > 0) {
+      const blend = bg.overlayBlend || 'normal';
+      const blendStyle = blend !== 'normal' ? ` style="mix-blend-mode:${escXml(blend)}"` : '';
+      parts.push(`<rect x="0" y="0" width="${HS_W}" height="${HS_H}" fill="${escXml(bg.overlayColor || '#000000')}" fill-opacity="${overlayAlpha.toFixed(3)}"${blendStyle}/>`);
+    }
   }
 
   // Banner bands skipped for full-graphic (image owns the entire canvas)
@@ -477,7 +519,9 @@ export function makeHoleSignSvg(state, variation) {
     }
   } else if (variation && variation.logoSrc) {
     const src = variation.logoSrcTight || variation.logoSrc;
-    const lz = { x: HS_MARGIN, y: logoY, w: HS_W - 2 * HS_MARGIN, h: logoH };
+    // Use getLogoZone so the clip rect and positioning match the DOM dzone exactly,
+    // including the carve-out for any template logo strip.
+    const lz = getLogoZone(state, templateId);
     if (isDisplayableImage(src)) {
       const ld = variation.logoData || { x: 50, y: 50, w: 90 };
       const logoW = lz.w * (ld.w / 100);
@@ -492,8 +536,9 @@ export function makeHoleSignSvg(state, variation) {
     }
   } else if (variation && variation.sponsorText && variation.sponsorText.text && variation.sponsorText.text.trim()) {
     const st = variation.sponsorText;
-    const cx = HS_W / 2;
-    const cy = logoY + logoH / 2 + st.size * 0.38;
+    const lz = getLogoZone(state, templateId);
+    const cx = lz.x + lz.w / 2;
+    const cy = lz.y + lz.h / 2 + st.size * 0.38;
     parts.push(`<text x="${cx}" y="${Math.round(cy)}" text-anchor="middle" font-family="${escXml(getFamily(st.font))}" font-size="${st.size}" fill="${escXml(st.color || '#111110')}">${escXml(st.text)}</text>`);
   }
 

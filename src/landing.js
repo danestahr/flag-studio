@@ -17,17 +17,17 @@ async function renderProjects() {
       const date = new Date(p.updated_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
       const hasFlags = p.flag_config?.length > 0;
       const hasHoleSigns = p.hole_sign_config?.length > 0;
-      return `<a class="draft-card" href="/project.html?project=${p.id}">
+      return `<div class="draft-card" onclick="window.location.href='/project.html?project=${p.id}'">
         <div class="draft-card-top">
           <div class="draft-card-name">${name}</div>
-          <button class="draft-card-del" onclick="event.preventDefault();event.stopPropagation();confirmDelete('${p.id}','${name.replace(/'/g, "\\'")}')">✕</button>
+          <button class="draft-card-del" onclick="event.stopPropagation();confirmDelete('${p.id}','${name.replace(/'/g, "\\'")}')">✕</button>
         </div>
         <div class="draft-card-meta">${date}</div>
         <div class="draft-card-tools">
-          <span class="draft-card-tool${hasFlags ? ' configured' : ''}">🚩 Flags</span>
-          <span class="draft-card-tool${hasHoleSigns ? ' configured' : ''}">⛳ Hole Signs</span>
+          <a class="draft-card-tool${hasFlags ? ' configured' : ''}" href="/flags.html?project=${p.id}" onclick="event.stopPropagation()">🚩 Flags</a>
+          <a class="draft-card-tool${hasHoleSigns ? ' configured' : ''}" href="/hole-signs.html?project=${p.id}" onclick="event.stopPropagation()">⛳ Hole Signs</a>
         </div>
-      </a>`;
+      </div>`;
     }).join('')}</div>`;
   } catch (err) {
     console.error(err);

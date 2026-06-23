@@ -1,7 +1,7 @@
 import { HS, UI } from './state.js';
 import { HS_H, HS_W } from '../hole-sign-data.js';
 import { getEffectiveState, getEffectiveVariation } from './state.js';
-import { getLogoZone, renderHoleSignInto } from '../hole-sign-render.js';
+import { getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
 import { hideHsToolbar, prepareLogo, applyFillToVariation } from './logo-utils.js';
 import { isDisplayableImage, fileTypeLabel } from '../media-utils.js';
 import { stripSlotImages, paintTplSlotOverlays } from './design.js';
@@ -26,6 +26,29 @@ function fitWrap(scroll, wrap, pct) {
   wrap.style.height = Math.round(h * k) + 'px';
 }
 
+// When zoom changes during inline text editing, rescale the input's font size so
+// the cursor/selection highlight stays aligned with the visible SVG text.
+function rescaleEditorInput(previewId) {
+  requestAnimationFrame(() => {
+    const preview = document.getElementById(previewId);
+    const input = preview?.querySelector('.canvas-edit-input');
+    if (!input || !preview) return;
+    const sc = (preview.clientHeight || HS_H) / HS_H;
+    const kind = input.closest('.canvas-edit-zone')?.dataset?.kind;
+    if (!kind) return;
+    const src = (HS.editingVarId && HS.editingDraft) ? HS.editingDraft : HS;
+    const t = kind === 'top'            ? src.topText
+            : kind === 'bottom'         ? src.bottomText
+            : kind === 'bannerTopTitle' ? src.bannerTop?.topText
+            : kind === 'bannerTopSub'   ? src.bannerTop?.subText
+            : kind === 'bannerBotTitle' ? src.bannerBottom?.topText
+            : kind === 'bannerBotSub'   ? src.bannerBottom?.subText
+            : null;
+    if (!t) return;
+    input.style.fontSize = Math.max(9, Math.round((t.size || 200) * sc)) + 'px';
+  });
+}
+
 export function applyHsZoom(pct) {
   UI.hsZoom = pct;
   fitWrap(document.getElementById('hsCanvasScroll'), document.getElementById('hsZoomWrap'), pct);
@@ -33,6 +56,7 @@ export function applyHsZoom(pct) {
   const reset = document.getElementById('hsZoomReset');
   if (label) label.textContent = pct + '%';
   if (reset) reset.style.display = pct === 100 ? 'none' : '';
+  if (UI.canvasEdit) rescaleEditorInput('hsSignPreview');
 }
 
 window.setHsZoom = function (val) {
@@ -46,6 +70,7 @@ export function applyHsStep1Zoom(pct) {
   const reset = document.getElementById('hsStep1ZoomReset');
   if (label) label.textContent = pct + '%';
   if (reset) reset.style.display = pct === 100 ? 'none' : '';
+  if (UI.canvasEdit) rescaleEditorInput('hsStep1Preview');
 }
 
 window.setHsStep1Zoom = function (val) {
@@ -134,12 +159,8 @@ export function setupHsInteraction(dz, wrap, handle, variation) {
       const dzRect = dz.getBoundingClientRect();
       const dx = (e.clientX - startPX) / dzRect.width  * 100;
       const dy = (e.clientY - startPY) / dzRect.height * 100;
-      const wr = wrap.getBoundingClientRect();
-      const halfW = wr.width  / dzRect.width  * 50;
-      const halfH = wr.height / dzRect.height * 50;
-      const clampAxis = (v, half) => half >= 50 ? 50 : Math.max(half, Math.min(100 - half, v));
-      let nx = clampAxis(startX + dx, halfW);
-      let ny = clampAxis(startY + dy, halfH);
+      let nx = startX + dx;
+      let ny = startY + dy;
       const snapX = 5 / dzRect.width  * 100;
       const snapY = 5 / dzRect.height * 100;
       const snapH = Math.abs(nx - 50) < snapX;
@@ -154,7 +175,7 @@ export function setupHsInteraction(dz, wrap, handle, variation) {
     } else if (mode === 'resize') {
       const dzRect = dz.getBoundingClientRect();
       const delta = (e.clientX - rStartX) / dzRect.width * 100 * 2;
-      const nw = Math.max(10, Math.min(300, rStartW + delta));
+      const nw = Math.max(10, rStartW + delta);
       const ld2 = variation.logoData || { x: 50, y: 50, w: 90 };
       ld2.w = nw;
       variation.logoData = ld2;
@@ -167,7 +188,7 @@ export function setupHsInteraction(dz, wrap, handle, variation) {
     const ld = variation.logoData || { x: 50, y: 50, w: 90 };
     const dzRect = dz.getBoundingClientRect();
     const delta = (e.clientX - rStartX) / dzRect.width * 100 * 2;
-    ld.w = Math.max(10, Math.min(300, rStartW + delta));
+    ld.w = Math.max(10, rStartW + delta);
     variation.logoData = ld;
     positionWrap(wrap, ld);
   });
@@ -213,6 +234,23 @@ export function renderVariationPreview() {
   const effState = getEffectiveState(activeVar);
   const isEditingActive = HS.editingVarId && HS.editingVarId === HS.activeVarId;
 
+  // Re-snap template logo slots to the current layout so banner/text changes
+  // automatically reposition non-custom slots. Inline to avoid circular import.
+  if (isEditingActive && HS.editingDraft) {
+    const tl = HS.editingDraft.templateLogos;
+    if (tl && !tl.customPositions && tl.count > 0) {
+      const tlCopy = { ...tl, slots: (tl.slots || []).map(() => null) };
+      const draftState = { ...HS, ...HS.editingDraft, templateLogos: tlCopy };
+      const tid = HS.editingDraft.templateStyle || HS.templateStyle;
+      const defaults = getTemplateLogoSlots(draftState, tid);
+      (tl.slots || []).forEach((s, i) => {
+        if (!s) return;
+        const d = defaults[i];
+        if (d) { s.freeX = d.x; s.freeY = d.y; s.freeW = d.w; s.freeH = d.h; }
+      });
+    }
+  }
+
   const isFullGraphic = effState.templateStyle === 'hole-sign-full-graphic';
 
   const bgSvgDiv = document.createElement('div');
@@ -224,7 +262,6 @@ export function renderVariationPreview() {
     ? getEffectiveVariation(activeVar)
     : (activeVar && !activeVar.logoSrc ? getEffectiveVariation(activeVar) : null);
   const bgState = isEditingActive ? stripSlotImages(effState) : effState;
-  if (isEditingActive && UI.canvasEdit) bgState.hideText = [UI.canvasEdit.kind];
   renderHoleSignInto(bgSvgDiv, bgState, bgVarForRender);
   const bgSvgEl = bgSvgDiv.querySelector('svg');
   if (bgSvgEl) {
@@ -260,11 +297,12 @@ export function renderVariationPreview() {
       showHsToolbar(dzone, !variation.logoSrc);
     });
   } else {
-    dzone.className = 'dzone' + (variation.logoSrc ? ' has-logo' : '');
+    const hasLogo = !!variation.logoSrc;
+    dzone.className = 'dzone' + (hasLogo ? ' has-logo' : ' hs-logo-placeholder');
     const gh = document.createElement('div'); gh.className = 'dz-guide-h'; dzone.appendChild(gh);
     const gv = document.createElement('div'); gv.className = 'dz-guide-v'; dzone.appendChild(gv);
 
-    if (variation.logoSrc) {
+    if (hasLogo) {
       const ld = variation.logoData || { x: 50, y: 50, w: 90 };
       const wrap = document.createElement('div');
       wrap.className = 'dz-logo-wrap';
@@ -308,31 +346,38 @@ export function renderVariationPreview() {
         if (UI.hsActiveZone) UI.hsActiveZone.dzone.classList.remove('selected');
         UI.hsActiveZone = { dzone, variation };
         dzone.classList.add('selected');
-        showHsToolbar(dzone, true);
+        // If the variation already has sponsor text, go straight to editing it.
+        if (activeVar?.sponsorText?.text) {
+          hideHsToolbar();
+          window.startEditVar?.(activeVar.id);
+          window.openHsVarMenu?.('sponsor');
+        } else {
+          showHsToolbar(dzone, true);
+        }
       });
     }
   }
 
   dzone.addEventListener('dragover',  e => { e.preventDefault(); dzone.classList.add('drag-over'); });
-  dzone.addEventListener('dragleave', ()  => dzone.classList.remove('drag-over'));
+  dzone.addEventListener('dragleave', e => { if (!dzone.contains(e.relatedTarget)) dzone.classList.remove('drag-over'); });
   dzone.addEventListener('drop', e => {
     e.preventDefault();
     dzone.classList.remove('drag-over');
     if (!UI.hsDragLogoId) return;
     const logo = HS.library.find(l => l.id === UI.hsDragLogoId);
     if (!logo) return;
+    UI.hsDragLogoId = null;
     variation.logoId  = logo.id;
     variation.logoSrc = logo.src;
-    delete variation.sponsorText;
+    delete variation.logoSrcTight; delete variation.sponsorText;
     if (!variation.logoData) variation.logoData = { x: 50, y: 50, w: 90 };
+    renderVariationPreview();
     prepareLogo(variation, logo.src).then(() => {
       applyFillToVariation(variation);
-      renderVarList();
-      if (HS.activeVarId === variation.id) renderVariationPreview();
+      const thumb = document.getElementById('hsvt-' + activeVar?.id);
+      if (thumb) renderHoleSignInto(thumb, getEffectiveState(activeVar), getEffectiveVariation(activeVar));
+      renderVariationPreview();
     }).catch(() => {});
-    UI.hsDragLogoId = null;
-    renderVarList();
-    renderVariationPreview();
   });
 
   preview.appendChild(dzone);

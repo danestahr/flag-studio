@@ -57,6 +57,9 @@ window.tryGoStep = (n) => { goStep(n); };
 window.goStep = function goStep(n) {
   if (n !== 5 && feedbackChannel) { feedbackChannel.unsubscribe(); feedbackChannel = null; }
   document.querySelectorAll('.panel').forEach((p, i) => p.classList.toggle('visible', i === n - 1));
+  // Hide the Save draft button on the gallery step — auto-save handles it.
+  const saveDraftBtn = document.getElementById('saveDraftBtn');
+  if (saveDraftBtn) saveDraftBtn.style.display = n === 5 ? 'none' : '';
   document.querySelectorAll('.step-item').forEach((s, i) => {
     s.classList.remove('active', 'done');
     if (i === n - 1) s.classList.add('active');
@@ -94,6 +97,13 @@ const P1_ZONES = [
   { id: 'zone-primary',   label: 'Field color' },
   { id: 'zone-secondary', label: 'Stripe color' },
 ];
+
+// Display-only fallbacks so previews render with sensible colors before the
+// user makes a selection. Never used for export or state persistence.
+const PREVIEW_DEFAULTS = { 'zone-primary': '#FFFFFF', 'zone-secondary': '#666666' };
+function previewColors() {
+  return { ...PREVIEW_DEFAULTS, ...S.colors };
+}
 
 function renderP1Colors() {
   const container = document.getElementById('p1colorZones');
@@ -147,7 +157,7 @@ function refreshFlagPreviews() {
     const card = document.getElementById('fc-' + f.id);
     if (!card) return;
     const svg = card.querySelector('svg');
-    if (svg) applyColors(svg, S.colors);
+    if (svg) applyColors(svg, previewColors());
   });
 }
 
@@ -236,7 +246,7 @@ function refreshColorPrev() {
   if (!flag) return;
   const box = document.getElementById('colorPrev');
   box.innerHTML = `<svg viewBox="${flag.viewBox || '0 0 7519 4669'}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${flag.svgContent}</svg>`;
-  applyColors(box.querySelector('svg'), S.colors);
+  applyColors(box.querySelector('svg'), previewColors());
 }
 
 function checkColors() {
@@ -345,7 +355,7 @@ function setupLibrary() {
   const svg = document.getElementById('baseSvg');
   svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
   svg.innerHTML = flag.svgContent;
-  applyColors(svg, S.colors);
+  applyColors(svg, previewColors());
   renderLib();
   renderDropZones('baseWrap', 'baseSvg', S.baseAssignment);
 }
@@ -503,7 +513,7 @@ function renderDropZones(wrapId, svgId, assignment, face = 'front') {
   } else {
     svg.innerHTML = flag.svgContent;
   }
-  applyColors(svg, S.colors);
+  applyColors(svg, previewColors());
   // Match wrap aspect ratio to viewBox so the SVG fills it exactly — no letterboxing
   wrap.style.aspectRatio = vbW + ' / ' + vbH;
 
@@ -1459,6 +1469,7 @@ function syncSidebar() {
 // ── INIT ──────────────────────────────────────────────────
 await loadAllFlags(FLAGS);
 renderFlagGrid();
+refreshFlagPreviews();
 renderP1Colors();
 
 const _urlProject = new URLSearchParams(window.location.search).get('project');

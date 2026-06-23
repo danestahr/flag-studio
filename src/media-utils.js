@@ -4,6 +4,7 @@ const IMAGE_EXTS = new Set([
 
 export function isDisplayableImage(src) {
   if (!src) return false;
+  if (src.startsWith('blob:') || src.startsWith('data:image/')) return true;
   const ext = src.split('?')[0].split('.').pop().toLowerCase();
   return IMAGE_EXTS.has(ext);
 }
