@@ -1,13 +1,17 @@
 export const S = {
-  orderId: null,
-  eventName: '',
+  projectId: null,
+  projectName: '',
   flagId: null,
   colors: {},
-  library: [],        // [{id, name, src, storagePath?}]
-  baseAssignment: {}, // {zoneId: logoId}
-  variations: [],     // [{id, name, assignment: {zoneId: logoId}}]
+  library: [],
+  baseAssignment: {},
+  variations: [],
   activeVarId: null,
   gIndex: 0,
+  sameLogoOnBothSides: true,
+  logoLayout: 'single',
+  shareToken: null,
+  feedback: [],
 };
 
 export let _dragLogoId = null;

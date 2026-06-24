@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flag Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/landing.css">
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;gap:1.5rem">
+    <a href="/" class="back-link" style="color:rgba(255,255,255,.6);font-size:13px;text-decoration:none">← Projects</a>
+    <div class="logo"><div class="logo-mark"></div>Flag Studio</div>
+  </div>
+</header>
+
+<div class="landing-main" style="max-width:720px">
+  <div class="project-name-row">
+    <input id="projectNameInput" class="project-name-input" placeholder="Project name…">
+  </div>
+
+  <div class="section-title" style="margin-bottom:1rem">Choose a tool</div>
+
+  <div class="tool-picker-grid">
+    <a class="tool-card" id="flagCard" href="#">
+      <div class="tool-card-icon">🚩</div>
+      <div class="tool-card-body">
+        <div class="tool-card-name">Tournament Flags</div>
+        <div class="tool-card-desc">Design flag variations for each player with custom logos and colors</div>
+      </div>
+      <div class="tool-card-footer">
+        <span class="tool-status" id="flagStatus">—</span>
+        <span class="tool-arrow">Open →</span>
+      </div>
+    </a>
+
+    <a class="tool-card" id="holeCard" href="#">
+      <div class="tool-card-icon">⛳</div>
+      <div class="tool-card-body">
+        <div class="tool-card-name">Hole Signs</div>
+        <div class="tool-card-desc">Design sponsor signs for each hole with logos, text and background options</div>
+      </div>
+      <div class="tool-card-footer">
+        <span class="tool-status" id="holeStatus">—</span>
+        <span class="tool-arrow">Open →</span>
+      </div>
+    </a>
+  </div>
+</div>
+
+<script type="module" src="/src/project.js"></script>
+</body>
+</html>

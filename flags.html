@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flag Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;gap:1.5rem">
+    <a href="/" class="back-link">← Projects</a>
+    <div class="logo"><div class="logo-mark"></div>Flag Studio</div>
+  </div>
+  <span class="header-sub">Tournament flag configurator</span>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div style="padding:1.25rem 1.5rem 0">
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin-bottom:6px">Project name</div>
+      <input id="projectNameInput" class="hexin" style="width:100%;height:36px" placeholder="e.g. Ascot 2026 Final"
+        oninput="setProjectName(this.value)">
+    </div>
+    <div class="sdivider" style="margin:.75rem 1.5rem"></div>
+    <div class="steps-nav">
+      <div class="step-item active" id="navDesign">
+        <div class="step-num"><span>1</span></div>
+        <div><div class="step-label">Design</div><div class="step-desc">Style, colors &amp; logos</div></div>
+      </div>
+      <div class="step-item" id="navVariations">
+        <div class="step-num"><span>2</span></div>
+        <div><div class="step-label">Variations</div><div class="step-desc">Build combinations</div></div>
+      </div>
+      <div class="step-item" id="navGallery">
+        <div class="step-num"><span>3</span></div>
+        <div><div class="step-label">Gallery</div><div class="step-desc">Review &amp; export</div></div>
+      </div>
+    </div>
+    <div class="sdivider"></div>
+    <div class="ssummary">
+      <div class="stitle">Design</div>
+      <div class="srow"><span class="skey">Style</span><span class="sval" id="sumStyle" style="color:var(--gray-400)">—</span></div>
+      <div class="srow"><span class="skey">Field</span><span class="sval" id="sumP" style="color:var(--gray-400)">—</span></div>
+      <div class="srow"><span class="skey">Stripe</span><span class="sval" id="sumS" style="color:var(--gray-400)">—</span></div>
+      <div class="srow"><span class="skey">Logos</span><span class="sval" id="sumLC" style="color:var(--gray-400)">—</span></div>
+    </div>
+    <div id="customerSection" style="display:none"></div>
+    <div class="sdivider"></div>
+    <div style="padding:0 1.5rem 1.5rem;display:flex;flex-direction:column;gap:8px">
+      <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()" style="width:100%;justify-content:center">Save draft</button>
+      <div id="saveStatus" style="font-size:12px;color:var(--gray-400);text-align:center;min-height:16px"></div>
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <!-- Step 1 — Design style + Colors combined -->
+    <div class="panel visible" id="panel-1">
+      <div><div class="ptitle">Design style</div><div class="psub">Pick your colors, then select a flag layout.</div></div>
+      <div class="p1zones" id="p1colorZones"></div>
+      <div class="flag-grid" id="flagGrid"></div>
+      <div class="arow">
+        <span style="font-size:13px;color:var(--gray-400)" id="s1hint">Pick colors and select a style</span>
+        <button class="btn primary" id="s1next" disabled onclick="goToVariations()">Next: Variations →</button>
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div class="panel" id="panel-2">
+      <div><div class="ptitle">Master colors</div><div class="psub">These colors apply to all variations.</div></div>
+      <div class="color-layout">
+        <div id="colorZones" style="display:flex;flex-direction:column;gap:1.5rem"></div>
+        <div class="ppanel">
+          <div class="plabel">Live preview</div>
+          <div class="pbox" id="colorPrev"></div>
+          <div style="font-size:13px;color:var(--gray-400)" id="colorPrevName"></div>
+        </div>
+      </div>
+      <div class="arow">
+        <button class="btn" onclick="goStep(1)">← Back</button>
+        <button class="btn primary" id="s2next" disabled onclick="goStep(4)">Next: Variations →</button>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div class="panel" id="panel-3">
+      <div><div class="ptitle">Logo library</div><div class="psub">Upload all logos you'll use across variations. Drag them into the zones on the flag to set a base assignment.</div></div>
+      <div class="s3layout">
+        <div class="lib-panel">
+          <div class="lib-title">Uploaded logos</div>
+          <div class="upload-zone" onclick="document.getElementById('libFile').click()">
+            <div class="uicon">↑</div>
+            <div class="utitle">Upload logos</div>
+            <div class="usub">PNG, JPG, SVG or PDF<br>Transparent bg recommended</div>
+          </div>
+          <input type="file" id="libFile" accept="image/*,.pdf,.ai,.eps" multiple onchange="handleUpload(event)">
+          <div class="lib-grid" id="libGrid">
+            <div class="lib-empty">No logos yet</div>
+          </div>
+        </div>
+        <div class="canvas-panel">
+          <div class="canvas-top">
+            <span class="canvas-label">Base assignment</span>
+            <span class="canvas-hint">Drag from library into a zone</span>
+          </div>
+          <div class="flag-wrap" id="baseWrap">
+            <svg class="bsvg" id="baseSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
+        </div>
+      </div>
+      <div class="arow">
+        <button class="btn" onclick="goStep(2)">← Back</button>
+        <button class="btn primary" onclick="goStep(4)">Next: Variations →</button>
+      </div>
+    </div>
+
+    <!-- Steps 4 & 5 live on flags-variations.html and flags-gallery.html -->
+    <div class="panel" id="panel-4" style="display:none">
+      <div><div class="ptitle">Variations</div><div class="psub">Each variation swaps logos on the same master. Select a variation, then drag logos from the library into zones.</div></div>
+      <div class="sides-row">
+        <label class="check-label">
+          <input type="checkbox" id="diffSidesCheck" onchange="toggleDiffSides(this.checked)">
+          Different design on front &amp; back
+        </label>
+      </div>
+      <div id="logoLayoutRow" class="sides-row" style="display:none">
+        <span style="font-size:13px;font-weight:500;color:var(--gray-600);margin-right:8px">Logo placement:</span>
+        <div class="face-toggle-row">
+          <button class="face-tab active" id="layoutBtnSingle" onclick="setLogoLayout('single')">Full logo</button>
+          <button class="face-tab" id="layoutBtnMulti" onclick="setLogoLayout('multi')">Multiple logos</button>
+        </div>
+      </div>
+      <div class="var-strip-wrap">
+        <div class="var-strip-label">Logos</div>
+        <div class="var-strip" id="varStrip">
+          <div class="var-upload-btn" onclick="document.getElementById('varFile').click()" title="Upload logos">
+            <span>+</span>
+          </div>
+          <input type="file" id="varFile" accept="image/*,.pdf,.ai,.eps" multiple onchange="handleUpload(event)">
+        </div>
+      </div>
+      <div class="s4layout">
+        <div class="var-canvas-panel">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+            <span style="font-size:13px;font-weight:500" id="activeVarName">Variation 1</span>
+            <span style="font-size:12px;color:var(--gray-400)">Drag logos into zones</span>
+          </div>
+          <div id="varEditNote" class="var-edit-note" style="display:none">
+            <div class="var-edit-note-body">
+              <span class="var-edit-note-label">Edit requested:</span>
+              <span id="varEditNoteText"></span>
+            </div>
+            <button class="var-edit-resolve-btn" id="varEditResolveBtn" onclick="resolveEdit()">Mark as resolved</button>
+            <span class="var-edit-resolved-tag" id="varEditResolvedTag" style="display:none">Resolved</span>
+          </div>
+          <div class="canvas-zoom-row">
+            <span class="canvas-zoom-value" id="flagZoomValue">100%</span>
+            <button class="canvas-zoom-reset" id="flagZoomReset" onclick="setFlagZoom(100)" style="display:none">Reset</button>
+            <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
+          </div>
+          <div class="canvas-scroll" id="flagCanvasScroll">
+            <div class="canvas-zoom-wrap" id="flagZoomWrap">
+              <!-- Single canvas (same logo front & back) -->
+              <div id="singleCanvas">
+                <div class="flag-wrap" id="varWrap">
+                  <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+                </div>
+              </div>
+              <!-- Dual canvas (different logos front & back) -->
+              <div id="dualCanvas" style="display:none" class="dual-canvas-row">
+                <div>
+                  <div class="dual-canvas-label">Front</div>
+                  <div class="flag-wrap" id="varWrapFront">
+                    <svg class="bsvg" id="varSvgFront" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+                  </div>
+                </div>
+                <div>
+                  <div class="dual-canvas-label">Back</div>
+                  <div class="flag-wrap" id="varWrapBack">
+                    <svg class="bsvg" id="varSvgBack" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="var-list-panel">
+          <div class="var-list-title">All variations</div>
+          <div class="var-list" id="varList"></div>
+          <button class="add-var" onclick="addVariation()">+ Add variation</button>
+        </div>
+      </div>
+      <div class="arow">
+        <button class="btn" onclick="goStep(2)">← Back</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn" id="saveDesignsBtn" onclick="saveDraft()">Save designs</button>
+          <button class="btn primary" onclick="goStep(5)">Gallery →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 5 -->
+    <div class="panel" id="panel-5">
+      <div><div class="ptitle">Gallery</div><div class="psub">Review all variations and export.</div></div>
+      <div class="s5layout">
+        <div>
+          <!-- Single-face view -->
+          <div id="gSingleView">
+            <div class="face-toggle-row" style="margin-bottom:.75rem">
+              <button class="face-tab active" id="gFtFront" onclick="setGFace('front')">Front</button>
+              <button class="face-tab" id="gFtBack" onclick="setGFace('back')">Back</button>
+            </div>
+            <div class="gallery-stage">
+              <div class="gflag" id="gFlag"></div>
+              <div class="gnav">
+                <button class="garrow" id="gPrev" onclick="gNav(-1)">←</button>
+                <button class="garrow" id="gNext" onclick="gNav(1)">→</button>
+              </div>
+              <div class="gcaption">
+                <span class="gname" id="gName"></span>
+                <span class="gcounter" id="gCount"></span>
+              </div>
+            </div>
+          </div>
+          <!-- Dual-face view (front + back simultaneously) -->
+          <div id="gDualView" style="display:none">
+            <div class="gallery-dual-stage">
+              <div>
+                <div class="dual-canvas-label">Front</div>
+                <div class="gallery-stage" style="margin-bottom:1rem">
+                  <div class="gflag" id="gFlagFront"></div>
+                </div>
+                <div class="dual-canvas-label">Back</div>
+                <div class="gallery-stage">
+                  <div class="gflag" id="gFlagBack"></div>
+                </div>
+              </div>
+              <div class="gnav" style="position:relative;justify-content:center;margin-top:1rem">
+                <button class="garrow" id="gPrevD" onclick="gNav(-1)">←</button>
+                <div class="gcaption" style="position:relative;transform:none;bottom:auto">
+                  <span class="gname" id="gNameD"></span>
+                  <span class="gcounter" id="gCountD"></span>
+                </div>
+                <button class="garrow" id="gNextD" onclick="gNav(1)">→</button>
+              </div>
+            </div>
+          </div>
+          <div class="gstrip" id="gStrip"></div>
+        </div>
+        <div class="review-card">
+          <div class="rc-title">Details</div>
+          <div id="gDetails"></div>
+          <div class="exp-row">
+            <button class="btn sm" id="expPdf" onclick="expPDF()">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PDF
+            </button>
+            <button class="btn sm" id="expPng" onclick="expPNG()">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG
+            </button>
+          </div>
+          <button class="btn sm" style="width:100%;justify-content:center" onclick="expAllPNG()">Export all as PNG</button>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-400);font-weight:500;margin-bottom:6px">Print files</div>
+            <div class="exp-row">
+              <button class="btn sm primary" id="expPrintPdfBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('pdf')">↓ PDF zip</button>
+              <button class="btn sm primary" id="expPrintPngBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('png')">↓ PNG zip</button>
+            </div>
+            <div id="expPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px;margin-top:6px"></div>
+          </div>
+          <div class="share-section" id="shareSection">
+            <div class="rc-title">Share for review</div>
+            <div id="shareStatus" style="font-size:13px;color:var(--gray-400);min-height:16px"></div>
+            <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openShareModal()">Share for review →</button>
+          </div>
+        </div>
+      </div>
+      <div class="arow">
+        <button class="btn" onclick="goStep(4)">← Back</button>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Share modal -->
+<div class="share-modal-overlay" id="shareModalOverlay" style="display:none" onclick="closeShareModal(event)">
+  <div class="share-modal">
+    <div class="share-modal-header">
+      <span class="share-modal-title">Share for review</span>
+      <button class="share-modal-close" onclick="closeShareModal()">×</button>
+    </div>
+
+    <div class="share-modal-body">
+      <p class="share-modal-label">Review link</p>
+      <div class="share-link-box">
+        <input class="share-link-input" id="shareLinkInput" readonly>
+        <button class="btn sm" onclick="copyShareLink()">Copy</button>
+      </div>
+
+      <p class="share-modal-label" style="margin-top:1.25rem">Notify customer by email</p>
+      <input class="share-email-input" id="shareEmailInput" type="email" placeholder="customer@email.com">
+      <div id="shareNotifyStatus" style="font-size:13px;color:var(--gray-400);min-height:16px;margin-top:6px"></div>
+      <button class="btn sm primary" style="width:100%;justify-content:center;margin-top:8px" onclick="notifyCustomer()">Send notification</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/src/flags/design.js"></script>
+<script>
+  document.getElementById('navVariations').addEventListener('click', () => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    if (p) window.location.href = 'flags-variations.html?project=' + p;
+  });
+  document.getElementById('navGallery').addEventListener('click', () => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    if (p) window.location.href = 'flags-gallery.html?project=' + p;
+  });
+</script>
+</body>
+</html>

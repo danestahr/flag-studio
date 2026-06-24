@@ -1,0 +1,59 @@
+import './landing.css';
+import { requireAuth } from './auth.js';
+import { listProjects, createProject, deleteProject } from './supabase.js';
+
+await requireAuth();
+
+async function renderProjects() {
+  const container = document.getElementById('projectsList');
+  try {
+    const projects = await listProjects();
+    if (!projects.length) {
+      container.innerHTML = '<div class="drafts-empty">No projects yet.</div>';
+      return;
+    }
+    container.innerHTML = `<div class="drafts-grid">${projects.map(p => {
+      const name = p.name || 'Untitled';
+      const date = new Date(p.updated_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      const hasFlags = p.flag_config?.length > 0;
+      const hasHoleSigns = p.hole_sign_config?.length > 0;
+      return `<div class="draft-card" onclick="window.location.href='/project.html?project=${p.id}'">
+        <div class="draft-card-top">
+          <div class="draft-card-name">${name}</div>
+          <button class="draft-card-del" onclick="event.stopPropagation();confirmDelete('${p.id}','${name.replace(/'/g, "\\'")}')">✕</button>
+        </div>
+        <div class="draft-card-meta">${date}</div>
+        <div class="draft-card-tools">
+          <a class="draft-card-tool${hasFlags ? ' configured' : ''}" href="/flags.html?project=${p.id}" onclick="event.stopPropagation()">🚩 Flags</a>
+          <a class="draft-card-tool${hasHoleSigns ? ' configured' : ''}" href="/hole-signs.html?project=${p.id}" onclick="event.stopPropagation()">⛳ Hole Signs</a>
+        </div>
+      </div>`;
+    }).join('')}</div>`;
+  } catch (err) {
+    console.error(err);
+    container.innerHTML = '<div class="drafts-empty">Could not load projects.</div>';
+  }
+}
+
+window.newProject = async function () {
+  try {
+    const id = await createProject();
+    window.location.href = `/project.html?project=${id}`;
+  } catch (err) {
+    console.error(err);
+    alert('Could not create project.');
+  }
+};
+
+window.confirmDelete = async function (id, name) {
+  if (!confirm(`Delete "${name}"? This removes all logos and designs.`)) return;
+  try {
+    await deleteProject(id);
+    renderProjects();
+  } catch (err) {
+    console.error(err);
+    alert('Could not delete project.');
+  }
+};
+
+renderProjects();

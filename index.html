@@ -3,204 +3,28 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Flag Studio</title>
+  <title>Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/src/style.css">
+  <link rel="stylesheet" href="/src/landing.css">
 </head>
 <body>
 
 <header>
-  <div class="logo"><div class="logo-mark"></div>Flag Studio</div>
-  <span class="header-sub">Tournament flag configurator</span>
+  <div class="logo"><div class="logo-mark"></div>Studio</div>
 </header>
 
-<div class="layout">
-  <aside class="sidebar">
-    <div style="padding:1.25rem 1.5rem 0">
-      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin-bottom:6px">Project name</div>
-      <input id="eventNameInput" class="hexin" style="width:100%;height:36px" placeholder="e.g. Ascot 2026 Final"
-        oninput="setEventName(this.value)">
+<div class="landing-main">
+  <div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem">
+      <div class="section-title" style="margin-bottom:0">Projects</div>
+      <button class="btn primary sm" onclick="newProject()">+ New project</button>
     </div>
-    <div class="sdivider" style="margin:.75rem 1.5rem"></div>
-    <div class="steps-nav">
-      <div class="step-item active" data-step="1" onclick="tryGoStep(1)">
-        <div class="step-num"><span>1</span></div>
-        <div><div class="step-label">Design style</div><div class="step-desc">Choose flag layout</div></div>
-      </div>
-      <div class="step-item" data-step="2" onclick="tryGoStep(2)">
-        <div class="step-num"><span>2</span></div>
-        <div><div class="step-label">Colors</div><div class="step-desc">Master color scheme</div></div>
-      </div>
-      <div class="step-item" data-step="3" onclick="tryGoStep(3)">
-        <div class="step-num"><span>3</span></div>
-        <div><div class="step-label">Logo library</div><div class="step-desc">Upload logos</div></div>
-      </div>
-      <div class="step-item" data-step="4" onclick="tryGoStep(4)">
-        <div class="step-num"><span>4</span></div>
-        <div><div class="step-label">Variations</div><div class="step-desc">Build combinations</div></div>
-      </div>
-      <div class="step-item" data-step="5" onclick="tryGoStep(5)">
-        <div class="step-num"><span>5</span></div>
-        <div><div class="step-label">Gallery &amp; export</div><div class="step-desc">Review &amp; download</div></div>
-      </div>
-    </div>
-    <div class="sdivider"></div>
-    <div class="ssummary">
-      <div class="stitle">Master</div>
-      <div class="srow"><span class="skey">Style</span><span class="sval" id="sumStyle" style="color:var(--gray-400)">—</span></div>
-      <div class="srow"><span class="skey">Field</span><span class="sval" id="sumP" style="color:var(--gray-400)">—</span></div>
-      <div class="srow"><span class="skey">Stripe</span><span class="sval" id="sumS" style="color:var(--gray-400)">—</span></div>
-      <div class="sdivider" style="margin:.75rem 0"></div>
-      <div class="stitle">Variations</div>
-      <div class="srow"><span class="skey">Count</span><span class="sval" id="sumVC" style="color:var(--gray-400)">—</span></div>
-      <div class="srow"><span class="skey">Logos</span><span class="sval" id="sumLC" style="color:var(--gray-400)">—</span></div>
-    </div>
-    <div class="sdivider"></div>
-    <div style="padding:0 1.5rem 1.5rem;display:flex;flex-direction:column;gap:8px">
-      <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()" style="width:100%;justify-content:center">Save draft</button>
-      <div id="saveStatus" style="font-size:12px;color:var(--gray-400);text-align:center;min-height:16px"></div>
-      <button class="btn sm" onclick="newProject()" style="width:100%;justify-content:center">+ New project</button>
-    </div>
-    <div class="sdivider" style="margin:0 1.5rem"></div>
-    <div style="padding:1rem 1.5rem 1.5rem;display:flex;flex-direction:column;gap:8px">
-      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin-bottom:2px">Saved drafts</div>
-      <div id="draftsList"><div style="font-size:13px;color:var(--gray-400)">Loading…</div></div>
-    </div>
-  </aside>
-
-  <main class="main">
-
-    <!-- Step 1 -->
-    <div class="panel visible" id="panel-1">
-      <div><div class="ptitle">Choose a design style</div><div class="psub">Select the flag layout — this becomes your master template.</div></div>
-      <div class="flag-grid" id="flagGrid"></div>
-      <div class="arow">
-        <span style="font-size:13px;color:var(--gray-400)" id="s1hint">Select a style to continue</span>
-        <button class="btn primary" id="s1next" disabled onclick="goStep(2)">Next: Colors →</button>
-      </div>
-    </div>
-
-    <!-- Step 2 -->
-    <div class="panel" id="panel-2">
-      <div><div class="ptitle">Master colors</div><div class="psub">These colors apply to all variations.</div></div>
-      <div class="color-layout">
-        <div id="colorZones" style="display:flex;flex-direction:column;gap:1.5rem"></div>
-        <div class="ppanel">
-          <div class="plabel">Live preview</div>
-          <div class="pbox" id="colorPrev"></div>
-          <div style="font-size:13px;color:var(--gray-400)" id="colorPrevName"></div>
-        </div>
-      </div>
-      <div class="arow">
-        <button class="btn" onclick="goStep(1)">← Back</button>
-        <button class="btn primary" id="s2next" disabled onclick="goStep(3)">Next: Logos →</button>
-      </div>
-    </div>
-
-    <!-- Step 3 -->
-    <div class="panel" id="panel-3">
-      <div><div class="ptitle">Logo library</div><div class="psub">Upload all logos you'll use across variations. Drag them into the zones on the flag to set a base assignment.</div></div>
-      <div class="s3layout">
-        <div class="lib-panel">
-          <div class="lib-title">Uploaded logos</div>
-          <div class="upload-zone" onclick="document.getElementById('libFile').click()">
-            <div class="uicon">↑</div>
-            <div class="utitle">Upload logos</div>
-            <div class="usub">PNG, SVG or JPG<br>Transparent bg recommended</div>
-          </div>
-          <input type="file" id="libFile" accept="image/*" multiple onchange="handleUpload(event)">
-          <div class="lib-grid" id="libGrid">
-            <div class="lib-empty">No logos yet</div>
-          </div>
-        </div>
-        <div class="canvas-panel">
-          <div class="canvas-top">
-            <span class="canvas-label">Base assignment</span>
-            <span class="canvas-hint">Drag from library into a zone</span>
-          </div>
-          <div class="flag-wrap" id="baseWrap">
-            <svg class="bsvg" id="baseSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
-          </div>
-        </div>
-      </div>
-      <div class="arow">
-        <button class="btn" onclick="goStep(2)">← Back</button>
-        <button class="btn primary" onclick="goStep(4)">Next: Variations →</button>
-      </div>
-    </div>
-
-    <!-- Step 4 -->
-    <div class="panel" id="panel-4">
-      <div><div class="ptitle">Variations</div><div class="psub">Each variation swaps logos on the same master. Select a variation, then drag logos from the library into zones.</div></div>
-      <div class="s4layout">
-        <div class="var-canvas-panel">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-            <span style="font-size:13px;font-weight:500" id="activeVarName">Variation 1</span>
-            <span style="font-size:12px;color:var(--gray-400)">Drag logos into zones</span>
-          </div>
-          <div class="var-strip-wrap">
-            <div class="var-strip-label">Logo library</div>
-            <div class="var-strip" id="varStrip"></div>
-          </div>
-          <div class="flag-wrap" id="varWrap">
-            <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
-          </div>
-        </div>
-        <div class="var-list-panel">
-          <div class="var-list-title">All variations</div>
-          <div class="var-list" id="varList"></div>
-          <button class="add-var" onclick="addVariation()">+ Add variation</button>
-        </div>
-      </div>
-      <div class="arow">
-        <button class="btn" onclick="goStep(3)">← Back</button>
-        <button class="btn primary" onclick="goStep(5)">Gallery →</button>
-      </div>
-    </div>
-
-    <!-- Step 5 -->
-    <div class="panel" id="panel-5">
-      <div><div class="ptitle">Gallery</div><div class="psub">Review all variations and export.</div></div>
-      <div class="s5layout">
-        <div>
-          <div class="gallery-stage">
-            <div class="gflag" id="gFlag"></div>
-            <div class="gnav">
-              <button class="garrow" id="gPrev" onclick="gNav(-1)">←</button>
-              <button class="garrow" id="gNext" onclick="gNav(1)">→</button>
-            </div>
-            <div class="gcaption">
-              <span class="gname" id="gName"></span>
-              <span class="gcounter" id="gCount"></span>
-            </div>
-          </div>
-          <div class="gstrip" id="gStrip"></div>
-        </div>
-        <div class="review-card">
-          <div class="rc-title">Details</div>
-          <div id="gDetails"></div>
-          <button class="quote-btn" onclick="submitQuote()">Request quote →</button>
-          <div class="exp-row">
-            <button class="btn sm" onclick="expSVG()">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>SVG
-            </button>
-            <button class="btn sm" id="expPng" onclick="expPNG()">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG
-            </button>
-          </div>
-          <button class="btn sm" style="width:100%;justify-content:center" onclick="expAllPNG()">Export all as PNG</button>
-        </div>
-      </div>
-      <div class="arow">
-        <button class="btn" onclick="goStep(4)">← Back</button>
-      </div>
-    </div>
-
-  </main>
+    <div id="projectsList"><div class="drafts-empty">Loading…</div></div>
+  </div>
 </div>
 
-<script type="module" src="/src/main.js"></script>
+<script type="module" src="/src/landing.js"></script>
 </body>
 </html>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hole Sign Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;gap:1.5rem">
+    <a href="/" class="back-link">← Projects</a>
+    <div class="logo"><div class="logo-mark"></div>Hole Sign Studio</div>
+  </div>
+  <span class="header-sub">Tournament hole sign configurator</span>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div style="padding:1.25rem 1.5rem 0">
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin-bottom:6px">Project name</div>
+      <input id="projectNameInput" class="hexin" style="width:100%;height:36px" placeholder="e.g. Ascot 2026 Final"
+        oninput="setProjectName(this.value)">
+    </div>
+    <div class="sdivider" style="margin:.75rem 1.5rem"></div>
+    <div class="steps-nav">
+      <div class="step-item active" data-step="1" onclick="tryGoStep(1)">
+        <div class="step-num"><span>1</span></div>
+        <div>
+          <div class="step-label">Design</div>
+          <div class="step-desc">Background &amp; text</div>
+        </div>
+      </div>
+      <div class="step-item" data-step="2" onclick="tryGoStep(2)">
+        <div class="step-num"><span>2</span></div>
+        <div>
+          <div class="step-label">Variations</div>
+          <div class="step-desc">Sponsor logos</div>
+        </div>
+      </div>
+      <div class="step-item" data-step="3" onclick="tryGoStep(3)">
+        <div class="step-num"><span>3</span></div>
+        <div>
+          <div class="step-label">Gallery &amp; export</div>
+          <div class="step-desc">Review &amp; download</div>
+        </div>
+      </div>
+    </div>
+    <div class="sdivider"></div>
+    <div class="ssummary">
+      <div class="stitle">Summary</div>
+      <div class="srow">
+        <span class="skey">Variations</span>
+        <span class="sval" id="sumVC" style="color:var(--gray-400)">—</span>
+      </div>
+    </div>
+    <div id="customerSection" style="display:none"></div>
+    <div class="sdivider"></div>
+  </aside>
+
+  <main class="main">
+    <div class="panel visible" id="panel-1"></div>
+    <div class="panel" id="panel-2"></div>
+    <div class="panel" id="panel-3"></div>
+  </main>
+</div>
+
+<script type="module" src="/src/hole-signs.js"></script>
+</body>
+</html>
