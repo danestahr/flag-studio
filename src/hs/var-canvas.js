@@ -129,11 +129,12 @@ export function positionWrap(wrap, ld) {
 
 export function setupHsInteraction(dz, wrap, handle, variation) {
   let mode = null;
-  let startPX, startPY, startX, startY, rStartX, rStartW;
+  let startPX, startPY, startX, startY, rStartX, rStartW, dzRect;
 
   wrap.addEventListener('pointerdown', e => {
     if (e.target === handle) return;
     mode = 'move';
+    dzRect = dz.getBoundingClientRect();
     dz.classList.add('dz-adjusting');
     wrap.setPointerCapture(e.pointerId);
     startPX = e.clientX; startPY = e.clientY;
@@ -144,6 +145,7 @@ export function setupHsInteraction(dz, wrap, handle, variation) {
 
   handle.addEventListener('pointerdown', e => {
     mode = 'resize';
+    dzRect = dz.getBoundingClientRect();
     dz.classList.add('dz-adjusting');
     handle.setPointerCapture(e.pointerId);
     rStartX = e.clientX;
@@ -156,7 +158,6 @@ export function setupHsInteraction(dz, wrap, handle, variation) {
     if (!mode) return;
     const ld = variation.logoData || { x: 50, y: 50, w: 90 };
     if (mode === 'move') {
-      const dzRect = dz.getBoundingClientRect();
       const dx = (e.clientX - startPX) / dzRect.width  * 100;
       const dy = (e.clientY - startPY) / dzRect.height * 100;
       let nx = startX + dx;
@@ -173,7 +174,6 @@ export function setupHsInteraction(dz, wrap, handle, variation) {
       variation.logoData = ld;
       positionWrap(wrap, ld);
     } else if (mode === 'resize') {
-      const dzRect = dz.getBoundingClientRect();
       const delta = (e.clientX - rStartX) / dzRect.width * 100 * 2;
       const nw = Math.max(10, rStartW + delta);
       const ld2 = variation.logoData || { x: 50, y: 50, w: 90 };
@@ -186,7 +186,6 @@ export function setupHsInteraction(dz, wrap, handle, variation) {
   handle.addEventListener('pointermove', e => {
     if (mode !== 'resize') return;
     const ld = variation.logoData || { x: 50, y: 50, w: 90 };
-    const dzRect = dz.getBoundingClientRect();
     const delta = (e.clientX - rStartX) / dzRect.width * 100 * 2;
     ld.w = Math.max(10, rStartW + delta);
     variation.logoData = ld;

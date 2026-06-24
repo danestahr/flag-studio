@@ -149,8 +149,10 @@ function computeLayout(state, templateId) {
   const innerW = HS_W - 2 * HS_MARGIN;
 
   // Template logos are free-positioned; text bands are independent of logo placement.
-  const topLines = (top.text && top.text.trim()) ? wrapText(top.text, innerW, top.size).length : 0;
-  const botLines = (bot.text && bot.text.trim()) ? wrapText(bot.text, innerW, bot.size).length : 0;
+  const topWrappedLines = (top.text && top.text.trim()) ? wrapText(top.text, innerW, top.size) : [];
+  const botWrappedLines = (bot.text && bot.text.trim()) ? wrapText(bot.text, innerW, bot.size) : [];
+  const topLines = topWrappedLines.length;
+  const botLines = botWrappedLines.length;
   const topTextH = topLines ? Math.round(topLines * top.size * 1.1 + 80) : 0;
   const botTextH = botLines ? Math.round(botLines * bot.size * 1.1 + 80) : 0;
 
@@ -174,8 +176,8 @@ function computeLayout(state, templateId) {
   }
 
   return { topH: topBandH, botH: botBandH, logoY, logoH, stripY, stripH, bannerTopH, bannerBotH,
-           topTextX: HS_W / 2, topTextAnchor: 'middle', topTextMaxW: innerW,
-           botTextX: HS_W / 2, botTextAnchor: 'middle', botTextMaxW: innerW };
+           topTextX: HS_W / 2, topTextAnchor: 'middle', topTextMaxW: innerW, topWrappedLines,
+           botTextX: HS_W / 2, botTextAnchor: 'middle', botTextMaxW: innerW, botWrappedLines };
 }
 
 // Full-width banner band rect (sign coords), or null when that banner is off.
@@ -418,7 +420,7 @@ export function makeHoleSignSvg(state, variation) {
   // per-variation overrides. Prefer it over variation.templateId which can be a
   // stale value set when the variation was first created.
   const templateId = state.templateStyle || variation?.templateId || 'hole-sign-1';
-  let { topH, botH, logoY, logoH, bannerTopH, bannerBotH, topTextX, topTextAnchor, topTextMaxW, botTextX, botTextAnchor, botTextMaxW } = computeLayout(state, templateId);
+  let { topH, botH, logoY, logoH, bannerTopH, bannerBotH, topTextX, topTextAnchor, topTextMaxW, botTextX, botTextAnchor, botTextMaxW, topWrappedLines, botWrappedLines } = computeLayout(state, templateId);
   const viewBox = `0 0 ${HS_W} ${HS_H}`;
   const bg = state.background;
   const topText = state.topText;
@@ -489,7 +491,7 @@ export function makeHoleSignSvg(state, variation) {
 
   // Top text (standard template only)
   if (templateId !== 'hole-sign-logo-only' && topH > 0 && topText.text && topText.text.trim() && !hide.includes('top')) {
-    const lines = wrapText(topText.text, topTextMaxW, topText.size);
+    const lines = topWrappedLines?.length ? topWrappedLines : wrapText(topText.text, topTextMaxW, topText.size);
     const lineH = topText.size * 1.1;
     const bandCY = bannerTopH + HS_MARGIN + topH / 2;
     const firstBaseY = bandCY - (lines.length - 1) * lineH / 2 + topText.size * 0.38;
@@ -544,7 +546,7 @@ export function makeHoleSignSvg(state, variation) {
 
   // Bottom text (standard template only)
   if (templateId !== 'hole-sign-logo-only' && botH > 0 && bottomText.text && bottomText.text.trim() && !hide.includes('bottom')) {
-    const lines = wrapText(bottomText.text, botTextMaxW, bottomText.size);
+    const lines = botWrappedLines?.length ? botWrappedLines : wrapText(bottomText.text, botTextMaxW, bottomText.size);
     const lineH = bottomText.size * 1.1;
     const bandCY = HS_H - bannerBotH - HS_MARGIN - botH / 2;
     const firstBaseY = bandCY - (lines.length - 1) * lineH / 2 + bottomText.size * 0.38;

@@ -1,5 +1,6 @@
 import { HS, UI, alignBtns, eyedropperBtn, fontSelect, mergeBanner, getEffectiveState, syncAlignBtns } from './state.js';
 import { cloneTemplateLogos, loadCustomTemplates, menuRow } from './design.js';
+import { saveDraftInternal } from './export.js';
 import { renderBannerSection } from './banner.js';
 import { closeTlSlotToolbar, renderTemplateLogoControls, renderTplSlotBody } from './template-logos.js';
 import { cropSvgToArtwork } from './logo-utils.js';
@@ -104,6 +105,7 @@ window.applyEditVar = function () {
   renderVarList();
   renderVariationPreview();
   renderVarTmplRow();
+  saveDraftInternal().catch(() => {});
 };
 
 window.revertVarOverrides = function () {
@@ -117,6 +119,7 @@ window.revertVarOverrides = function () {
   renderVarList();
   renderVariationPreview();
   renderVarTmplRow();
+  saveDraftInternal().catch(() => {});
 };
 
 window.setDraftTmpl = function (key) {

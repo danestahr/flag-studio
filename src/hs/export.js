@@ -491,17 +491,19 @@ export async function getEmbeddedFontCss() {
     const res = await fetch(cssUrl);
     let css = await res.text();
     const urls = [...new Set([...css.matchAll(/url\((https:\/\/[^)]+\.woff2)\)/g)].map(m => m[1]))];
-    for (const url of urls) {
+    const replacements = await Promise.all(urls.map(async url => {
       try {
         const r = await fetch(url);
-        if (!r.ok) continue;
+        if (!r.ok) return null;
         const buf = await r.arrayBuffer();
         const bytes = new Uint8Array(buf);
         let bin = '';
         for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        const dataUri = `data:font/woff2;base64,${btoa(bin)}`;
-        css = css.split(url).join(dataUri);
-      } catch (err) { console.warn('Font fetch failed:', url, err); }
+        return { url, dataUri: `data:font/woff2;base64,${btoa(bin)}` };
+      } catch (err) { console.warn('Font fetch failed:', url, err); return null; }
+    }));
+    for (const rep of replacements) {
+      if (rep) css = css.split(rep.url).join(rep.dataUri);
     }
     UI.fontCssCache = css;
     return css;

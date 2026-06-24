@@ -5,9 +5,15 @@ import { cropSvgToArtwork } from './logo-utils.js';
 import { renderGallery, saveDraftInternal } from './export.js';
 import { emptyTemplateLogos } from '../hole-sign-data.js';
 import { getFeedback, loadHoleSignConfig, loadLogosForProject, loadOrderIntake, loadProject, supabase, updateProject } from '../supabase.js';
+import { requireAuth } from '../auth.js';
+
+function escHtml(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 // ── Init ───────────────────────────────────────────────────
 export async function init() {
+  await requireAuth();
   const projectId = new URLSearchParams(window.location.search).get('project');
   if (!projectId) { window.location.href = '/'; return; }
   HS.projectId = projectId;
@@ -117,7 +123,7 @@ export function renderCustomerSection(intake) {
   const el = document.getElementById('customerSection');
   if (!el) return;
   const fmt = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '';
-  const addr = [intake.address_line1, intake.address_line2, intake.city, intake.state_province, intake.postal_code, intake.country].filter(Boolean).join(', ');
+  const addr = [intake.address_line1, intake.address_line2, intake.city, intake.state_province, intake.postal_code, intake.country].filter(Boolean).map(escHtml).join(', ');
   const colors = Array.isArray(intake.flag_colors) ? intake.flag_colors : [];
   el.innerHTML = `
     <div class="sdivider"></div>
@@ -129,11 +135,11 @@ export function renderCustomerSection(intake) {
       <div class="cs-body">
         <div class="cs-row">
           <span class="cs-label">Event</span>
-          <span class="cs-value">${intake.event_name}${intake.event_date ? ' · ' + fmt(intake.event_date) : ''}</span>
+          <span class="cs-value">${escHtml(intake.event_name)}${intake.event_date ? ' · ' + fmt(intake.event_date) : ''}</span>
         </div>
         <div class="cs-row">
           <span class="cs-label">Contact</span>
-          <span class="cs-value">${intake.contact_name}<br><span style="color:var(--gray-600)">${intake.contact_email}</span></span>
+          <span class="cs-value">${escHtml(intake.contact_name)}<br><span style="color:var(--gray-600)">${escHtml(intake.contact_email)}</span></span>
         </div>
         <div class="cs-row">
           <span class="cs-label">Ship to</span>
@@ -141,17 +147,20 @@ export function renderCustomerSection(intake) {
         </div>
         <div class="cs-row">
           <span class="cs-label">Setup</span>
-          <span class="cs-value">${intake.flag_setup === 'different' ? 'Different front & back' : 'Same front & back'}</span>
+          <span class="cs-value">${intake.flag_setup === 'different' ? 'Different front &amp; back' : 'Same front &amp; back'}</span>
         </div>
-        ${colors.length ? `<div class="cs-row"><span class="cs-label">Colors</span><div class="cs-colors">${colors.map(c => `<div class="cs-swatch" style="background:${c.hex || c}" title="${c.name || c}"></div>`).join('')}</div></div>` : ''}
-        ${intake.design_notes ? `<div class="cs-row"><span class="cs-label">Notes</span><span class="cs-notes">${intake.design_notes}</span></div>` : ''}
+        ${colors.length ? `<div class="cs-row"><span class="cs-label">Colors</span><div class="cs-colors">${colors.map(c => `<div class="cs-swatch" style="background:${escHtml(c.hex || c)}" title="${escHtml(c.name || c)}"></div>`).join('')}</div></div>` : ''}
+        ${intake.design_notes ? `<div class="cs-row"><span class="cs-label">Notes</span><span class="cs-notes">${escHtml(intake.design_notes)}</span></div>` : ''}
       </div>
     </div>`;
   el.style.display = '';
 }
 
 // ── Nav ────────────────────────────────────────────────────
+let _hsMaxStep = 1;
+
 export function goStep(n) {
+  _hsMaxStep = Math.max(_hsMaxStep, n);
   // Auto-save on every step transition — fire-and-forget, no UI feedback needed
   // since the step buttons already provide navigation confirmation.
   if (HS.projectId) saveDraftInternal().catch(() => {});
@@ -168,7 +177,9 @@ export function goStep(n) {
   window.scrollTo(0, 0);
 }
 
-window.tryGoStep = (n) => { goStep(n); };
+// Step-indicator nav: only allow visiting steps already reached (or going back).
+// Forward-skip via the indicators is blocked; use the action buttons instead.
+window.tryGoStep = (n) => { if (n <= _hsMaxStep) goStep(n); };
 
 // ── Sidebar ────────────────────────────────────────────────
 export function updateSidebar() {

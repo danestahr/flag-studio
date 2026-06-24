@@ -1,6 +1,7 @@
 import { HS, UI, getEffectiveState, getEffectiveVariation } from './state.js';
 import { goStep, updateSidebar } from './app.js';
 import { cloneTemplateLogos, loadCustomTemplates } from './design.js';
+import { saveDraftInternal } from './export.js';
 import { applyFillToVariation, hideHsToolbar, prepareLogo, removeBgFromLogo } from './logo-utils.js';
 import { HS_TEMPLATES } from '../hole-sign-data.js';
 import { logoThumbHtml } from '../media-utils.js';
@@ -301,6 +302,7 @@ window.setVarTemplate = function (key) {
   renderVarList();
   renderVariationPreview();
   renderVarTmplRow();
+  saveDraftInternal().catch(() => {});
 };
 
 export function renderVarList() {
