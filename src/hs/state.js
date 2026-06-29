@@ -12,6 +12,7 @@ export const HS = {
   bannerTop:    emptyBanner(),
   bannerBottom: emptyBanner(),
   templateLogos: emptyTemplateLogos(),
+  textLayers: [],
   library: [],
   variations: [],
   defaults: [],      // selected default hole signs for this project
@@ -42,6 +43,8 @@ export const UI = {
   hsActiveZone: null,        // active variation drop zone for the toolbar
   activeDefaultId: null,     // selected default hole sign id (mutually exclusive with HS.activeVarId)
   fontCssCache: null,        // cached embedded-font @font-face CSS
+  activeTextLayerId: null,   // id of the currently selected text layer overlay
+  editingTextLayerId: null,  // id of the text layer currently being edited inline
 };
 
 
@@ -95,6 +98,7 @@ export function getEffectiveState(v) {
     if (v.template.bannerBottom) out.bannerBottom = v.template.bannerBottom;
     if (v.template.templateLogos) out.templateLogos = v.template.templateLogos;
   }
+  if (v.textLayers !== undefined) out.textLayers = v.textLayers;
   if (HS.editingVarId === v.id && HS.editingDraft) {
     const d = HS.editingDraft;
     if (d.templateStyle) out.templateStyle = d.templateStyle;
@@ -104,6 +108,7 @@ export function getEffectiveState(v) {
     if (d.bannerTop)    out.bannerTop    = d.bannerTop;
     if (d.bannerBottom) out.bannerBottom = d.bannerBottom;
     if (d.templateLogos) out.templateLogos = d.templateLogos;
+    if (d.textLayers !== undefined) out.textLayers = d.textLayers;
   }
   return out;
 }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Flag Studio</title>
+  <title>GolfStatus Design Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
@@ -14,7 +14,7 @@
 <header>
   <div style="display:flex;align-items:center;gap:1.5rem">
     <a href="/" class="back-link" style="color:rgba(255,255,255,.6);font-size:13px;text-decoration:none">← Projects</a>
-    <div class="logo"><div class="logo-mark"></div>Flag Studio</div>
+    <div class="logo"><div class="logo-mark"></div>GolfStatus Design Studio</div><span class="beta-tag">Beta</span>
   </div>
 </header>
 
@@ -49,6 +49,35 @@
         <span class="tool-arrow">Open →</span>
       </div>
     </a>
+  </div>
+
+  <div style="margin-top:2.5rem">
+    <div class="section-title" style="margin-bottom:1rem">Customer Info</div>
+    <a id="customerInfoLink" href="#" class="tool-card" style="display:flex;flex-direction:row;align-items:center;gap:1rem;padding:1.25rem 1.5rem">
+      <div style="font-size:24px">👤</div>
+      <div style="flex:1">
+        <div class="tool-card-name" style="font-size:16px">Customer Details</div>
+        <div class="tool-card-desc" id="customerInfoSummary">Contact, shipping &amp; design preferences</div>
+      </div>
+      <span class="tool-arrow">Open →</span>
+    </a>
+  </div>
+
+  <div style="margin-top:3rem;padding-top:2rem;border-top:1px solid rgba(255,255,255,.08)">
+    <button class="danger-btn" onclick="window.openDeleteModal()">Delete Project</button>
+  </div>
+</div>
+
+<!-- Delete confirmation modal -->
+<div id="deleteModal" class="modal-backdrop" style="display:none">
+  <div class="modal-box">
+    <div class="modal-title">Delete project?</div>
+    <p class="modal-body">This permanently removes all logos and designs. Type <strong>delete</strong> to confirm.</p>
+    <input id="deleteConfirmInput" class="modal-input" type="text" placeholder="delete" autocomplete="off">
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="window.closeDeleteModal()">Cancel</button>
+      <button id="deleteConfirmBtn" class="btn-danger" disabled onclick="window.confirmDelete()">Delete</button>
+    </div>
   </div>
 </div>
 

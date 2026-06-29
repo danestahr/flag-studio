@@ -54,6 +54,9 @@ export async function init() {
           }
         });
       }
+      if (c.textLayers && c.textLayers.length) {
+        HS.textLayers = c.textLayers.map(l => ({ ...l }));
+      }
       if (hsCfg.one_offs && hsCfg.one_offs.length) {
         HS.defaults = hsCfg.one_offs;
       }
@@ -161,8 +164,6 @@ let _hsMaxStep = 1;
 
 export function goStep(n) {
   _hsMaxStep = Math.max(_hsMaxStep, n);
-  // Auto-save on every step transition — fire-and-forget, no UI feedback needed
-  // since the step buttons already provide navigation confirmation.
   if (HS.projectId) saveDraftInternal().catch(() => {});
 
   document.querySelectorAll('.panel').forEach((p, i) => p.classList.toggle('visible', i === n - 1));

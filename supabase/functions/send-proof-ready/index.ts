@@ -4,7 +4,7 @@ const SENDGRID_API_KEY = Deno.env.get('SENDGRID_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const FROM_EMAIL = 'dane@danestahr.com';
-const FROM_NAME = 'Flag Studio';
+const FROM_NAME = 'GolfStatus Design Studio';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -31,7 +31,7 @@ function buildHtml(p: ProofPayload & { safeUrl: string }): string {
   <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);">
     <div style="background:#1a1a2e;padding:28px 32px;">
       <h1 style="color:#fff;margin:0;font-size:22px;font-weight:600;">Your Design Proof Is Ready</h1>
-      <p style="color:#aaa;margin:6px 0 0;font-size:14px;">Flag Studio</p>
+      <p style="color:#aaa;margin:6px 0 0;font-size:14px;">GolfStatus Design Studio</p>
     </div>
     <div style="padding:32px;">
       <p style="margin:0 0 20px;color:#333;font-size:16px;">Hi ${esc(p.contactName)},</p>
@@ -53,7 +53,7 @@ function buildHtml(p: ProofPayload & { safeUrl: string }): string {
       </p>
     </div>
     <div style="padding:20px 32px;background:#fafafa;border-top:1px solid #f0f0f0;">
-      <p style="margin:0;color:#bbb;font-size:12px;">Flag Studio · dane@danestahr.com</p>
+      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · dane@danestahr.com</p>
     </div>
   </div>
 </body>

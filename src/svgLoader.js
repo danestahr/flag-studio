@@ -4,11 +4,15 @@
 function parseZoneRect(rect, index) {
   const label = rect.getAttribute('id') || `Logo ${index + 1}`;
   const id = 'lz-' + label.toLowerCase().replace(/\s+/g, '-');
-  const x = parseFloat(rect.getAttribute('x') || 0);
-  const y = parseFloat(rect.getAttribute('y') || 0);
+  let x = parseFloat(rect.getAttribute('x') || 0);
+  let y = parseFloat(rect.getAttribute('y') || 0);
   const w = parseFloat(rect.getAttribute('width'));
   const h = parseFloat(rect.getAttribute('height'));
   const transform = rect.getAttribute('transform') || '';
+
+  // translate(tx ty) or translate(tx, ty) offsets the rect's origin
+  const tMatch = transform.match(/translate\(\s*([\d.eE+-]+)[,\s]+([\d.eE+-]+)/);
+  if (tMatch) { x += parseFloat(tMatch[1]); y += parseFloat(tMatch[2]); }
 
   // rotate(-90 cx cy) with pivot at top-left: rendered bounds shift
   if (transform.includes('rotate(-90')) {

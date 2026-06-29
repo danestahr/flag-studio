@@ -58,9 +58,10 @@ function preloadSvgs() {
 const O = {
   step: 1,
   // Step 1
-  eventName: '', eventDate: '',
+  eventName: '',courseName: '', eventDate: '',
   // Step 2
   contactName: '', contactEmail: '',
+  attn: null,   // null = default to contactName; '' = explicitly cleared
   country: 'US',
   addressLine1: '', addressLine2: '',
   city: '', stateProvince: '', postalCode: '',
@@ -95,6 +96,19 @@ function formatDate(isoDate) {
   const months = ['January','February','March','April','May','June',
     'July','August','September','October','November','December'];
   return months[month - 1] + ' ' + day + ', ' + year;
+}
+
+function calcApprovalDeadline(eventDateIso) {
+  if (!eventDateIso) return null;
+  const [y, m, d] = eventDateIso.split('-').map(Number);
+  const deadline = new Date(y, m - 1, d);
+  deadline.setDate(deadline.getDate() - 17);
+  const dow = deadline.getDay();
+  if (dow === 6) deadline.setDate(deadline.getDate() - 1);
+  else if (dow === 0) deadline.setDate(deadline.getDate() - 2);
+  else if (dow === 1) deadline.setDate(deadline.getDate() - 3);
+  const iso = deadline.toISOString().slice(0, 10);
+  return { iso, display: formatDate(iso) };
 }
 
 function esc(str) {
@@ -191,7 +205,7 @@ function renderNav() {
     nextBtn = `<button class="btn primary" onclick="window.orderNext()">Next →</button>`;
   }
   return `<div class="order-nav">
-    <button class="btn" onclick="window.orderBack()">${backLabel}</button>
+    ${O.step > 1 ? `<button class="btn" onclick="window.orderBack()">← Back</button>` : ''}
     ${nextBtn}
   </div>`;
 }
@@ -205,6 +219,10 @@ function renderStep1() {
       <label class="form-label" for="f-eventName">Event name</label>
       <input class="form-input" id="f-eventName" type="text" value="${esc(O.eventName)}" placeholder="e.g. Augusta Club Championship 2026" autocomplete="off">
       ${e.eventName ? `<div class="form-error">${esc(e.eventName)}</div>` : ''}
+    </div>
+     <div class="form-field">
+      <label class="form-label" for="f-courseName">Course name</label>
+      <input class="form-input" id="f-courseName" type="text" value="${esc(O.courseName)}" placeholder="e.g. Augusta National Golf Club" autocomplete="off">
     </div>
     <div class="form-field">
       <label class="form-label" for="f-eventDate">Event date</label>
@@ -222,6 +240,7 @@ function renderStep2() {
   return `
     <div class="order-title">Contact & shipping</div>
     <div class="order-sub">Where should we ship your flags?</div>
+    <div class="form-section-label">Shipping address</div>
     <div class="form-field">
       <label class="form-label" for="f-contactName">Full name</label>
       <input class="form-input" id="f-contactName" type="text" value="${esc(O.contactName)}" autocomplete="name">
@@ -236,6 +255,10 @@ function renderStep2() {
     <div class="country-toggle">
       <button class="country-btn${O.country === 'US' ? ' active' : ''}" onclick="window.selectCountry('US')">🇺🇸 United States</button>
       <button class="country-btn${O.country === 'CA' ? ' active' : ''}" onclick="window.selectCountry('CA')">🇨🇦 Canada</button>
+    </div>
+    <div class="form-field">
+      <label class="form-label" for="f-attn">ATTN <span style="font-weight:400;color:var(--gray-400)">(optional)</span></label>
+      <input class="form-input" id="f-attn" type="text" value="${esc(O.attn !== null ? O.attn : O.contactName)}" placeholder="Recipient name" autocomplete="off">
     </div>
     <div class="form-field">
       <label class="form-label" for="f-addr1">Address line 1</label>
@@ -260,11 +283,11 @@ function renderStep2() {
         </select>
         ${e.stateProvince ? `<div class="form-error">${esc(e.stateProvince)}</div>` : ''}
       </div>
-    </div>
-    <div class="form-field">
-      <label class="form-label" for="f-postal">${postalLabel}</label>
-      <input class="form-input" id="f-postal" type="text" value="${esc(O.postalCode)}" placeholder="${postalPlaceholder}" autocomplete="postal-code" style="max-width:180px">
-      ${e.postalCode ? `<div class="form-error">${esc(e.postalCode)}</div>` : ''}
+      <div class="form-field" style="max-width:80px;flex:0 0 80px">
+        <label class="form-label" for="f-postal">${postalLabel}</label>
+        <input class="form-input" id="f-postal" type="text" value="${esc(O.postalCode)}" placeholder="${postalPlaceholder}" autocomplete="postal-code">
+        ${e.postalCode ? `<div class="form-error">${esc(e.postalCode)}</div>` : ''}
+      </div>
     </div>`;
 }
 
@@ -348,7 +371,9 @@ function renderStep5() {
     return `<span style="display:inline-flex;align-items:center;gap:5px"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${c.hex};${isWhite ? 'border:1px solid var(--gray-200)' : ''};flex-shrink:0"></span>${esc(c.name)}</span>`;
   }
 
+  const effectiveAttn = O.attn !== null ? O.attn : O.contactName;
   const addrParts = [
+    effectiveAttn ? 'ATTN: ' + effectiveAttn : null,
     O.addressLine1, O.addressLine2,
     [O.city, O.stateProvince, O.postalCode].filter(Boolean).join(', '),
     O.country === 'CA' ? 'Canada' : 'USA',
@@ -361,6 +386,15 @@ function renderStep5() {
   return `
     <div class="order-title">Review &amp; submit</div>
     <div class="order-sub">Acknowledge the following, then confirm your details before submitting.</div>
+    ${(() => {
+      const dl = calcApprovalDeadline(O.eventDate);
+      if (!dl) return '';
+      return `<div class="deadline-callout">
+        <div class="deadline-callout-label">Your artwork approval deadline</div>
+        <div class="deadline-callout-date">${esc(dl.display)}</div>
+        <div class="deadline-callout-note">17 days before your event — adjusted to the preceding Friday if needed.</div>
+      </div>`;
+    })()}
     <div class="${ack1Cls}" onclick="window.toggleAck('deadline')">
       <div class="${ack1CheckCls}"></div>
       <div class="ack-text">I acknowledge that final artwork approval is required at least 17 days before the event to avoid rush fees. If the event is on a weekend or Monday, this deadline will be moved to the preceding Friday.</div>
@@ -380,6 +414,7 @@ function renderStep5() {
         <button class="rs-edit-btn" onclick="window.editStep(1)">Edit</button>
       </div>
       <div class="rs-row"><span class="rs-label">Name</span><span class="rs-value">${O.eventName ? esc(O.eventName) : '<span style="color:var(--gray-400)">—</span>'}</span></div>
+      <div class="rs-row"><span class="rs-label">Course</span><span class="rs-value">${O.courseName ? esc(O.courseName) : '<span style="color:var(--gray-400)">—</span>'}</span></div>
       <div class="rs-row"><span class="rs-label">Date</span><span class="rs-value">${formatDate(O.eventDate) || '<span style="color:var(--gray-400)">—</span>'}</span></div>
     </div>
 
@@ -535,6 +570,9 @@ function renderCollapsibleColorPicker(which) {
 // ── Attach listeners ───────────────────────────────────────
 function attachListeners() {
   // Step 1 inputs
+  const courseName = document.getElementById('f-courseName');
+  if (courseName) courseName.addEventListener('input', e => { O.courseName = e.target.value; });
+
   const evName = document.getElementById('f-eventName');
   if (evName) evName.addEventListener('input', e => { O.eventName = e.target.value; });
 
@@ -547,6 +585,9 @@ function attachListeners() {
 
   const cEmail = document.getElementById('f-contactEmail');
   if (cEmail) cEmail.addEventListener('input', e => { O.contactEmail = e.target.value; });
+
+  const attnInput = document.getElementById('f-attn');
+  if (attnInput) attnInput.addEventListener('input', e => { O.attn = e.target.value; });
 
   const addr1 = document.getElementById('f-addr1');
   if (addr1) addr1.addEventListener('input', e => { O.addressLine1 = e.target.value; });
@@ -674,10 +715,12 @@ window.orderSubmit = async function () {
 
     await supabase.from('order_intakes').insert({
       project_id: projectId,
+      course_name: O.courseName || null,
       event_name: O.eventName,
       event_date: O.eventDate,
       contact_name: O.contactName,
       contact_email: O.contactEmail,
+      attn: O.attn !== null ? O.attn : O.contactName,
       address_line1: O.addressLine1,
       address_line2: O.addressLine2 || null,
       city: O.city,
@@ -696,6 +739,7 @@ window.orderSubmit = async function () {
     sendOrderConfirmation({
       contactName: O.contactName,
       contactEmail: O.contactEmail,
+      courseName: O.courseName || '',
       eventName: O.eventName,
       eventDate: O.eventDate,
       shipping: {

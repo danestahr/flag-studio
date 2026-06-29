@@ -12,6 +12,9 @@ export const S = {
   logoLayout: 'single',
   shareToken: null,
   feedback: [],
+  gsTag: true,
+  gsTagMode: 'auto',
+  gsTagColor: '#ffffff',
 };
 
 export let _dragLogoId = null;

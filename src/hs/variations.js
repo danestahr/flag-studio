@@ -21,7 +21,11 @@ export function renderStep2() {
         <div class="ptitle">Variations</div>
         <div class="psub">Upload sponsor logos and build one variation per sponsor. <strong>Each sign is printed front and back</strong> with the same design.</div>
       </div>
-      <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()">Save draft</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn sm" onclick="tryGoStep(1)">← Design</button>
+        <button class="btn sm primary" onclick="goStep(3)">Gallery & export →</button>
+        <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()">Save draft</button>
+      </div>
     </div>
     <div class="var-strip-wrap">
       <div class="var-strip-label">Logo library</div>
@@ -46,20 +50,24 @@ export function renderStep2() {
         </div>
       </div>
       <div class="var-list-panel">
-        <div class="var-list-title">Variations</div>
+        <div class="var-list-header">
+          <div class="var-list-title">Variations</div>
+          <div class="add-var-wrap" id="addVarWrap">
+            <button class="add-var-trigger" onclick="toggleAddVarMenu(event)">+ Add ▾</button>
+            <div class="add-var-dropdown" id="addVarDropdown">
+              <button class="add-var-opt" onclick="addEmptyHsVar();closeAddVarMenu()">New variation</button>
+              <button class="add-var-opt" onclick="openDefaultsPanel();closeAddVarMenu()">Default sign</button>
+              <button class="add-var-opt add-var-opt-upload" onclick="document.getElementById('hsCustomArtboardFile').click();closeAddVarMenu()">Upload custom design</button>
+            </div>
+            <input type="file" id="hsCustomArtboardFile" accept="image/*" style="display:none">
+          </div>
+        </div>
         <div class="var-list" id="hsVarList"></div>
-        <button class="add-var" onclick="addEmptyHsVar()">+ Add variation</button>
-        <button class="add-var" onclick="openDefaultsPanel()" style="margin-top:4px">+ Add default sign</button>
-      </div>
-    </div>
-    <div class="arow">
-      <button class="btn" onclick="tryGoStep(1)">← Back</button>
-      <div style="display:flex;gap:8px">
-        <button class="btn primary" onclick="goStep(3)">Gallery & export →</button>
       </div>
     </div>`;
 
   document.getElementById('hsLogoFile').addEventListener('change', handleHsLogoUpload);
+  document.getElementById('hsCustomArtboardFile').addEventListener('change', handleHsArtboardUpload);
   wireCanvasZoom('hsCanvasScroll', 'hsZoomWrap', () => UI.hsZoom, applyHsZoom);
   applyHsZoom(UI.hsZoom);
 
@@ -72,6 +80,61 @@ export function renderStep2() {
     selectVariation(HS.activeVarId);
   } else {
     renderVariationPreview();
+  }
+}
+
+// ── Add-variation dropdown ─────────────────────────────────
+
+window.toggleAddVarMenu = function (e) {
+  e.stopPropagation();
+  const dd = document.getElementById('addVarDropdown');
+  if (!dd) return;
+  const open = dd.classList.contains('open');
+  dd.classList.toggle('open', !open);
+  if (!open) {
+    const close = () => { dd.classList.remove('open'); document.removeEventListener('click', close, true); };
+    setTimeout(() => document.addEventListener('click', close, true), 0);
+  }
+};
+
+window.closeAddVarMenu = function () {
+  document.getElementById('addVarDropdown')?.classList.remove('open');
+};
+
+async function handleHsArtboardUpload(e) {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+
+  // Add a placeholder tile immediately so the user sees the card appear right away
+  const varId = 'v-' + Date.now();
+  const newVar = {
+    id: varId,
+    name: file.name.replace(/\.[^.]+$/, ''),
+    artboardSrc: null,
+    loading: true,
+    logoId: null, logoSrc: null,
+  };
+  HS.variations.push(newVar);
+  HS.activeVarId = varId;
+  updateSidebar();
+  renderVarList();
+
+  try {
+    const logo = await uploadLogo(HS.projectId, file);
+    HS.library.push(logo);
+    newVar.artboardSrc = logo.src;
+    delete newVar.loading;
+    buildLibStrip();
+    renderVarList();
+    renderVariationPreview();
+  } catch (err) {
+    console.error('Custom artboard upload failed', err);
+    // Remove the placeholder on failure
+    const idx = HS.variations.findIndex(v => v.id === varId);
+    if (idx >= 0) HS.variations.splice(idx, 1);
+    HS.activeVarId = HS.variations[HS.variations.length - 1]?.id ?? null;
+    renderVarList();
   }
 }
 
@@ -409,7 +472,23 @@ export function renderVarList() {
 
     const el = document.getElementById('hsvt-' + v.id);
     if (!el) return;
-    el.classList.add('loading');
+    el.style.position = 'relative';
+    // While uploading, show a spinner
+    if (v.loading) {
+      el.innerHTML = '<div class="hs-vthumb-uploading"><div class="hs-upload-spinner"></div></div>';
+      return;
+    }
+    // Artboard variations: skip SVG render entirely — paint the image directly
+    // so there's no flash of the template behind the image.
+    if (v.artboardSrc) {
+      el.innerHTML = '';
+      const ab = document.createElement('img');
+      ab.className = 'hs-vthumb-artboard';
+      ab.src = v.artboardSrc;
+      ab.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;';
+      el.appendChild(ab);
+      return;
+    }
     renderHoleSignInto(el, getEffectiveState(v), getEffectiveVariation(v));
     const imgEl = el.querySelector('image[href]');
     const src = imgEl?.getAttribute('href');

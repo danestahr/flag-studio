@@ -1,6 +1,6 @@
 import './landing.css';
 import { requireAuth } from './auth.js';
-import { listProjects, createProject, deleteProject } from './supabase.js';
+import { listProjects, createProject } from './supabase.js';
 
 await requireAuth();
 
@@ -20,7 +20,6 @@ async function renderProjects() {
       return `<div class="draft-card" onclick="window.location.href='/project.html?project=${p.id}'">
         <div class="draft-card-top">
           <div class="draft-card-name">${name}</div>
-          <button class="draft-card-del" onclick="event.stopPropagation();confirmDelete('${p.id}','${name.replace(/'/g, "\\'")}')">✕</button>
         </div>
         <div class="draft-card-meta">${date}</div>
         <div class="draft-card-tools">
@@ -42,17 +41,6 @@ window.newProject = async function () {
   } catch (err) {
     console.error(err);
     alert('Could not create project.');
-  }
-};
-
-window.confirmDelete = async function (id, name) {
-  if (!confirm(`Delete "${name}"? This removes all logos and designs.`)) return;
-  try {
-    await deleteProject(id);
-    renderProjects();
-  } catch (err) {
-    console.error(err);
-    alert('Could not delete project.');
   }
 };
 

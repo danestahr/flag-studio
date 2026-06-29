@@ -157,3 +157,9 @@ select.form-input { appearance:none; background-image:url("data:image/svg+xml,%3
 .rs-row:last-child { border-bottom:none; }
 .rs-label { min-width:80px; color:var(--gray-400); flex-shrink:0; }
 .rs-value { color:var(--black); word-break:break-word; }
+
+/* Approval deadline callout on review step */
+.deadline-callout { background:#f0f7f2; border:1.5px solid #a7d7b8; border-radius:10px; padding:16px 18px; margin-bottom:20px; }
+.deadline-callout-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color:#1A4A2E; margin-bottom:4px; }
+.deadline-callout-date { font-size:20px; font-weight:700; color:#1A4A2E; margin-bottom:4px; }
+.deadline-callout-note { font-size:12px; color:#5a7a65; line-height:1.4; }

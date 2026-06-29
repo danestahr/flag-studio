@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Flag Studio</title>
+  <title>GolfStatus Design Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
@@ -14,7 +14,7 @@
 <header>
   <div style="display:flex;align-items:center;gap:1.5rem">
     <a href="/" class="back-link">← Projects</a>
-    <div class="logo"><div class="logo-mark"></div>Flag Studio</div>
+    <div class="logo"><div class="logo-mark"></div>GolfStatus Design Studio</div><span class="beta-tag">Beta</span>
   </div>
   <span class="header-sub">Tournament flag configurator</span>
 </header>
@@ -22,9 +22,8 @@
 <div class="layout">
   <aside class="sidebar">
     <div style="padding:1.25rem 1.5rem 0">
-      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin-bottom:6px">Project name</div>
-      <input id="projectNameInput" class="hexin" style="width:100%;height:36px" placeholder="e.g. Ascot 2026 Final"
-        oninput="setProjectName(this.value)">
+      <div id="projectNameDisplay" style="font-size:15px;font-weight:500;color:var(--black);line-height:1.3">—</div>
+      <div style="font-size:11px;color:var(--gray-400);margin-top:3px">Tournament Flags</div>
     </div>
     <div class="sdivider" style="margin:.75rem 1.5rem"></div>
     <div class="steps-nav">
@@ -41,32 +40,49 @@
         <div><div class="step-label">Gallery</div><div class="step-desc">Review &amp; export</div></div>
       </div>
     </div>
-    <div class="sdivider"></div>
-    <div class="ssummary">
-      <div class="stitle">Design</div>
-      <div class="srow"><span class="skey">Style</span><span class="sval" id="sumStyle" style="color:var(--gray-400)">—</span></div>
-      <div class="srow"><span class="skey">Field</span><span class="sval" id="sumP" style="color:var(--gray-400)">—</span></div>
-      <div class="srow"><span class="skey">Stripe</span><span class="sval" id="sumS" style="color:var(--gray-400)">—</span></div>
-      <div class="srow"><span class="skey">Logos</span><span class="sval" id="sumLC" style="color:var(--gray-400)">—</span></div>
-    </div>
     <div id="customerSection" style="display:none"></div>
-    <div class="sdivider"></div>
-    <div style="padding:0 1.5rem 1.5rem;display:flex;flex-direction:column;gap:8px">
-      <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()" style="width:100%;justify-content:center">Save draft</button>
-      <div id="saveStatus" style="font-size:12px;color:var(--gray-400);text-align:center;min-height:16px"></div>
-    </div>
   </aside>
 
   <main class="main">
 
-    <!-- Step 1 — Design style + Colors combined -->
+    <!-- Step 1 — Design style -->
     <div class="panel visible" id="panel-1">
-      <div><div class="ptitle">Design style</div><div class="psub">Pick your colors, then select a flag layout.</div></div>
-      <div class="p1zones" id="p1colorZones"></div>
-      <div class="flag-grid" id="flagGrid"></div>
-      <div class="arow">
-        <span style="font-size:13px;color:var(--gray-400)" id="s1hint">Pick colors and select a style</span>
-        <button class="btn primary" id="s1next" disabled onclick="goToVariations()">Next: Variations →</button>
+      <div class="p1-header">
+        <div>
+          <div class="ptitle">Design style</div>
+          <div class="psub">Pick your colors, then select a flag style.</div>
+        </div>
+        <div class="p1-header-actions">
+          <span class="s1hint-text" id="s1hint">Pick colors and select a style</span>
+          <button class="btn primary" id="s1next" disabled onclick="goToVariations()">Next: Variations →</button>
+          <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" title="Save draft">Save draft</button>
+        </div>
+      </div>
+      <div class="p1-split">
+        <!-- Left: always-visible preview -->
+        <div class="p1-preview-col">
+          <div class="flag-exp-name" id="flagExpName"></div>
+          <div class="flag-exp-preview" id="flagExpPreview">
+            <div class="flag-exp-placeholder">Select a style →</div>
+          </div>
+        </div>
+        <!-- Right: controls -->
+        <div class="p1-controls-col">
+          <div class="p1zones" id="p1colorZones"></div>
+          <div class="gs-tag-row">
+            <label class="gs-tag-label">
+              <input type="checkbox" id="gsTagCheck" onchange="toggleGsTag(this.checked)" class="gs-toggle-input">
+              <span class="gs-toggle-switch"></span>
+              <span class="gs-toggle-text">GolfStatus tag</span>
+            </label>
+            <div class="gs-mode-wrap" id="gsTagModeWrap" style="display:none">
+              <button class="gs-mode-btn active" id="gsMode-auto" onclick="setGsTagMode('auto')">Auto</button>
+              <button class="gs-mode-btn" id="gsMode-dark" onclick="setGsTagMode('dark')">Black</button>
+              <button class="gs-mode-btn" id="gsMode-light" onclick="setGsTagMode('light')">White</button>
+            </div>
+          </div>
+          <div class="flag-grid" id="flagGrid"></div>
+        </div>
       </div>
     </div>
 
@@ -309,6 +325,7 @@
     </div>
   </div>
 </div>
+
 
 <script type="module" src="/src/flags/design.js"></script>
 <script>

@@ -5,8 +5,9 @@ await requireAuth();
 
 import { S, setDragLogoId } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
-import { getFlag, applyColors } from '../render.js';
+import { getFlag, applyColors, showGsTagVariant } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
+import { loadGsTag, isLightColor } from '../gsTag.js';
 import {
   createProject, updateProject, loadProject,
   saveFlagConfig, loadFlagConfig,
@@ -67,44 +68,103 @@ function renderFlagGrid() {
   document.getElementById('flagGrid').innerHTML = FLAGS.map(f => `
     <div class="flag-card" id="fc-${f.id}" onclick="pickFlag('${f.id}')">
       <div class="flag-card-preview"><svg viewBox="${f.viewBox || '0 0 7519 4669'}" preserveAspectRatio="xMidYMid meet">${f.svgContent}</svg></div>
-      <div><div class="flag-card-name">${f.name}</div><div class="flag-card-zones">${f.colorZones.map(z => z.label).join(', ')}</div></div>
+      <div class="flag-card-name">${f.name}</div>
     </div>`).join('');
 }
 
-window.pickFlag = function (id) {
-  S.flagId = id;
-  S.logoLayout = 'single';
+function _autoTagStyle(flag, colors) {
+  const keyZone = flag.tagKeyZone || 'zone-primary';
+  const hex = colors[keyZone];
+  if (hex) return isLightColor(hex) ? 'Light' : 'Dark';
+  // No color set: flags with tagKeyZone have lighter secondary areas by design
+  return flag.tagKeyZone ? 'Light' : 'Dark';
+}
+
+function showFlagExpanded(id) {
+  const flag = FLAGS.find(f => f.id === id);
+  if (!flag) return;
+  document.getElementById('flagExpName').textContent = flag.name;
   document.querySelectorAll('.flag-card').forEach(c => c.classList.remove('selected'));
   document.getElementById('fc-' + id)?.classList.add('selected');
+  refreshFlagExpanded();
+}
+
+function refreshFlagExpanded() {
+  const preview = document.getElementById('flagExpPreview');
+  if (!preview) return;
+  const flag = getFlag();
+  if (!flag) {
+    preview.innerHTML = '<div class="flag-exp-placeholder">Select a style →</div>';
+    return;
+  }
+  preview.innerHTML = `<svg viewBox="${flag.viewBox || '0 0 7519 4669'}" width="100%" height="100%">${flag.svgContent}</svg>`;
+  const svg = preview.querySelector('svg');
+  applyColors(svg, S.colors, flag.noColors);
+  if (S.gsTag) {
+    const style = S.gsTagMode === 'light' ? 'Dark'
+      : S.gsTagMode === 'dark' ? 'Light'
+      : _autoTagStyle(flag, S.colors);
+    showGsTagVariant(svg, style, 'front');
+  }
+}
+
+window.pickFlag = function (id) {
+  if (S.flagId === id) { clearFlagSelection(); return; }
+  S.flagId = id;
+  S.logoLayout = 'single';
+  showFlagExpanded(id);
   renderP1Colors();
   checkStep1();
   syncSidebar();
   markDirty();
 };
 
-const P1_ZONES = [
-  { id: 'zone-primary',   label: 'Field color' },
-  { id: 'zone-secondary', label: 'Stripe color' },
-];
+window.clearFlagSelection = function () {
+  S.flagId = null;
+  document.getElementById('flagExpName').textContent = '';
+  document.querySelectorAll('.flag-card').forEach(c => c.classList.remove('selected'));
+  refreshFlagExpanded();
+  renderP1Colors();
+  checkStep1();
+  syncSidebar();
+  markDirty();
+};
 
 function renderP1Colors() {
   const container = document.getElementById('p1colorZones');
   if (!container) return;
-  container.innerHTML = P1_ZONES.map(z => {
+  const flag = getFlag();
+
+  if (flag?.noColors) {
+    container.innerHTML = '<div class="p1zone"><div class="zlabel" style="color:var(--gray-400);font-style:italic">Colors are fixed for this template</div></div>';
+    return;
+  }
+
+  // Always show pickers — use flag's zones when available, else generic defaults
+  const zones = flag?.colorZones || [
+    { id: 'zone-primary', label: 'Primary Color' },
+    { id: 'zone-secondary', label: 'Secondary Color' },
+  ];
+
+  container.innerHTML = zones.map(z => {
+    const label = z.id === 'zone-primary' ? 'Primary Color' : 'Secondary Color';
     const hex = S.colors[z.id];
     const col = COLORS.find(c => c.hex === hex);
     if (hex) {
       return `<div class="p1zone">
-        <div class="zlabel">${z.label}</div>
+        <div class="zlabel">${label}</div>
         <div class="color-chip-picked">
           <span class="chip-dot" style="background:${hex};${hex === '#FFFFFF' ? 'border:1px solid var(--gray-200)' : ''}"></span>
-          <span>${col?.name || hex}</span>
+          <div class="chip-info">
+            <span class="chip-name">${col?.name || hex}</span>
+            <span class="chip-hex">${hex}</span>
+          </div>
           <button class="chip-clear" onclick="clearColor('${z.id}')">×</button>
         </div>
       </div>`;
     }
     return `<div class="p1zone">
-      <div class="zlabel">${z.label}</div>
+      <div class="zlabel">${label}</div>
       <div class="swatch-grid" id="p1sg-${z.id}">
         ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''}"
           style="background:${c.hex}" title="${c.name}"
@@ -130,28 +190,61 @@ window.clearColor = function (zoneId) {
   delete S.colors[zoneId];
   renderP1Colors();
   refreshFlagPreviews();
+  refreshColorPrev();
   checkStep1();
   syncSidebar();
 };
+
+window.toggleGsTag = function (checked) {
+  S.gsTag = checked;
+  document.getElementById('gsTagModeWrap').style.display = checked ? 'flex' : 'none';
+  refreshFlagPreviews();
+  refreshColorPrev();
+  markDirty();
+};
+
+window.setGsTagMode = function (mode) {
+  S.gsTagMode = mode;
+  document.querySelectorAll('.gs-mode-btn').forEach(b => b.classList.toggle('active', b.id === 'gsMode-' + mode));
+  refreshFlagPreviews();
+  refreshColorPrev();
+  markDirty();
+};
+
+function syncGsTagUI() {
+  const check = document.getElementById('gsTagCheck');
+  if (check) check.checked = S.gsTag;
+  const wrap = document.getElementById('gsTagModeWrap');
+  if (wrap) wrap.style.display = S.gsTag ? 'flex' : 'none';
+  document.querySelectorAll('.gs-mode-btn').forEach(b => b.classList.toggle('active', b.id === 'gsMode-' + (S.gsTagMode || 'auto')));
+}
 
 function refreshFlagPreviews() {
   FLAGS.forEach(f => {
     const card = document.getElementById('fc-' + f.id);
     if (!card) return;
     const svg = card.querySelector('svg');
-    if (svg) applyColors(svg, S.colors);
+    if (!svg) return;
+    applyColors(svg, S.colors, f.noColors);
+    if (S.gsTag) {
+      const style = S.gsTagMode === 'light' ? 'Light'
+        : S.gsTagMode === 'dark' ? 'Dark'
+        : _autoTagStyle(f, S.colors);
+      showGsTagVariant(svg, style, 'front');
+    }
   });
 }
 
 function checkStep1() {
   const flag = getFlag();
-  const fieldOk = !!S.colors['zone-primary'];
-  const stripeNeeded = flag?.colorZones.some(z => z.id === 'zone-secondary');
-  const ok = !!flag && fieldOk && (!stripeNeeded || !!S.colors['zone-secondary']);
+  const ok = !!flag && (
+    flag.noColors ||
+    (!!S.colors['zone-primary'] && (!flag.colorZones.some(z => z.id === 'zone-secondary') || !!S.colors['zone-secondary']))
+  );
   const btn = document.getElementById('s1next');
   if (btn) btn.disabled = !ok;
   const hint = document.getElementById('s1hint');
-  if (hint) hint.textContent = ok ? '' : !flag ? 'Pick colors and select a style' : 'Pick colors to continue';
+  if (hint) hint.textContent = ok ? '' : !flag ? 'Pick a style' : 'Pick colors to continue';
 }
 
 window.p1ToggleCPop = function (zid) {
@@ -175,9 +268,16 @@ window.p1CApply  = function (zid) {
 function setupColors() {
   const flag = getFlag();
   if (!flag) return;
+  if (flag.noColors) {
+    document.getElementById('colorZones').innerHTML = '<div style="color:var(--gray-400);font-size:13px;padding:.5rem 0">Colors are fixed for this template — nothing to configure.</div>';
+    document.getElementById('colorPrevName').textContent = flag.name;
+    refreshColorPrev();
+    checkColors();
+    return;
+  }
   document.getElementById('colorZones').innerHTML = flag.colorZones.map(z => `
     <div>
-      <div class="zlabel">${z.label}</div>
+      <div class="zlabel">${z.id === 'zone-primary' ? 'Primary Color' : 'Secondary Color'}</div>
       <div class="swatch-grid" id="sg-${z.id}">
         ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${S.colors[z.id] === c.hex ? 'sel' : ''}"
           style="background:${c.hex}" data-hex="${c.hex}" title="${c.name}"
@@ -223,14 +323,22 @@ function refreshColorPrev() {
   const box = document.getElementById('colorPrev');
   if (!box) return;
   box.innerHTML = `<svg viewBox="${flag.viewBox || '0 0 7519 4669'}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${flag.svgContent}</svg>`;
-  applyColors(box.querySelector('svg'), S.colors);
+  const svg = box.querySelector('svg');
+  applyColors(svg, S.colors, flag.noColors);
+  if (S.gsTag) {
+    const style = S.gsTagMode === 'light' ? 'Dark'
+      : S.gsTagMode === 'dark' ? 'Light'
+      : _autoTagStyle(flag, S.colors);
+    showGsTagVariant(svg, style, 'front');
+  }
+  refreshFlagExpanded();
 }
 
 function checkColors() {
   const flag = getFlag();
   if (!flag) return;
   const btn = document.getElementById('s2next');
-  if (btn) btn.disabled = !flag.colorZones.every(z => S.colors[z.id]);
+  if (btn) btn.disabled = !flag.noColors && !flag.colorZones.every(z => S.colors[z.id]);
 }
 
 window.toggleCPop = function (zid) {
@@ -327,26 +435,15 @@ function setupLibrary() {
   if (!svg) return;
   svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
   svg.innerHTML = flag.svgContent;
-  applyColors(svg, S.colors);
+  applyColors(svg, S.colors, flag.noColors);
   renderLib();
-  renderDropZones('baseWrap', 'baseSvg', S.baseAssignment);
+  renderDropZones('baseWrap', 'baseSvg', [], 'front', () => {});
 }
 
 // ── Sidebar ────────────────────────────────────────────────
 
 function syncSidebar() {
-  const flag = getFlag();
-  const sumStyle = document.getElementById('sumStyle');
-  if (sumStyle) { sumStyle.textContent = flag?.name || '—'; sumStyle.style.color = flag ? 'var(--black)' : 'var(--gray-400)'; }
-  const z0 = flag?.colorZones[0], z1 = flag?.colorZones[1];
-  const h0 = z0 ? S.colors[z0.id] : null, h1 = z1 ? S.colors[z1.id] : null;
-  const c0 = COLORS.find(c => c.hex === h0), c1 = COLORS.find(c => c.hex === h1);
-  const sp = document.getElementById('sumP');
-  if (sp) { sp.innerHTML = h0 ? `<span class="dot" style="background:${h0}"></span>${c0?.name || h0}` : '—'; sp.style.color = h0 ? 'var(--black)' : 'var(--gray-400)'; }
-  const ss = document.getElementById('sumS');
-  if (ss) { ss.innerHTML = h1 ? `<span class="dot" style="background:${h1}"></span>${c1?.name || h1}` : (z1 ? '—' : 'n/a'); ss.style.color = h1 ? 'var(--black)' : 'var(--gray-400)'; }
-  const sumLC = document.getElementById('sumLC');
-  if (sumLC) { sumLC.textContent = S.library.length || '—'; sumLC.style.color = S.library.length ? 'var(--black)' : 'var(--gray-400)'; }
+  // Summary section removed — nothing to sync
 }
 
 window.setProjectName = function (val) {
@@ -384,9 +481,7 @@ function renderCustomerSection(intake) {
 
 window.saveDraft = async function () {
   const btn = document.getElementById('saveDraftBtn');
-  const status = document.getElementById('saveStatus');
-  if (btn) btn.disabled = true;
-  if (status) status.textContent = 'Saving…';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="save-spin"></span>'; }
   try {
     if (!S.projectId) {
       S.projectId = await createProject(S.projectName);
@@ -396,13 +491,13 @@ window.saveDraft = async function () {
     }
     await saveFlagConfig(S.projectId, S);
     markClean();
-    if (status) status.textContent = 'Saved';
-    setTimeout(() => { if (status) status.textContent = ''; }, 3000);
+    if (btn) {
+      btn.innerHTML = '<span class="save-check">✓</span>';
+      setTimeout(() => { btn.innerHTML = 'Save draft'; btn.disabled = false; }, 1500);
+    }
   } catch (err) {
     console.error(err);
-    if (status) status.textContent = 'Save failed';
-  } finally {
-    if (btn) btn.disabled = false;
+    if (btn) { btn.innerHTML = 'Save draft'; btn.disabled = false; }
   }
 };
 
@@ -413,7 +508,7 @@ window.goToVariations = async function () {
 
 // ── Init ──────────────────────────────────────────────────
 
-await loadAllFlags(FLAGS);
+await Promise.all([loadAllFlags(FLAGS), loadGsTag()]);
 renderFlagGrid();
 renderP1Colors();
 
@@ -436,6 +531,9 @@ if (_urlProject) {
       const varItems = Array.isArray(varData) ? varData : (varData.items || []);
       S.variations = varItems.map(v => ({ ...v, backAssignment: v.backAssignment || {} }));
       S.logoLayout = Array.isArray(varData) ? 'single' : (varData.layout || 'single');
+      S.gsTag = Array.isArray(varData) ? true : (varData.gsTag ?? true);
+      S.gsTagMode = Array.isArray(varData) ? 'auto' : (varData.gsTagMode ?? 'auto');
+      S.gsTagColor = Array.isArray(varData) ? '#ffffff' : (varData.gsTagColor ?? '#ffffff');
       S.baseAssignment = flagCfg.base_assignment || {};
       S.sameLogoOnBothSides = flagCfg.same_logo_on_both_sides ?? true;
       S.activeVarId = S.variations[0]?.id || null;
@@ -447,13 +545,15 @@ if (_urlProject) {
       if (colors[0]?.hex) S.colors['zone-primary'] = colors[0].hex;
       if (colors[1]?.hex) S.colors['zone-secondary'] = colors[1].hex;
     }
-    const nameInput = document.getElementById('projectNameInput');
-    if (nameInput) nameInput.value = S.projectName;
-    if (S.flagId) document.getElementById('fc-' + S.flagId)?.classList.add('selected');
+    const nameDisplay = document.getElementById('projectNameDisplay');
+    if (nameDisplay) nameDisplay.textContent = S.projectName || '—';
+    if (!S.flagId) S.flagId = 'plain';
+    showFlagExpanded(S.flagId);
     renderP1Colors();
     refreshFlagPreviews();
     checkStep1();
     syncSidebar();
+    syncGsTagUI();
     if (intake) renderCustomerSection(intake);
   } catch (err) {
     console.error('Could not load project', err);
