@@ -1,90 +1,16 @@
 import { S, _dragLogoId, setDragLogoId } from '../state.js';
-import { getFlag, applyColors, getLogoData, renderInto } from '../render.js';
+import { getFlag, applyColors, showGsTagVariant } from '../render.js';
 import { uploadLogo } from '../supabase.js';
 import { logoThumbHtml } from '../media-utils.js';
+import { isLightColor } from '../gsTag.js';
 
-let _activeZone = null;
-let _ensureProject = async () => {};
-let _markDirty = () => {};
 let _onLibraryUpdated = () => {};
+// { layerId, logos, dz, wrapId, svgId, face, onChange }
+// layerId === '_add_' means "add new logo" mode
+let _activeLayer = null;
 
-export function initDropZones({ ensureProject, markDirty, onLibraryUpdated }) {
-  _ensureProject = ensureProject || _ensureProject;
-  _markDirty = markDirty || _markDirty;
+export function initDropZones({ ensureProject, markDirty, onLibraryUpdated } = {}) {
   _onLibraryUpdated = onLibraryUpdated || _onLibraryUpdated;
-}
-
-function refreshVarThumbs() {
-  S.variations.forEach(v => {
-    const el = document.getElementById('vt-' + v.id);
-    if (!el) return;
-    renderInto(el, v.assignment, 'front');
-  });
-}
-
-function setDzSolo(wrapId, on) {
-  const wrap = wrapId ? document.getElementById(wrapId) : null;
-  if (wrap) wrap.classList.toggle('dz-solo', on);
-}
-
-function syncBadges(wrapId) {
-  const wrap = wrapId ? document.getElementById(wrapId) : null;
-  if (!wrap) return;
-  const dzones = Array.from(wrap.querySelectorAll('.dzone'));
-  wrap.querySelectorAll('.dz-badge').forEach((b, i) => {
-    b.classList.toggle('active', dzones[i] === _activeZone?.dz);
-  });
-}
-
-function renderLibPicker() {
-  const picker = document.getElementById('dzLibPicker');
-  if (!picker || !_activeZone) return;
-  const { assignment, zoneId, wrapId, svgId, face } = _activeZone;
-  const existing = getLogoData(assignment, zoneId);
-  picker.innerHTML = S.library.length
-    ? S.library.map(l => `
-        <div class="dz-lp-item${existing?.id === l.id ? ' active' : ''}" data-lid="${l.id}" title="${l.name}">
-          ${logoThumbHtml(l.src, l.name)}
-        </div>`).join('') + `<div class="dz-lp-upload" id="dzLpUpload">+ Upload</div>`
-    : `<div class="dz-lp-upload" id="dzLpUpload">+ Upload</div>`;
-
-  picker.querySelectorAll('.dz-lp-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const lid = el.dataset.lid;
-      assignment[zoneId] = { id: lid, x: existing?.x ?? 50, y: existing?.y ?? 50, w: existing?.w ?? 80 };
-      hideZoneToolbar();
-      renderDropZones(wrapId, svgId, assignment, face);
-      refreshVarThumbs();
-      _markDirty();
-    });
-  });
-  picker.querySelector('#dzLpUpload')?.addEventListener('click', () => {
-    document.getElementById('dzReplaceFile').click();
-  });
-}
-
-function showZoneToolbar(dz, openPicker = false) {
-  ensureToolbar();
-  setDzSolo(_activeZone?.wrapId, true);
-  syncBadges(_activeZone?.wrapId);
-  const hasLogo = !!getLogoData(_activeZone?.assignment, _activeZone?.zoneId);
-  document.getElementById('dzTbRemove').style.display = hasLogo ? '' : 'none';
-  document.getElementById('dzTbSep').style.display    = hasLogo ? '' : 'none';
-  document.getElementById('dzTbReplace').textContent  = hasLogo ? 'Replace ▾' : 'Choose logo ▾';
-
-  const picker = document.getElementById('dzLibPicker');
-  picker.style.display = openPicker ? 'block' : 'none';
-  if (openPicker) renderLibPicker();
-
-  const tb = document.getElementById('dzToolbar');
-  tb.style.display = 'flex';
-  const dzRect = dz.getBoundingClientRect();
-  const tbH = tb.offsetHeight || 36;
-  const topAbove = dzRect.top + window.scrollY - tbH - 6;
-  const topBelow = dzRect.bottom + window.scrollY + 6;
-  const top = dzRect.top > tbH + 20 ? topAbove : topBelow;
-  tb.style.left = Math.max(8, dzRect.left + window.scrollX) + 'px';
-  tb.style.top = top + 'px';
 }
 
 export function hideZoneToolbar() {
@@ -92,10 +18,70 @@ export function hideZoneToolbar() {
   if (tb) tb.style.display = 'none';
   const picker = document.getElementById('dzLibPicker');
   if (picker) picker.style.display = 'none';
-  if (_activeZone?.dz) _activeZone.dz.classList.remove('selected');
-  setDzSolo(_activeZone?.wrapId, false);
-  syncBadges(_activeZone?.wrapId);
-  _activeZone = null;
+  _activeLayer?.dz?.querySelectorAll('.dz-logo-wrap').forEach(w => w.classList.remove('selected'));
+  _activeLayer = null;
+}
+
+function positionToolbar(anchorEl, show = false) {
+  const tb = document.getElementById('dzToolbar');
+  if (!tb || !anchorEl) return;
+  if (show) tb.style.display = 'flex';
+  else if (tb.style.display === 'none') return;
+  const rect = anchorEl.getBoundingClientRect();
+  const tbH = tb.offsetHeight || 36;
+  const topAbove = rect.top + window.scrollY - tbH - 8;
+  const topBelow = rect.bottom + window.scrollY + 8;
+  tb.style.top  = (rect.top > tbH + 20 ? topAbove : topBelow) + 'px';
+  tb.style.left = Math.max(8, rect.left + window.scrollX) + 'px';
+}
+
+function renderLibPicker() {
+  const picker = document.getElementById('dzLibPicker');
+  if (!picker || !_activeLayer) return;
+  const { layerId, logos } = _activeLayer;
+  const isAdd = layerId === '_add_';
+  const layer = logos.find(l => l.id === layerId);
+
+  picker.innerHTML = S.library.map(l => `
+      <div class="dz-lp-item${!isAdd && layer?.logoId === l.id ? ' active' : ''}" data-lid="${l.id}" title="${l.name}">
+        ${logoThumbHtml(l.src, l.name)}
+      </div>`).join('') + `<div class="dz-lp-upload" id="dzLpUpload">+</div>`;
+
+  picker.querySelectorAll('.dz-lp-item').forEach(el => {
+    el.addEventListener('click', () => {
+      if (!_activeLayer) return;
+      const { layerId, logos, wrapId, svgId, face, onChange } = _activeLayer;
+      const lid = el.dataset.lid;
+      if (layerId === '_add_') {
+        logos.push({ id: 'pl-' + Date.now(), logoId: lid, x: 50, y: 50, w: 60 });
+      } else {
+        const l = logos.find(l => l.id === layerId);
+        if (l) l.logoId = lid;
+      }
+      hideZoneToolbar();
+      renderDropZones(wrapId, svgId, logos, face, onChange);
+      onChange();
+    });
+  });
+
+  picker.querySelector('#dzLpUpload')?.addEventListener('click', () => {
+    document.getElementById('dzReplaceFile').click();
+  });
+}
+
+function showToolbar(anchorEl, isAdd) {
+  ensureToolbar();
+  const showOrder = !isAdd && (_activeLayer?.logos?.length > 1);
+  document.getElementById('dzTbRemove').style.display = isAdd ? 'none' : '';
+  document.getElementById('dzTbSep').style.display = isAdd ? 'none' : '';
+  document.getElementById('dzTbBack').style.display = showOrder ? '' : 'none';
+  document.getElementById('dzTbFront').style.display = showOrder ? '' : 'none';
+  document.getElementById('dzTbOrderSep').style.display = showOrder ? '' : 'none';
+  document.getElementById('dzTbReplace').textContent  = isAdd ? 'Add logo ▾' : 'Replace ▾';
+
+  const picker = document.getElementById('dzLibPicker');
+  picker.style.display = 'none';
+  positionToolbar(anchorEl, true);
 }
 
 function ensureToolbar() {
@@ -104,6 +90,9 @@ function ensureToolbar() {
   t.id = 'dzToolbar';
   t.className = 'dz-toolbar';
   t.innerHTML = `
+    <button class="dz-tb-btn" id="dzTbBack" title="Send to back">↙ Back</button>
+    <button class="dz-tb-btn" id="dzTbFront" title="Bring to front">↗ Front</button>
+    <div class="dz-tb-sep" id="dzTbOrderSep"></div>
     <button class="dz-tb-btn" id="dzTbRemove">Remove</button>
     <div class="dz-tb-sep" id="dzTbSep"></div>
     <div style="position:relative">
@@ -113,14 +102,34 @@ function ensureToolbar() {
     <input type="file" id="dzReplaceFile" accept="image/*,.pdf,.ai,.eps" style="display:none">`;
   document.body.appendChild(t);
 
-  document.getElementById('dzTbRemove').addEventListener('click', () => {
-    if (!_activeZone) return;
-    const { assignment, zoneId, wrapId, svgId, face } = _activeZone;
-    delete assignment[zoneId];
+  document.getElementById('dzTbBack').addEventListener('click', () => {
+    if (!_activeLayer || _activeLayer.layerId === '_add_') return;
+    const { layerId, logos, wrapId, svgId, face, onChange } = _activeLayer;
+    const idx = logos.findIndex(l => l.id === layerId);
+    if (idx > 0) { const [item] = logos.splice(idx, 1); logos.unshift(item); }
     hideZoneToolbar();
-    renderDropZones(wrapId, svgId, assignment, face);
-    refreshVarThumbs();
-    _markDirty();
+    renderDropZones(wrapId, svgId, logos, face, onChange);
+    onChange();
+  });
+
+  document.getElementById('dzTbFront').addEventListener('click', () => {
+    if (!_activeLayer || _activeLayer.layerId === '_add_') return;
+    const { layerId, logos, wrapId, svgId, face, onChange } = _activeLayer;
+    const idx = logos.findIndex(l => l.id === layerId);
+    if (idx < logos.length - 1) { const [item] = logos.splice(idx, 1); logos.push(item); }
+    hideZoneToolbar();
+    renderDropZones(wrapId, svgId, logos, face, onChange);
+    onChange();
+  });
+
+  document.getElementById('dzTbRemove').addEventListener('click', () => {
+    if (!_activeLayer || _activeLayer.layerId === '_add_') return;
+    const { layerId, logos, wrapId, svgId, face, onChange } = _activeLayer;
+    const idx = logos.findIndex(l => l.id === layerId);
+    if (idx >= 0) logos.splice(idx, 1);
+    hideZoneToolbar();
+    renderDropZones(wrapId, svgId, logos, face, onChange);
+    onChange();
   });
 
   document.getElementById('dzTbReplace').addEventListener('click', e => {
@@ -134,39 +143,44 @@ function ensureToolbar() {
   document.getElementById('dzReplaceFile').addEventListener('change', async e => {
     const file = e.target.files[0];
     e.target.value = '';
-    if (!file || !_activeZone) return;
-    const { assignment, zoneId, wrapId, svgId, face } = _activeZone;
-    const existing = getLogoData(assignment, zoneId);
-    await _ensureProject();
+    if (!file || !_activeLayer) return;
+    const { layerId, logos, wrapId, svgId, face, onChange } = _activeLayer;
     try {
       const logo = await uploadLogo(S.projectId, file);
       S.library.push(logo);
-      assignment[zoneId] = { id: logo.id, x: existing?.x ?? 50, y: existing?.y ?? 50, w: existing?.w ?? 80 };
+      if (layerId === '_add_') {
+        logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 60 });
+      } else {
+        const l = logos.find(l => l.id === layerId);
+        if (l) l.logoId = logo.id;
+      }
       hideZoneToolbar();
       _onLibraryUpdated();
-      renderDropZones(wrapId, svgId, assignment, face);
-      refreshVarThumbs();
-      _markDirty();
+      renderDropZones(wrapId, svgId, logos, face, onChange);
+      onChange();
     } catch (err) { console.error('Upload failed', err); }
   });
 
   document.addEventListener('click', e => {
-    if (!e.target.closest('#dzToolbar') && !e.target.closest('.dz-logo-wrap') && !e.target.closest('.dzone') && !e.target.closest('.dz-badge')) hideZoneToolbar();
+    if (!e.target.closest('#dzToolbar') && !e.target.closest('.dz-logo-wrap') && !e.target.closest('.dzone')) {
+      hideZoneToolbar();
+    }
   });
 }
 
-function setupLogoInteraction(logoWrap, resizeHandle, dz, assignment, zoneId, wrapId, svgId, face) {
+function setupLogoInteraction(logoWrap, corners, dz, layer, logos, wrapId, svgId, face, onChange) {
+  const isCorner = el => corners.some(c => c.el === el);
   let dragging = false, startPX, startPY, startX, startY;
 
   logoWrap.addEventListener('pointerdown', e => {
-    if (e.target === resizeHandle) return;
+    if (isCorner(e.target)) return;
     dragging = true;
     dz.classList.add('dz-adjusting');
-    setDzSolo(wrapId, true);
     logoWrap.setPointerCapture(e.pointerId);
     startPX = e.clientX; startPY = e.clientY;
-    startX  = parseFloat(logoWrap.style.left);
-    startY  = parseFloat(logoWrap.style.top);
+    startX = layer.x; startY = layer.y;
+    const tb = document.getElementById('dzToolbar');
+    if (tb) tb.style.visibility = 'hidden';
     e.preventDefault();
   });
 
@@ -175,19 +189,20 @@ function setupLogoInteraction(logoWrap, resizeHandle, dz, assignment, zoneId, wr
     const dzRect = dz.getBoundingClientRect();
     const dx = (e.clientX - startPX) / dzRect.width  * 100;
     const dy = (e.clientY - startPY) / dzRect.height * 100;
-    const hw = parseFloat(logoWrap.style.width) / 2;
+    const hw = layer.w / 2;
     let nx = Math.max(hw, Math.min(100 - hw, startX + dx));
-    let ny = Math.max(5,  Math.min(95,        startY + dy));
+    let ny = Math.max(5, Math.min(95, startY + dy));
 
-    const snapX = 5 / dzRect.width  * 100;
-    const snapY = 5 / dzRect.height * 100;
-    const snapH = Math.abs(nx - 50) < snapX;
-    const snapV = Math.abs(ny - 50) < snapY;
+    const snapPxX = 5 / dzRect.width  * 100;
+    const snapPxY = 5 / dzRect.height * 100;
+    const snapH = Math.abs(nx - 50) < snapPxX;
+    const snapV = Math.abs(ny - 50) < snapPxY;
     if (snapH) nx = 50;
     if (snapV) ny = 50;
     dz.classList.toggle('snap-h', snapH);
     dz.classList.toggle('snap-v', snapV);
 
+    layer.x = nx; layer.y = ny;
     logoWrap.style.left = nx + '%';
     logoWrap.style.top  = ny + '%';
   });
@@ -196,59 +211,88 @@ function setupLogoInteraction(logoWrap, resizeHandle, dz, assignment, zoneId, wr
     if (!dragging) return;
     dragging = false;
     dz.classList.remove('dz-adjusting', 'snap-h', 'snap-v');
-    if (!_activeZone || _activeZone.dz !== dz) setDzSolo(wrapId, false);
-    const nx = parseFloat(logoWrap.style.left);
-    const ny = parseFloat(logoWrap.style.top);
-    const prev = getLogoData(assignment, zoneId) || {};
-    assignment[zoneId] = { ...prev, x: nx, y: ny };
-    refreshVarThumbs();
-    _markDirty();
+    const tb = document.getElementById('dzToolbar');
+    if (tb) { tb.style.visibility = ''; positionToolbar(logoWrap); }
+    onChange();
   });
 
-  let resizing = false, rStartX, rStartW, rDzW;
+  corners.forEach(({ pos, el: handle }) => {
+    const isLeft = pos === 'tl' || pos === 'bl';
+    const isTop  = pos === 'tl' || pos === 'tr';
+    // unit vector pointing outward from center for this corner
+    const dirX = isLeft ? -1 : 1;
+    const dirY = isTop  ? -1 : 1;
+    let resizing = false, rStartX, rStartY, rStartW, rStartX0, rDzW, rDzH;
 
-  resizeHandle.addEventListener('pointerdown', e => {
-    resizing = true;
-    dz.classList.add('dz-adjusting');
-    setDzSolo(wrapId, true);
-    resizeHandle.setPointerCapture(e.pointerId);
-    rStartX = e.clientX;
-    rStartW = parseFloat(logoWrap.style.width);
-    rDzW    = dz.getBoundingClientRect().width;
+    handle.addEventListener('pointerdown', e => {
+      resizing = true;
+      dz.classList.add('dz-adjusting');
+      handle.setPointerCapture(e.pointerId);
+      rStartX = e.clientX;
+      rStartY = e.clientY;
+      rStartW = layer.w;
+      rStartX0 = layer.x;
+      const dzRect = dz.getBoundingClientRect();
+      rDzW = dzRect.width;
+      rDzH = dzRect.height;
+      const tb = document.getElementById('dzToolbar');
+      if (tb) tb.style.visibility = 'hidden';
+      e.stopPropagation();
+      e.preventDefault();
+    });
+
+    handle.addEventListener('pointermove', e => {
+      if (!resizing) return;
+      const dx = e.clientX - rStartX;
+      const dy = e.clientY - rStartY;
+      // dead-zone: ignore micro-movements
+      if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+      // project displacement onto outward direction; both axes contribute
+      const rawDx = dx / rDzW * 100 * 2;
+      const rawDy = dy / rDzH * 100 * 2;
+      const dw = dirX * rawDx + dirY * rawDy;
+      const nw = Math.max(10, Math.min(150, rStartW + dw));
+      const actualDw = nw - rStartW;
+      layer.w = nw;
+      logoWrap.style.width = nw + '%';
+      if (isLeft) {
+        layer.x = Math.max(nw / 2, Math.min(100 - nw / 2, rStartX0 - actualDw / 2));
+        logoWrap.style.left = layer.x + '%';
+      }
+    });
+
+    handle.addEventListener('pointerup', () => {
+      if (!resizing) return;
+      resizing = false;
+      dz.classList.remove('dz-adjusting');
+      const tb = document.getElementById('dzToolbar');
+      if (tb) { tb.style.visibility = ''; positionToolbar(logoWrap); }
+      onChange();
+    });
+  });
+
+  logoWrap.addEventListener('click', e => {
     e.stopPropagation();
-    e.preventDefault();
-  });
-
-  resizeHandle.addEventListener('pointermove', e => {
-    if (!resizing) return;
-    const delta = (e.clientX - rStartX) / rDzW * 100 * 2;
-    const nw = Math.max(15, Math.min(100, rStartW + delta));
-    logoWrap.style.width = nw + '%';
-  });
-
-  resizeHandle.addEventListener('pointerup', () => {
-    if (!resizing) return;
-    resizing = false;
-    dz.classList.remove('dz-adjusting');
-    if (!_activeZone || _activeZone.dz !== dz) setDzSolo(wrapId, false);
-    const nw = parseFloat(logoWrap.style.width);
-    const prev = getLogoData(assignment, zoneId) || {};
-    assignment[zoneId] = { ...prev, w: nw };
-    refreshVarThumbs();
-    _markDirty();
+    dz.querySelectorAll('.dz-logo-wrap').forEach(w => w.classList.remove('selected'));
+    logoWrap.classList.add('selected');
+    _activeLayer = { layerId: layer.id, logos, dz, wrapId, svgId, face, onChange };
+    showToolbar(logoWrap, false);
+    document.getElementById('dzLibPicker').style.display = 'none';
   });
 }
 
-export function renderDropZones(wrapId, svgId, assignment, face = 'front') {
-  const flag = getFlag();
+export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange = () => {}, flagOverride = null, colorsOverride = null) {
+  const flag = flagOverride || getFlag();
   if (!flag) return;
   const wrap = document.getElementById(wrapId);
   if (!wrap) return;
+
   wrap.querySelectorAll('.dzone, .dz-badge').forEach(d => d.remove());
   const svg = document.getElementById(svgId);
   if (!svg) return;
-  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
+
   const [vbW, vbH] = (flag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
+  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
   if (face === 'back') {
     svg.innerHTML = '';
     const ns = 'http://www.w3.org/2000/svg';
@@ -259,107 +303,117 @@ export function renderDropZones(wrapId, svgId, assignment, face = 'front') {
   } else {
     svg.innerHTML = flag.svgContent;
   }
-  applyColors(svg, S.colors);
+  const colors = colorsOverride || S.colors;
+  applyColors(svg, colors, flag.noColors);
+
+  if (S.gsTag) {
+    const keyZone = flag.tagKeyZone || 'zone-primary';
+    const keyHex = colors[keyZone];
+    const style = S.gsTagMode === 'light' ? 'Dark'
+      : S.gsTagMode === 'dark' ? 'Light'
+      : keyHex ? (isLightColor(keyHex) ? 'Light' : 'Dark')
+      : (flag.tagKeyZone ? 'Light' : 'Dark');
+    showGsTagVariant(svg, style, face);
+  }
+
   wrap.style.aspectRatio = vbW + ' / ' + vbH;
 
-  flag.logoZones.forEach(zone => {
-    const ld = getLogoData(assignment, zone.id);
-    const logo = ld ? S.library.find(l => l.id === ld.id) : null;
-    const zoneX = face === 'back' ? vbW - zone.x - zone.w : zone.x;
-    const left   = (zoneX  / vbW) * 100;
-    const top    = (zone.y / vbH) * 100;
-    const width  = (zone.w / vbW) * 100;
-    const height = (zone.h / vbH) * 100;
+  const zone = flag.logoZones[0];
+  if (!zone) return;
 
-    const dz = document.createElement('div');
-    dz.className = 'dzone' + (logo ? ' has-logo' : '');
-    dz.dataset.zoneId = zone.id;
-    dz.style.cssText = `left:${left}%;top:${top}%;width:${width}%;height:${height}%;`;
+  const zoneX = face === 'back' ? vbW - zone.x - zone.w : zone.x;
+  const dz = document.createElement('div');
+  dz.className = 'dzone' + (logos.length ? ' has-logo' : '');
+  dz.style.cssText = [
+    `left:${(zoneX / vbW) * 100}%;`,
+    `top:${(zone.y / vbH) * 100}%;`,
+    `width:${(zone.w / vbW) * 100}%;`,
+    `height:${(zone.h / vbH) * 100}%;`,
+    'overflow:visible;',
+  ].join('');
 
-    const gh = document.createElement('div'); gh.className = 'dz-guide-h'; dz.appendChild(gh);
-    const gv = document.createElement('div'); gv.className = 'dz-guide-v'; dz.appendChild(gv);
+  // Crosshair guides
+  const gh = document.createElement('div'); gh.className = 'dz-guide-h'; dz.appendChild(gh);
+  const gv = document.createElement('div'); gv.className = 'dz-guide-v'; dz.appendChild(gv);
 
-    if (logo && ld) {
-      const logoWrap = document.createElement('div');
-      logoWrap.className = 'dz-logo-wrap';
-      logoWrap.style.left  = ld.x + '%';
-      logoWrap.style.top   = ld.y + '%';
-      logoWrap.style.width = ld.w + '%';
+  // Empty-state hint
+  if (!logos.length) {
+    const hint = document.createElement('div');
+    hint.className = 'dz-empty-hint';
+    hint.textContent = 'Drop a logo here';
+    dz.appendChild(hint);
+  }
 
-      const img = document.createElement('img');
-      img.className = 'placed-img';
-      img.src = logo.src;
-      img.alt = logo.name;
-      img.draggable = false;
-      logoWrap.appendChild(img);
+  // Logo layers
+  logos.forEach(layer => {
+    const logo = S.library.find(l => l.id === layer.logoId);
+    if (!logo) return;
 
-      const resizeHandle = document.createElement('div');
-      resizeHandle.className = 'dz-resize';
-      logoWrap.appendChild(resizeHandle);
+    const logoWrap = document.createElement('div');
+    logoWrap.className = 'dz-logo-wrap';
+    logoWrap.dataset.layerId = layer.id;
+    logoWrap.style.left  = layer.x + '%';
+    logoWrap.style.top   = layer.y + '%';
+    logoWrap.style.width = layer.w + '%';
 
-      dz.appendChild(logoWrap);
-      setupLogoInteraction(logoWrap, resizeHandle, dz, assignment, zone.id, wrapId, svgId, face);
+    const img = document.createElement('img');
+    img.className = 'placed-img';
+    img.src = logo.src;
+    img.alt = logo.name;
+    img.draggable = false;
+    logoWrap.appendChild(img);
 
-      logoWrap.addEventListener('click', e => {
-        e.stopPropagation();
-        if (_activeZone?.dz === dz) return;
-        if (_activeZone) _activeZone.dz.classList.remove('selected');
-        _activeZone = { dz, assignment, zoneId: zone.id, wrapId, svgId, face };
-        dz.classList.add('selected');
-        showZoneToolbar(dz);
-      });
-    }
-
-    if (!logo) {
-      dz.style.cursor = 'pointer';
-      dz.addEventListener('click', e => {
-        e.stopPropagation();
-        if (_activeZone?.dz === dz) return;
-        if (_activeZone) _activeZone.dz.classList.remove('selected');
-        _activeZone = { dz, assignment, zoneId: zone.id, wrapId, svgId, face };
-        dz.classList.add('selected');
-        showZoneToolbar(dz, true);
-      });
-    }
-
-    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
-    dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
-    dz.addEventListener('drop', e => {
-      e.preventDefault();
-      dz.classList.remove('drag-over');
-      const dragId = _dragLogoId;
-      if (!dragId) return;
-      const prev = getLogoData(assignment, zone.id);
-      assignment[zone.id] = { id: dragId, x: prev?.x ?? 50, y: prev?.y ?? 50, w: prev?.w ?? 80 };
-      setDragLogoId(null);
-      renderDropZones(wrapId, svgId, assignment, face);
-      refreshVarThumbs();
-      _markDirty();
+    const corners = ['tl','tr','bl','br'].map(pos => {
+      const h = document.createElement('div');
+      h.className = `dz-resize dz-resize-${pos}`;
+      logoWrap.appendChild(h);
+      return { pos, el: h };
     });
 
-    wrap.appendChild(dz);
+    dz.appendChild(logoWrap);
+    setupLogoInteraction(logoWrap, corners, dz, layer, logos, wrapId, svgId, face, onChange);
   });
 
-  if (flag.logoZones.length > 1) {
-    const dzones = Array.from(wrap.querySelectorAll('.dzone'));
-    flag.logoZones.forEach((zone, i) => {
-      const badge = document.createElement('button');
-      badge.className = 'dz-badge';
-      badge.textContent = i + 1;
-      badge.title = zone.label || `Zone ${i + 1}`;
-      const zoneX = face === 'back' ? vbW - zone.x - zone.w : zone.x;
-      badge.style.left = (zoneX / vbW * 100).toFixed(3) + '%';
-      badge.style.top  = (zone.y / vbH * 100).toFixed(3) + '%';
-      badge.addEventListener('click', e => {
-        e.stopPropagation();
-        const dz = dzones[i];
-        if (_activeZone) _activeZone.dz.classList.remove('selected');
-        setDzSolo(wrapId, false);
-        _activeZone = { dz, assignment, zoneId: zone.id, wrapId, svgId, face };
-        dz.classList.add('selected');
-        showZoneToolbar(dz);
-      });
-      wrap.appendChild(badge);
-    });
+  // "+" button — always visible bottom-right of zone
+  const addBtn = document.createElement('button');
+  addBtn.className = 'dz-add-btn';
+  addBtn.title = 'Add logo';
+  addBtn.textContent = '+';
+  function openAddPicker(anchorEl) {
+    _activeLayer = { layerId: '_add_', logos, dz, wrapId, svgId, face, onChange };
+    if (!S.library.length) {
+      ensureToolbar();
+      document.getElementById('dzReplaceFile').click();
+      return;
+    }
+    showToolbar(anchorEl, true);
+    const picker = document.getElementById('dzLibPicker');
+    picker.style.display = 'block';
+    renderLibPicker();
   }
+
+  addBtn.addEventListener('click', e => { e.stopPropagation(); openAddPicker(addBtn); });
+  dz.appendChild(addBtn);
+
+  // Click on zone background → open add picker
+  dz.addEventListener('click', e => {
+    if (e.target !== dz && !e.target.classList.contains('dz-empty-hint')) return;
+    openAddPicker(dz);
+  });
+
+  // Drop from library strip
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault();
+    dz.classList.remove('drag-over');
+    const dragId = _dragLogoId;
+    if (!dragId) return;
+    logos.push({ id: 'pl-' + Date.now(), logoId: dragId, x: 50, y: 50, w: 60 });
+    setDragLogoId(null);
+    renderDropZones(wrapId, svgId, logos, face, onChange);
+    onChange();
+  });
+
+  wrap.appendChild(dz);
 }

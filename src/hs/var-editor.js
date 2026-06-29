@@ -1,4 +1,5 @@
 import { HS, UI, alignBtns, eyedropperBtn, fontSelect, mergeBanner, getEffectiveState, syncAlignBtns } from './state.js';
+import { textLayerSource } from './text-layers.js';
 import { cloneTemplateLogos, loadCustomTemplates, menuRow } from './design.js';
 import { saveDraftInternal } from './export.js';
 import { renderBannerSection } from './banner.js';
@@ -38,6 +39,7 @@ window.startEditVar = function (id) {
     bannerBottom:  mergeBanner(eff.bannerBottom),
     templateLogos: cloneTemplateLogos(eff.templateLogos),
     sponsorText:   v.sponsorText ? { ...v.sponsorText } : { text: '', font: 'dm-serif', size: 300, color: '#111110' },
+    textLayers: (v.textLayers !== undefined ? v.textLayers : (HS.textLayers || [])).map(l => ({ ...l })),
   };
   (HS.editingDraft.templateLogos.slots || []).forEach(s => {
     if (s && s.logoSrc && s.logoArtworkBounds) {
@@ -97,6 +99,13 @@ window.applyEditVar = function () {
     delete v.sponsorText;
   }
 
+  // Text layers override — only store if they differ from the global
+  if (JSON.stringify(d.textLayers) !== JSON.stringify(HS.textLayers)) {
+    v.textLayers = d.textLayers.map(l => ({ ...l }));
+  } else {
+    delete v.textLayers;
+  }
+
   HS.editingVarId = null;
   HS.editingDraft = null;
   UI.tlSelectedIdx = null;
@@ -114,6 +123,7 @@ window.revertVarOverrides = function () {
   delete v.template;
   delete v.templateId;
   delete v.sponsorText;
+  delete v.textLayers;
   HS.editingVarId = null;
   HS.editingDraft = null;
   renderVarList();
@@ -234,7 +244,7 @@ const HS_VAR_MENU_TITLES = {
   template: 'Template', background: 'Background',
   bannerTop: 'Top banner', bannerBottom: 'Bottom banner',
   top: 'Top text', bottom: 'Bottom text', logos: 'Template logos', sponsor: 'Sponsor text',
-  tplSlot: 'Logo options',
+  tplSlot: 'Logo options', textLayers: 'Text layers',
 };
 
 export function buildVarTemplateSection(d, customs) {
@@ -321,6 +331,8 @@ export function renderEditor() {
       rows.push(menuRow('logos', 'Template logos', c ? `${c} logo${c > 1 ? 's' : ''}` : 'Off', 'openHsVarMenu'));
     }
     rows.push(menuRow('sponsor', 'Sponsor text', d.sponsorText?.text ? escXml(d.sponsorText.text) : 'Empty', 'openHsVarMenu'));
+    const tlCount = (d.textLayers || HS.textLayers || []).length;
+    rows.push(menuRow('textLayers', 'Text layers', tlCount ? `${tlCount} layer${tlCount !== 1 ? 's' : ''}` : 'None', 'openHsVarMenu'));
     body = `
       <div class="hs-menu-list">${rows.join('')}</div>
       <div class="var-editor-actions">
@@ -340,6 +352,12 @@ export function renderEditor() {
     else if (UI.hsVarMenu === 'tplSlot')   section = `<div class="hs-section">${renderTplSlotBody(UI.hsVarMenuSlotIdx ?? 0)}</div>`;
     else if (UI.hsVarMenu === 'sponsor')    section = renderDraftTextControls('sponsor', 'Sponsor text', true)
       + '<div style="font-size:11px;color:var(--gray-400);margin-top:-8px;margin-bottom:8px;padding:0 2px">Displayed in the logo zone when no logo is set for this variation.</div>';
+    else if (UI.hsVarMenu === 'textLayers') section = `
+      <div class="hs-editor-section">
+        <div class="hs-editor-label">Free text layers</div>
+        <div style="font-size:12px;color:var(--gray-500);margin-bottom:8px">Text layers float freely on the canvas. Click a layer in the preview to select, drag to move, double-click to edit.</div>
+        <button class="btn sm" onclick="addTextLayer()">+ Add text layer</button>
+      </div>`;
     const backFn = UI.hsVarMenu === 'tplSlot' ? "openHsVarMenu('logos')" : 'closeHsVarMenu()';
     body = `
       <div class="hs-menu-section-header">

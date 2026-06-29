@@ -23,7 +23,8 @@ export function ensureHsToolbar() {
       <button class="dz-tb-btn" id="hsTbReplace">Replace ▾</button>
       <div class="dz-lib-picker" id="hsLibPicker" style="display:none"></div>
     </div>
-    <input type="file" id="hsReplaceFile" accept="image/*,.pdf,.ai,.eps" style="display:none">`;
+    <input type="file" id="hsReplaceFile" accept="image/*,.pdf,.ai,.eps" style="display:none">
+    <input type="file" id="hsArtboardFile" accept="image/*" style="display:none">`;
   document.body.appendChild(t);
 
   document.getElementById('hsTbFill').addEventListener('click', fillHsLogo);
@@ -78,9 +79,9 @@ export function ensureHsToolbar() {
 
   document.getElementById('hsTbRemove').addEventListener('click', () => {
     if (!UI.hsActiveZone) return;
-    UI.hsActiveZone.variation.logoId = null;
-    UI.hsActiveZone.variation.logoSrc = null;
-    delete UI.hsActiveZone.variation.sponsorText;
+    const v = UI.hsActiveZone.variation;
+    v.logoId = null; v.logoSrc = null;
+    delete v.sponsorText; delete v.artboardSrc;
     hideHsToolbar();
     renderVarList();
     renderVariationPreview();
@@ -118,6 +119,24 @@ export function ensureHsToolbar() {
     } catch (err) { console.error('Upload failed', err); }
   });
 
+  document.getElementById('hsArtboardFile').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file || !UI.hsActiveZone) return;
+    try {
+      const logo = await uploadLogo(HS.projectId, file);
+      HS.library.push(logo);
+      const v = UI.hsActiveZone.variation;
+      v.artboardSrc = logo.src;
+      // Clear any logo/text content — artboard replaces it
+      v.logoId = null; v.logoSrc = null;
+      delete v.sponsorText; delete v.logoSrcTight; delete v.logoData;
+      hideHsToolbar();
+      renderVarList();
+      renderVariationPreview();
+    } catch (err) { console.error('Artboard upload failed', err); }
+  });
+
   document.addEventListener('click', e => {
     if (!e.target.closest('#hsZoneToolbar') && !e.target.closest('.dz-logo-wrap') && !e.target.closest('.dzone')) {
       hideHsToolbar();
@@ -138,7 +157,8 @@ export function renderHsLibPicker() {
   picker.innerHTML = `
     ${libHtml}
     <div class="dz-lp-upload" id="hsLpUpload">+ Upload image</div>
-    <div class="dz-lp-upload" id="hsLpText">+ Type text</div>`;
+    <div class="dz-lp-upload" id="hsLpText">+ Type text</div>
+    <div class="dz-lp-upload dz-lp-artboard" id="hsLpArtboard">+ Upload full design</div>`;
 
   picker.querySelectorAll('.dz-lp-item').forEach(el => {
     el.addEventListener('click', () => {
@@ -162,6 +182,10 @@ export function renderHsLibPicker() {
 
   picker.querySelector('#hsLpUpload')?.addEventListener('click', () => {
     document.getElementById('hsReplaceFile').click();
+  });
+
+  picker.querySelector('#hsLpArtboard')?.addEventListener('click', () => {
+    document.getElementById('hsArtboardFile').click();
   });
 
   picker.querySelector('#hsLpText')?.addEventListener('click', () => {
@@ -190,14 +214,15 @@ export function showHsToolbar(dz, openPicker = false) {
   const v = UI.hsActiveZone?.variation;
   const hasLogo = !!v?.logoSrc;
   const hasText = !!(v?.sponsorText?.text && v.sponsorText.text.trim());
-  const hasContent = hasLogo || hasText;
+  const hasArtboard = !!v?.artboardSrc;
+  const hasContent = hasLogo || hasText || hasArtboard;
   document.getElementById('hsTbFill').style.display         = hasLogo ? '' : 'none';
   document.getElementById('hsTbFillSep').style.display      = hasLogo ? '' : 'none';
   document.getElementById('hsTbRemoveBg').style.display     = hasLogo ? '' : 'none';
   document.getElementById('hsTbRemoveBgSep').style.display  = hasLogo ? '' : 'none';
   document.getElementById('hsTbRemove').style.display       = hasContent ? '' : 'none';
   document.getElementById('hsTbSep').style.display          = hasContent ? '' : 'none';
-  document.getElementById('hsTbReplace').textContent   = hasLogo ? 'Replace ▾' : hasText ? 'Change ▾' : 'Add logo or text ▾';
+  document.getElementById('hsTbReplace').textContent        = hasLogo ? 'Replace ▾' : hasArtboard ? 'Replace design ▾' : hasText ? 'Change ▾' : 'Add logo or text ▾';
 
   const picker = document.getElementById('hsLibPicker');
   picker.style.display = openPicker ? 'block' : 'none';

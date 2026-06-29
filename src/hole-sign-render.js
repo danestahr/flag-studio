@@ -264,7 +264,7 @@ export function getLogoZone(state, templateId) {
 // Word-wrap text into lines that fit within `maxW`. Width estimated from
 // font size — close enough for layout intent, the SVG renderer handles the
 // actual glyph metrics.
-function wrapText(text, maxW, fontSize) {
+export function wrapText(text, maxW, fontSize) {
   const charW = fontSize * 0.5;
   const maxChars = Math.max(1, Math.floor(maxW / charW));
   const results = [];
@@ -555,6 +555,23 @@ export function makeHoleSignSvg(state, variation) {
     ).join('');
     parts.push(`<text x="${botTextX}" y="${Math.round(firstBaseY)}" text-anchor="${botTextAnchor}" font-family="${escXml(getFamily(bottomText.font))}" font-size="${bottomText.size}" fill="${escXml(bottomText.color || '#111110')}">${tspans}</text>`);
   }
+
+  // Free text layers
+  const textLayers = state.textLayers || [];
+  const hideTL = state.hideTextLayers || [];
+  textLayers.forEach(layer => {
+    if (!layer.text || !layer.text.trim()) return;
+    if (hideTL.includes(layer.id)) return;
+    const lines = String(layer.text || '').split('\n');
+    const lineH = layer.size * 1.1;
+    const anchor = layer.align === 'left' ? 'start' : layer.align === 'right' ? 'end' : 'middle';
+    const tx = layer.align === 'left' ? layer.x : layer.align === 'right' ? layer.x + layer.w : layer.x + layer.w / 2;
+    const firstBaseY = layer.y + layer.size * 0.82;
+    const tspans = lines.map((line, i) =>
+      `<tspan x="${tx}"${i === 0 ? '' : ` dy="${lineH}"`}>${escXml(line)}</tspan>`
+    ).join('');
+    parts.push(`<text data-tl-id="${layer.id}" x="${tx}" y="${Math.round(firstBaseY)}" text-anchor="${anchor}" font-family="${escXml(getFamily(layer.font))}" font-size="${layer.size}" fill="${escXml(layer.color || '#111110')}">${tspans}</text>`);
+  });
 
   parts.push(`</svg>`);
   return { content: parts.join('\n'), viewBox };

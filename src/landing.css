@@ -14,6 +14,8 @@ header { background:var(--green); padding:0 2.5rem; height:64px; display:flex; a
 .logo { font-family:'DM Serif Display',serif; color:var(--white); font-size:20px; display:flex; align-items:center; gap:10px; }
 .logo-mark { width:28px; height:21px; background:var(--gold); border-radius:2px; position:relative; }
 .logo-mark::before { content:''; position:absolute; top:0; left:0; right:0; height:5px; background:var(--green-light); border-radius:2px 2px 0 0; }
+.back-link { color:rgba(255,255,255,.6); font-size:13px; text-decoration:none; transition:color .15s; }
+.back-link:hover { color:var(--white); }
 
 .landing-main { max-width:960px; margin:0 auto; padding:3rem 2rem; }
 
@@ -71,3 +73,64 @@ div.draft-card { cursor:pointer; }
 .export-btn { padding:.55rem 1.1rem; font-size:13px; font-weight:500; background:var(--black); color:var(--white); border:none; border-radius:7px; cursor:pointer; transition:opacity .15s; }
 .export-btn:hover { opacity:.82; }
 .export-btn:disabled { opacity:.45; cursor:default; }
+
+/* Delete button on project overview */
+.danger-btn { padding:.55rem 1.1rem; font-size:13px; font-weight:500; background:transparent; color:#c0392b; border:1.5px solid #c0392b; border-radius:7px; cursor:pointer; transition:background .15s, color .15s; }
+.danger-btn:hover { background:#c0392b; color:#fff; }
+
+/* Delete confirmation modal */
+.modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:1000; }
+.modal-box { background:#fff; border-radius:12px; padding:2rem; width:100%; max-width:400px; box-shadow:0 8px 40px rgba(0,0,0,.18); }
+.modal-title { font-family:'DM Serif Display',serif; font-size:22px; margin-bottom:.75rem; }
+.modal-body { font-size:14px; color:var(--gray-600); line-height:1.55; margin:0 0 1.25rem; }
+.modal-input { width:100%; box-sizing:border-box; padding:.6rem .75rem; font-size:14px; border:1.5px solid var(--gray-100); border-radius:7px; outline:none; margin-bottom:1.25rem; font-family:inherit; }
+.modal-input:focus { border-color:#c0392b; }
+.modal-actions { display:flex; justify-content:flex-end; gap:.75rem; }
+.btn-secondary { padding:.5rem 1rem; font-size:13px; font-weight:500; background:transparent; color:var(--gray-600); border:1.5px solid var(--gray-100); border-radius:7px; cursor:pointer; }
+.btn-secondary:hover { border-color:var(--gray-400); }
+.btn-danger { padding:.5rem 1rem; font-size:13px; font-weight:500; background:#c0392b; color:#fff; border:none; border-radius:7px; cursor:pointer; transition:opacity .15s; }
+.btn-danger:hover:not(:disabled) { opacity:.85; }
+.btn-danger:disabled { opacity:.4; cursor:default; }
+
+/* ── Customer Info panel ──────────────────────────────────── */
+.ci-card { background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--rl); padding:1.75rem; }
+.ci-card-header { display:flex; justify-content:flex-end; min-height:20px; margin-bottom:.25rem; }
+.ci-save-status { font-size:12px; }
+.ci-save-status.saving { color:var(--gray-400); }
+.ci-save-status.saved  { color:var(--green); }
+
+.ci-section { margin-bottom:1.5rem; padding-bottom:1.5rem; border-bottom:1px solid var(--gray-100); }
+.ci-section:last-of-type { border-bottom:none; margin-bottom:0; padding-bottom:0; }
+.ci-section-title { font-size:13px; font-weight:600; color:var(--black); margin-bottom:.85rem; }
+.ci-info-note { font-size:11px; font-weight:400; color:var(--gray-400); }
+
+.ci-row { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+.ci-row-3 { grid-template-columns:1fr 1fr auto; }
+.ci-field { display:flex; flex-direction:column; gap:.35rem; }
+.ci-field-sm { min-width:120px; }
+.ci-label { font-size:12px; font-weight:500; color:var(--gray-600); }
+.ci-input { font-family:inherit; font-size:13px; padding:.5rem .65rem; border:1.5px solid var(--gray-100); border-radius:7px; outline:none; background:#fff; color:var(--black); width:100%; box-sizing:border-box; transition:border-color .15s; }
+.ci-input:focus { border-color:var(--green); }
+.ci-textarea { resize:vertical; min-height:72px; }
+
+.ci-country-toggle { display:flex; gap:.5rem; margin-bottom:.85rem; }
+.ci-country-btn { padding:.4rem .85rem; font-size:12px; font-weight:500; background:transparent; border:1.5px solid var(--gray-100); border-radius:6px; cursor:pointer; color:var(--gray-600); transition:border-color .15s, color .15s; }
+.ci-country-btn.active { border-color:var(--green); color:var(--green); }
+
+.ci-logo-grid { display:flex; flex-wrap:wrap; gap:.65rem; margin-bottom:.85rem; }
+.ci-logo-empty { font-size:13px; color:var(--gray-400); margin:0 0 .85rem; }
+.ci-logo-item { position:relative; width:80px; }
+.ci-logo-item img { width:80px; height:80px; object-fit:contain; border:1.5px solid var(--gray-100); border-radius:8px; background:#f8f8f8; display:block; }
+.ci-logo-doc { width:80px; height:80px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--gray-100); border-radius:8px; background:#f8f8f8; font-size:11px; font-weight:600; color:var(--gray-400); }
+.ci-logo-name { font-size:11px; color:var(--gray-600); margin-top:.3rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:80px; }
+.ci-logo-del { position:absolute; top:4px; right:4px; width:18px; height:18px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; font-size:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1; padding:0; opacity:0; transition:opacity .15s; }
+.ci-logo-item:hover .ci-logo-del { opacity:1; }
+
+.ci-add-logo-btn { padding:.45rem .9rem; font-size:12px; font-weight:500; background:transparent; border:1.5px dashed var(--gray-200); border-radius:7px; color:var(--gray-600); cursor:pointer; transition:border-color .15s, color .15s; }
+.ci-add-logo-btn:hover { border-color:var(--green); color:var(--green); }
+
+.ci-original-toggle { font-size:12px; font-weight:500; color:var(--gray-400); cursor:pointer; margin-top:1.25rem; padding-top:1.25rem; border-top:1px solid var(--gray-100); user-select:none; }
+.ci-original-toggle:hover { color:var(--gray-600); }
+.ci-original-panel { margin-top:.75rem; background:var(--gray-50,#f9f9f9); border-radius:8px; padding:1rem; display:flex; flex-direction:column; gap:.45rem; }
+.ci-orig-row { display:flex; gap:.75rem; font-size:12px; }
+.ci-orig-label { font-weight:600; color:var(--gray-400); min-width:80px; flex-shrink:0; }

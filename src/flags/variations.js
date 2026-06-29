@@ -7,15 +7,18 @@ import { S, setDragLogoId } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
 import { getFlag, applyColors, renderInto } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
+import { loadGsTag } from '../gsTag.js';
 import {
   loadProject, saveFlagConfig, loadFlagConfig,
   uploadLogo, loadLogosForProject, deleteLogo,
   getFeedback, resolveFeedback, supabase,
 } from '../supabase.js';
 import { initDropZones, renderDropZones, hideZoneToolbar } from './drop-zones.js';
+import { renderFlagTextOverlays, addFlagTextLayer } from './text-layers.js';
 
 let isDirty = false;
 let activeFace = 'front';
+let editingVarId = null;
 
 function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -35,6 +38,18 @@ initDropZones({
   markDirty,
   onLibraryUpdated: () => { renderVarStrip(); },
 });
+
+// ── Per-variation flag/color helpers ──────────────────────
+
+function getVarFlag(v) {
+  if (!v) return getFlag();
+  const id = v.flagId || S.flagId;
+  return FLAGS.find(f => f.id === id) || getFlag();
+}
+
+function getVarColors(v) {
+  return (v && v.colors) ? v.colors : S.colors;
+}
 
 // ── Logo library (strip) ───────────────────────────────────
 
@@ -65,12 +80,10 @@ window.handleUpload = async function (e) {
 window.delLogo = async function (id) {
   const logo = S.library.find(l => l.id === id);
   S.library = S.library.filter(l => l.id !== id);
-  [S.baseAssignment, ...S.variations.map(v => v.assignment), ...S.variations.map(v => v.backAssignment || {})].forEach(a => {
-    Object.keys(a).forEach(z => {
-      const val = a[z];
-      const lid = typeof val === 'string' ? val : val?.id;
-      if (lid === id) delete a[z];
-    });
+  // Remove from all variation logo arrays
+  S.variations.forEach(v => {
+    if (Array.isArray(v.logos))     v.logos     = v.logos.filter(l => l.logoId !== id);
+    if (Array.isArray(v.backLogos)) v.backLogos = v.backLogos.filter(l => l.logoId !== id);
   });
   hideZoneToolbar();
   renderVarStrip();
@@ -162,12 +175,31 @@ window.setLogoLayout = function (layout) {
 
 let _flagZoom = 100;
 
+// Fit canvas-scroll to remaining viewport height and, at 100% zoom, cap the
+// flag width so its height fills that space rather than the panel width.
+function resizeCanvasToViewport() {
+  const scroll = document.getElementById('flagCanvasScroll');
+  const wrap   = document.getElementById('flagZoomWrap');
+  if (!scroll || !wrap) return;
+  const top   = scroll.getBoundingClientRect().top;
+  const avail = Math.max(150, window.innerHeight - top - 24);
+  scroll.style.maxHeight = avail + 'px';
+  if (_flagZoom === 100) {
+    // Cap wrap width so flag height = avail (flag aspect ≈ 7519:4669 = 1.610)
+    wrap.style.maxWidth = Math.floor(avail * 7519 / 4669) + 'px';
+  }
+}
+
 function applyFlagZoom(pct) {
   _flagZoom = pct;
   const wrap = document.getElementById('flagZoomWrap');
   const label = document.getElementById('flagZoomValue');
   const reset = document.getElementById('flagZoomReset');
-  if (wrap) wrap.style.width = pct + '%';
+  if (wrap) {
+    wrap.style.width = pct + '%';
+    wrap.style.maxWidth = pct === 100 ? '' : 'none';
+  }
+  if (pct === 100) resizeCanvasToViewport();
   if (label) label.textContent = pct + '%';
   if (reset) reset.style.display = pct === 100 ? 'none' : '';
 }
@@ -232,8 +264,9 @@ function renderVarList() {
         </div>
       </div>
       <div class="var-btns">
+        <button class="vbtn" title="Edit style &amp; colors" onclick="event.stopPropagation();openVarEdit('${v.id}')">✎</button>
         <button class="vbtn" title="Duplicate" onclick="event.stopPropagation();dupVar('${v.id}')">⧉</button>
-        <button class="vbtn" title="Delete" onclick="event.stopPropagation();delVar('${v.id}')" ${S.variations.length <= 1 ? 'disabled' : ''}>✕</button>
+        <button class="vbtn" title="Delete" onclick="event.stopPropagation();delVar('${v.id}')">✕</button>
       </div>
     </div>`;
   }).join('');
@@ -244,32 +277,196 @@ function refreshVarThumbs() {
   S.variations.forEach(v => {
     const el = document.getElementById('vt-' + v.id);
     if (!el) return;
-    renderInto(el, v.assignment, 'front');
+    renderInto(el, v.logos || [], 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || []);
   });
 }
 
+function renderVarFlagRow(v) {
+  const el = document.getElementById('varEditPanelBody');
+  if (!el) return;
+  const varFlag = getVarFlag(v);
+  const varColors = getVarColors(v);
+  const hasFlag = !!v.flagId;
+  const hasColors = !!v.colors;
+
+  const primaryHex = varColors['zone-primary'];
+  const secondaryHex = varColors['zone-secondary'];
+  const primaryName = COLORS.find(c => c.hex === primaryHex)?.name || primaryHex || '—';
+  const secondaryName = COLORS.find(c => c.hex === secondaryHex)?.name || secondaryHex || '';
+  const hasPrimaryOverride = hasColors && !!v.colors?.['zone-primary'];
+  const hasSecondaryOverride = hasColors && !!v.colors?.['zone-secondary'];
+
+  el.innerHTML = `
+    <div class="var-flag-row">
+      <div class="var-flag-chip-wrap" id="vfStyleWrap">
+        <span class="var-flag-label">Style</span>
+        <button class="var-flag-chip${hasFlag ? ' override' : ''}" onclick="openVarFlagPicker('${v.id}',event)">
+          ${varFlag?.name || 'None'}
+          ${hasFlag ? `<button class="chip-clear" onclick="event.stopPropagation();clearVarFlag('${v.id}')">×</button>` : ''}
+        </button>
+        <div id="varFlagPickerPanel" class="var-flag-picker-panel" style="display:none"></div>
+      </div>
+      ${varFlag && !varFlag.noColors ? `
+      <div class="var-flag-chip-wrap" id="vfPrimaryWrap">
+        <span class="var-flag-label">Primary</span>
+        <button class="var-flag-chip${hasPrimaryOverride ? ' override' : ''}" onclick="openVarColorPicker('${v.id}','zone-primary',event)">
+          ${primaryHex ? `<span class="chip-dot" style="background:${primaryHex};${primaryHex === '#FFFFFF' ? 'border:1px solid #ccc' : ''}"></span>${primaryName}` : '—'}
+          ${hasPrimaryOverride ? `<button class="chip-clear" onclick="event.stopPropagation();clearVarColor('${v.id}','zone-primary')">×</button>` : ''}
+        </button>
+        <div id="varColorPickerPanelPrimary" class="var-color-picker-panel" style="display:none"></div>
+      </div>
+      ${varFlag.colorZones?.length > 1 ? `
+      <div class="var-flag-chip-wrap" id="vfSecondaryWrap">
+        <span class="var-flag-label">Secondary</span>
+        <button class="var-flag-chip${hasSecondaryOverride ? ' override' : ''}" onclick="openVarColorPicker('${v.id}','zone-secondary',event)">
+          ${secondaryHex ? `<span class="chip-dot" style="background:${secondaryHex};${secondaryHex === '#FFFFFF' ? 'border:1px solid #ccc' : ''}"></span>${secondaryName}` : '—'}
+          ${hasSecondaryOverride ? `<button class="chip-clear" onclick="event.stopPropagation();clearVarColor('${v.id}','zone-secondary')">×</button>` : ''}
+        </button>
+        <div id="varColorPickerPanelSecondary" class="var-color-picker-panel" style="display:none"></div>
+      </div>` : ''}` : ''}
+    </div>`;
+}
+
+window.openVarFlagPicker = function (varId, e) {
+  if (e) e.stopPropagation();
+  const panel = document.getElementById('varFlagPickerPanel');
+  if (!panel) return;
+  if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+  closeVarPickers();
+  const v = S.variations.find(v => v.id === varId);
+  const varColors = getVarColors(v);
+  panel.innerHTML = `<div class="var-mini-flag-grid">${FLAGS.map(f => `
+    <div class="var-mini-flag-card${v?.flagId === f.id ? ' selected' : ''}" onclick="setVarFlagId('${varId}','${f.id}')">
+      <svg viewBox="${f.viewBox || '0 0 7519 4669'}" preserveAspectRatio="xMidYMid meet">${f.svgContent}</svg>
+      <div class="var-mini-flag-name">${f.name}</div>
+    </div>`).join('')}</div>`;
+  panel.style.display = 'block';
+  panel.querySelectorAll('.var-mini-flag-card').forEach((card, i) => {
+    const f = FLAGS[i];
+    const svg = card.querySelector('svg');
+    if (svg) applyColors(svg, varColors, f.noColors);
+  });
+};
+
+window.setVarFlagId = function (varId, flagId) {
+  const v = S.variations.find(v => v.id === varId);
+  if (!v) return;
+  v.flagId = flagId;
+  closeVarPickers();
+  renderVarCanvas();
+  refreshVarThumbs();
+  refreshEditPanel();
+  markDirty();
+};
+
+window.clearVarFlag = function (varId) {
+  const v = S.variations.find(v => v.id === varId);
+  if (!v) return;
+  delete v.flagId;
+  renderVarCanvas();
+  refreshVarThumbs();
+  refreshEditPanel();
+  markDirty();
+};
+
+window.openVarColorPicker = function (varId, zoneId, e) {
+  if (e) e.stopPropagation();
+  const panelId = zoneId === 'zone-primary' ? 'varColorPickerPanelPrimary' : 'varColorPickerPanelSecondary';
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+  closeVarPickers();
+  const v = S.variations.find(v => v.id === varId);
+  const currentHex = getVarColors(v)[zoneId];
+  panel.innerHTML = `<div class="swatch-grid">${COLORS.map(c => `
+    <div class="swatch${c.hex === '#FFFFFF' ? ' ws' : ''}${currentHex === c.hex ? ' sel' : ''}"
+      style="background:${c.hex}" title="${c.name}"
+      onclick="setVarColor('${varId}','${zoneId}','${c.hex}')"></div>`).join('')}</div>`;
+  panel.style.display = 'block';
+};
+
+window.setVarColor = function (varId, zoneId, hex) {
+  const v = S.variations.find(v => v.id === varId);
+  if (!v) return;
+  if (!v.colors) v.colors = { ...S.colors };
+  v.colors[zoneId] = hex;
+  closeVarPickers();
+  renderVarCanvas();
+  refreshVarThumbs();
+  refreshEditPanel();
+  markDirty();
+};
+
+window.clearVarColor = function (varId, zoneId) {
+  const v = S.variations.find(v => v.id === varId);
+  if (!v || !v.colors) return;
+  delete v.colors[zoneId];
+  if (Object.keys(v.colors).length === 0) delete v.colors;
+  renderVarCanvas();
+  refreshVarThumbs();
+  refreshEditPanel();
+  markDirty();
+};
+
+function closeVarPickers() {
+  ['varFlagPickerPanel', 'varColorPickerPanelPrimary', 'varColorPickerPanelSecondary'].forEach(id => {
+    const p = document.getElementById(id);
+    if (p) p.style.display = 'none';
+  });
+}
+
+function refreshEditPanel() {
+  if (!editingVarId) return;
+  const v = S.variations.find(v => v.id === editingVarId);
+  if (v) renderVarFlagRow(v);
+}
+
+window.openVarEdit = function (varId) {
+  editingVarId = varId;
+  S.activeVarId = varId;
+  renderVarList();
+  renderVarCanvas();
+  document.getElementById('varListView').style.display = 'none';
+  document.getElementById('varEditPanel').style.display = '';
+  const v = S.variations.find(v => v.id === varId);
+  const titleEl = document.getElementById('varEditPanelTitle');
+  if (titleEl) titleEl.textContent = v?.name || 'Edit Variation';
+  renderVarFlagRow(v);
+};
+
+window.closeVarEdit = function () {
+  editingVarId = null;
+  closeVarPickers();
+  document.getElementById('varListView').style.display = '';
+  document.getElementById('varEditPanel').style.display = 'none';
+};
+
 function renderVarCanvas() {
   const v = S.variations.find(v => v.id === S.activeVarId);
-  if (!v) return;
   const nameEl = document.getElementById('activeVarName');
+  if (!v) { if (nameEl) nameEl.textContent = '—'; return; }
   if (nameEl) nameEl.textContent = v.name;
-  const flag = getFlag();
-  if (!flag) return;
+
+  const varFlag = getVarFlag(v);
+  if (!varFlag) return;
+
   if (!v.backAssignment) v.backAssignment = {};
   updateFaceTabs();
 
+  if (!Array.isArray(v.logos))     v.logos     = [];
+  if (!Array.isArray(v.backLogos)) v.backLogos = [];
+  const varColors = getVarColors(v);
+  const onChange = () => { refreshVarThumbs(); markDirty(); };
+
+  if (!Array.isArray(v.textLayers)) v.textLayers = [];
+
   if (S.sameLogoOnBothSides) {
-    document.getElementById('varSvg').setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
-    document.getElementById('varWrap').querySelectorAll('.dzone').forEach(d => d.remove());
-    renderDropZones('varWrap', 'varSvg', v.assignment, 'front');
+    renderDropZones('varWrap', 'varSvg', v.logos, 'front', onChange, varFlag, varColors);
+    renderFlagTextOverlays('varWrap', v.textLayers, onChange);
   } else {
-    const vb = flag.viewBox || '0 0 7519 4669';
-    document.getElementById('varSvgFront').setAttribute('viewBox', vb);
-    document.getElementById('varWrapFront').querySelectorAll('.dzone').forEach(d => d.remove());
-    renderDropZones('varWrapFront', 'varSvgFront', v.assignment, 'front');
-    document.getElementById('varSvgBack').setAttribute('viewBox', vb);
-    document.getElementById('varWrapBack').querySelectorAll('.dzone').forEach(d => d.remove());
-    renderDropZones('varWrapBack', 'varSvgBack', v.backAssignment, 'back');
+    renderDropZones('varWrapFront', 'varSvgFront', v.logos, 'front', onChange, varFlag, varColors);
+    renderFlagTextOverlays('varWrapFront', v.textLayers, onChange);
+    renderDropZones('varWrapBack',  'varSvgBack',  v.backLogos, 'back', onChange, varFlag, varColors);
   }
 
   const fb = S.feedback?.find(f => f.variation_id === v.id);
@@ -291,10 +488,30 @@ function renderVarCanvas() {
 }
 
 function setupVariations() {
+  // Migrate old assignment-based variations to the new logos array format
+  S.variations.forEach(v => {
+    if (!Array.isArray(v.logos)) {
+      v.logos = v.assignment
+        ? Object.values(v.assignment).flatMap(data => {
+            const ld = typeof data === 'string' ? { id: data, x: 50, y: 50, w: 80 } : data;
+            return ld?.id ? [{ id: 'pl-' + Date.now() + '-' + Math.random().toString(36).slice(2), logoId: ld.id, x: ld.x ?? 50, y: ld.y ?? 50, w: ld.w ?? 80 }] : [];
+          })
+        : [];
+      delete v.assignment;
+    }
+    if (!Array.isArray(v.backLogos)) {
+      v.backLogos = v.backAssignment
+        ? Object.values(v.backAssignment).flatMap(data => {
+            const ld = typeof data === 'string' ? { id: data, x: 50, y: 50, w: 80 } : data;
+            return ld?.id ? [{ id: 'pl-' + Date.now() + '-' + Math.random().toString(36).slice(2), logoId: ld.id, x: ld.x ?? 50, y: ld.y ?? 50, w: ld.w ?? 80 }] : [];
+          })
+        : [];
+      delete v.backAssignment;
+    }
+  });
   if (!S.variations.length) {
-    S.variations.push({ id: 'v' + Date.now(), name: 'Variation 1', assignment: { ...S.baseAssignment }, backAssignment: {} });
+    S.variations.push({ id: 'v' + Date.now(), name: 'Variation 1', logos: [], backLogos: [] });
   }
-  S.variations.forEach(v => { if (!v.backAssignment) v.backAssignment = {}; });
   if (!S.activeVarId) S.activeVarId = S.variations[0].id;
   activeFace = 'front';
   const cb = document.getElementById('diffSidesCheck');
@@ -310,8 +527,35 @@ function setupVariations() {
   }
 }
 
+window.toggleVarAddMenu = function (e) {
+  e.stopPropagation();
+  const menu = document.getElementById('varAddMenu');
+  if (!menu) return;
+  menu.style.display = menu.style.display === 'none' ? '' : 'none';
+};
+
+window.closeVarAddMenu = function () {
+  const menu = document.getElementById('varAddMenu');
+  if (menu) menu.style.display = 'none';
+};
+
+window.addLogoToCanvas = function () {
+  const wrapId = S.sameLogoOnBothSides ? 'varWrap' : 'varWrapFront';
+  const dzBtn = document.querySelector('#' + wrapId + ' .dz-add-btn');
+  if (dzBtn) { dzBtn.click(); return; }
+  if (!S.library.length) document.getElementById('varFile').click();
+};
+
+window.addFlagText = function () {
+  const v = S.variations.find(v => v.id === S.activeVarId);
+  if (!v) return;
+  if (!Array.isArray(v.textLayers)) v.textLayers = [];
+  const wrapId = S.sameLogoOnBothSides ? 'varWrap' : 'varWrapFront';
+  addFlagTextLayer(v.textLayers, wrapId, () => { refreshVarThumbs(); markDirty(); });
+};
+
 window.addVariation = function () {
-  const nv = { id: 'v' + Date.now(), name: 'Variation ' + (S.variations.length + 1), assignment: {}, backAssignment: {} };
+  const nv = { id: 'v' + Date.now(), name: 'Variation ' + (S.variations.length + 1), logos: [], backLogos: [], textLayers: [] };
   S.variations.push(nv);
   S.activeVarId = nv.id;
   renderVarList();
@@ -322,7 +566,14 @@ window.addVariation = function () {
 window.dupVar = function (id) {
   const src = S.variations.find(v => v.id === id);
   if (!src) return;
-  const nv = { id: 'v' + Date.now(), name: src.name + ' copy', assignment: { ...src.assignment }, backAssignment: { ...(src.backAssignment || {}) } };
+  const nv = {
+    id: 'v' + Date.now(), name: src.name + ' copy',
+    logos: src.logos.map(l => ({ ...l, id: 'pl-' + Date.now() + '-' + Math.random().toString(36).slice(2) })),
+    backLogos: (src.backLogos || []).map(l => ({ ...l, id: 'pl-' + Date.now() + '-' + Math.random().toString(36).slice(2) })),
+    textLayers: (src.textLayers || []).map(l => ({ ...l, id: 'ftl-' + Date.now() + '-' + Math.random().toString(36).slice(2) })),
+  };
+  if (src.flagId) nv.flagId = src.flagId;
+  if (src.colors) nv.colors = { ...src.colors };
   S.variations.push(nv);
   S.activeVarId = nv.id;
   renderVarList();
@@ -331,9 +582,8 @@ window.dupVar = function (id) {
 };
 
 window.delVar = function (id) {
-  if (S.variations.length <= 1) return;
   S.variations = S.variations.filter(v => v.id !== id);
-  if (S.activeVarId === id) S.activeVarId = S.variations[0].id;
+  if (S.activeVarId === id) S.activeVarId = S.variations[0]?.id || null;
   renderVarList();
   renderVarCanvas();
   markDirty();
@@ -346,6 +596,10 @@ window.renameVar = function (id, name) {
   if (v) v.name = name;
   const nameEl = document.getElementById('activeVarName');
   if (S.activeVarId === id && nameEl) nameEl.textContent = name;
+  if (editingVarId === id) {
+    const titleEl = document.getElementById('varEditPanelTitle');
+    if (titleEl) titleEl.textContent = name;
+  }
   markDirty();
 };
 
@@ -367,19 +621,17 @@ window.setProjectName = function (val) {
 
 window.saveDraft = async function () {
   const btn = document.getElementById('saveDesignsBtn');
-  const status = document.getElementById('saveStatus');
-  if (btn) btn.disabled = true;
-  if (status) status.textContent = 'Saving…';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="save-spin"></span>'; }
   try {
     await saveFlagConfig(S.projectId, S);
     markClean();
-    if (status) status.textContent = 'Saved';
-    setTimeout(() => { if (status) status.textContent = ''; }, 3000);
+    if (btn) {
+      btn.innerHTML = '<span class="save-check">✓</span>';
+      setTimeout(() => { btn.innerHTML = 'Save draft'; btn.disabled = false; }, 1500);
+    }
   } catch (err) {
     console.error(err);
-    if (status) status.textContent = 'Save failed';
-  } finally {
-    if (btn) btn.disabled = false;
+    if (btn) { btn.innerHTML = 'Save draft'; btn.disabled = false; }
   }
 };
 
@@ -393,7 +645,7 @@ window.goToGallery = async function () {
 const _urlProject = new URLSearchParams(window.location.search).get('project');
 if (!_urlProject) { window.location.href = '/'; }
 
-await loadAllFlags(FLAGS);
+await Promise.all([loadAllFlags(FLAGS), loadGsTag()]);
 
 try {
   const [project, logos, flagCfg] = await Promise.all([
@@ -409,14 +661,16 @@ try {
     S.colors = flagCfg.colors || {};
     const varData = flagCfg.variations || [];
     const varItems = Array.isArray(varData) ? varData : (varData.items || []);
-    S.variations = varItems.map(v => ({ ...v, backAssignment: v.backAssignment || {} }));
+    S.variations = varItems.map(v => ({ ...v }));
     S.logoLayout = Array.isArray(varData) ? 'single' : (varData.layout || 'single');
-    S.baseAssignment = flagCfg.base_assignment || {};
+    S.gsTag = Array.isArray(varData) ? true : (varData.gsTag ?? true);
+    S.gsTagMode = Array.isArray(varData) ? 'auto' : (varData.gsTagMode ?? 'auto');
+    S.gsTagColor = Array.isArray(varData) ? '#ffffff' : (varData.gsTagColor ?? '#ffffff');
     S.sameLogoOnBothSides = flagCfg.same_logo_on_both_sides ?? true;
     S.activeVarId = S.variations[0]?.id || null;
   }
-  const nameInput = document.getElementById('projectNameInput');
-  if (nameInput) nameInput.value = S.projectName;
+  const nameDisplay = document.getElementById('projectNameDisplay');
+  if (nameDisplay) nameDisplay.textContent = S.projectName || '—';
 
   // Subscribe to feedback updates
   S.feedback = await getFeedback(S.projectId, 'flags').catch(() => []);
@@ -426,7 +680,23 @@ try {
       () => getFeedback(S.projectId, 'flags').then(fb => { S.feedback = fb; renderVarList(); renderVarCanvas(); }).catch(() => {}))
     .subscribe();
 
+  const _hashId = decodeURIComponent(window.location.hash.replace(/^#var-/, ''));
+  if (_hashId && S.variations.some(v => v.id === _hashId)) S.activeVarId = _hashId;
+
   setupVariations();
+  if (_hashId) {
+    requestAnimationFrame(() => {
+      document.querySelector('.var-card.active')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
+  requestAnimationFrame(resizeCanvasToViewport);
 } catch (err) {
   console.error('Could not load project', err);
 }
+
+window.addEventListener('resize', resizeCanvasToViewport);
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#varEditPanelBody')) closeVarPickers();
+  if (!e.target.closest('#varAddBtn') && !e.target.closest('#varAddMenu')) closeVarAddMenu();
+});

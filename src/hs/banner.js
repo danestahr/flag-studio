@@ -324,6 +324,7 @@ export function buildQuickAddBar(position) {
     }
   }
 
+  chips.push(`<button class="qa-chip" onclick="addTextLayer()">+ Text layer</button>`);
   const label = chips.length ? `<span class="qa-bar-label">Add to ${position}</span>` : '';
   return `<div class="qa-bar qa-${position}">${label}${chips.join('')}</div>`;
 }

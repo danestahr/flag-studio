@@ -9,9 +9,12 @@ import JSZip from 'jszip';
 export function renderGallery() {
   const panel = document.getElementById('panel-3');
   panel.innerHTML = `
-    <div>
-      <div class="ptitle">Gallery & export</div>
-      <div class="psub">Review all variations and export or share.</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div class="ptitle">Gallery & export</div>
+        <div class="psub">Review all variations and export or share.</div>
+      </div>
+      <button class="btn sm" onclick="tryGoStep(2)">← Variations</button>
     </div>
     <div class="s5layout">
       <div>
@@ -46,9 +49,7 @@ export function renderGallery() {
         </div>
       </div>
     </div>
-    <div class="arow">
-      <button class="btn" onclick="tryGoStep(2)">← Back</button>
-    </div>`;
+`;
 
   // Build gallery grid
   const grid = document.getElementById('hsGalleryGrid');
@@ -610,6 +611,7 @@ export async function saveDraftInternal() {
       bannerTop:    HS.bannerTop,
       bannerBottom: HS.bannerBottom,
       templateLogos: tplLogos,
+      textLayers:    HS.textLayers || [],
     },
     variations,
     defaults: HS.defaults,

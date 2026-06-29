@@ -38,8 +38,10 @@ async function init() {
       const varData = flagCfg.variations || [];
       const varItems = Array.isArray(varData) ? varData : (varData.items || []);
       S.logoLayout = Array.isArray(varData) ? 'single' : (varData.layout || 'single');
-      S.variations = varItems.map(v => ({ ...v, backAssignment: v.backAssignment || {} }));
-      S.sameLogoOnBothSides = !S.variations.some(v => Object.keys(v.backAssignment).length > 0);
+      S.gsTag = Array.isArray(varData) ? false : (varData.gsTag ?? false);
+      S.gsTagMode = Array.isArray(varData) ? 'auto' : (varData.gsTagMode ?? 'auto');
+      S.variations = varItems.map(v => ({ ...v }));
+      S.sameLogoOnBothSides = !S.variations.some(v => (v.backLogos?.length || Object.keys(v.backAssignment || {}).length) > 0);
       await loadAllFlags(FLAGS);
       const activeFlag = FLAGS.find(f => f.id === S.flagId);
       if (activeFlag?.logoZoneSets && S.logoLayout) {
@@ -57,10 +59,13 @@ async function init() {
     // ── Hole signs ─────────────────────────────────────────
     const hsCfg = project.holeSignConfig;
     if (hsCfg) {
+      // Spread all fields from `colors` so new design properties are picked up
+      // automatically when the hole sign editor adds them, without needing to
+      // manually update this page. `template_style` lives as a top-level DB
+      // column, not inside `colors`, so it's merged in separately.
       hsState = {
-        background: hsCfg.colors?.background  || { type: 'color', color: '#1A3A6B' },
-        topText:    hsCfg.colors?.topText      || { text: '', font: 'dm-serif', size: 300, color: '#FFFFFF' },
-        bottomText: hsCfg.colors?.bottomText   || { text: '', font: 'dm-serif', size: 300, color: '#FFFFFF' },
+        templateStyle: hsCfg.template_style || 'hole-sign-1',
+        ...(hsCfg.colors || {}),
       };
       hsVariations = hsCfg.variations || [];
       try {
@@ -116,7 +121,7 @@ function collapseCard(card, v) {
       <span class="rv-status-badge approved">✓ Approved</span>
     </div>`;
   const thumbEl = card.querySelector('#rvct-' + v.id);
-  if (thumbEl) renderInto(thumbEl, v.assignment, 'front');
+  if (thumbEl) renderInto(thumbEl, v.logos || v.assignment, 'front', false, null, null, v.textLayers || []);
 }
 
 window.approveAll = function () {
@@ -129,7 +134,51 @@ window.approveAll = function () {
   updateSummary();
 };
 
+function updateHsSummary() {
+  const total = hsVariations.length;
+  if (!total) return;
+  const approved = hsVariations.filter(v => getEffectiveStatus(localHsFeedback[v.id]) === 'approved').length;
+  const edits    = hsVariations.filter(v => getEffectiveStatus(localHsFeedback[v.id]) === 'needs_edits').length;
+  const pending  = total - approved - edits;
+  const el = document.getElementById('hsrcApproved');
+  if (!el) return;
+  document.getElementById('hsrcApproved').textContent = `${approved} approved`;
+  document.getElementById('hsrcEdits').textContent    = `${edits} needs edits`;
+  document.getElementById('hsrcPending').textContent  = `${pending} pending`;
+  document.getElementById('hsrvBarApproved').style.width = `${(approved / total) * 100}%`;
+  document.getElementById('hsrvBarEdits').style.width    = `${(edits   / total) * 100}%`;
+}
+
+window.approveAllHs = function () {
+  hsVariations.forEach(v => {
+    if (getEffectiveStatus(localHsFeedback[v.id]) === 'approved') return;
+    localHsFeedback[v.id] = { ...(localHsFeedback[v.id] || {}), status: 'approved' };
+    const card = document.getElementById('hsc-' + v.id);
+    if (card) collapseHsCard(card, v);
+  });
+  updateHsSummary();
+};
+
 // ── Hole sign card helpers ────────────────────────────────────────────────────
+
+// Mirrors the per-variation template resolution in hs/state.js getEffectiveState,
+// without the editing-draft logic (not applicable on the review page).
+function effectiveHsState(v) {
+  if (!hsState) return null;
+  const out = { ...hsState };
+  if (v?.template) {
+    if (v.template.templateStyle) out.templateStyle = v.template.templateStyle;
+    if (v.template.background)    out.background    = v.template.background;
+    if (v.template.topText)       out.topText       = v.template.topText;
+    if (v.template.bottomText)    out.bottomText    = v.template.bottomText;
+    if (v.template.bannerTop)     out.bannerTop     = v.template.bannerTop;
+    if (v.template.bannerBottom)  out.bannerBottom  = v.template.bannerBottom;
+    if (v.template.templateLogos) out.templateLogos = v.template.templateLogos;
+  } else if (v?.templateId) {
+    out.templateStyle = v.templateId;
+  }
+  return out;
+}
 
 function collapseHsCard(card, v) {
   card.className = 'rv-card rv-approved rv-card-collapsed';
@@ -140,7 +189,8 @@ function collapseHsCard(card, v) {
       <span class="rv-status-badge approved">✓ Approved</span>
     </div>`;
   const el = card.querySelector('#hscthumb-' + v.id);
-  if (el && hsState) renderHoleSignInto(el, hsState, v);
+  const state = effectiveHsState(v);
+  if (el && state) renderHoleSignInto(el, state, v);
 }
 
 // ── Page render ───────────────────────────────────────────────────────────────
@@ -232,6 +282,20 @@ function renderPage(project) {
 
       ${hasHoleSigns ? `
         ${hasFlags ? '<div class="rv-section-title" style="margin-top:2.5rem">⛳ Hole Signs</div>' : ''}
+        <div class="rv-summary" id="hsRvSummary">
+          <div class="rv-summary-left">
+            <div class="rv-summary-counts">
+              <span class="rv-count approved" id="hsrcApproved">0 approved</span>
+              <span class="rv-count needs-edits" id="hsrcEdits">0 needs edits</span>
+              <span class="rv-count pending" id="hsrcPending">${hsVariations.length} pending</span>
+            </div>
+            <div class="rv-progress-bar">
+              <div class="rv-progress-approved" id="hsrvBarApproved" style="width:0%"></div>
+              <div class="rv-progress-edits" id="hsrvBarEdits" style="width:0%"></div>
+            </div>
+          </div>
+          <button class="rv-approve-all-btn" onclick="approveAllHs()">Approve all</button>
+        </div>
         <div class="rv-variations" id="hsRvVariations"></div>
       ` : ''}
 
@@ -250,6 +314,7 @@ function renderPage(project) {
   if (hasHoleSigns) {
     const container = document.getElementById('hsRvVariations');
     hsVariations.forEach(v => container.appendChild(buildHsCard(v, localHsFeedback[v.id] || {})));
+    updateHsSummary();
   }
 }
 
@@ -267,7 +332,7 @@ function buildCard(v, fb) {
   // their request until the designer resolves it.
   const isLocked = submittedFlags.has(v.id) && fb?.status === 'needs_edits' && !fb?.resolved;
 
-  const hasBack = Object.keys(v.backAssignment || {}).length > 0;
+  const hasBack = (v.backLogos?.length > 0) || Object.keys(v.backAssignment || {}).length > 0;
   card.className = 'rv-card' + (effectiveStatus === 'needs_edits' ? ' rv-needs-edits' : '') + (isLocked ? ' rv-locked' : '');
 
   const reApprovalHint = (fb?.status === 'needs_edits' && fb?.resolved)
@@ -308,10 +373,10 @@ function buildCard(v, fb) {
     ${actionsHtml}`;
 
   if (hasBack) {
-    renderInto(card.querySelector('#rvp-front-' + v.id), v.assignment, 'front');
-    renderInto(card.querySelector('#rvp-back-'  + v.id), v.backAssignment || {}, 'back');
+    renderInto(card.querySelector('#rvp-front-' + v.id), v.logos || v.assignment, 'front', false, null, null, v.textLayers || []);
+    renderInto(card.querySelector('#rvp-back-'  + v.id), v.backLogos || v.backAssignment || [], 'back', true, null, null, v.textLayers || []);
   } else {
-    renderInto(card.querySelector('#rvp-' + v.id), v.assignment, 'front');
+    renderInto(card.querySelector('#rvp-' + v.id), v.logos || v.assignment, 'front', false, null, null, v.textLayers || []);
   }
 
   if (!isLocked) {
@@ -379,12 +444,14 @@ function buildHsCard(v, fb) {
     ${lockedNote}
     ${actionsHtml}`;
 
-  if (hsState) renderHoleSignInto(card.querySelector('#hsrvp-' + v.id), hsState, v);
+  const effectiveState = effectiveHsState(v);
+  if (effectiveState) renderHoleSignInto(card.querySelector('#hsrvp-' + v.id), effectiveState, v);
 
   if (!isLocked) {
     card.querySelector('#hsapprove-' + v.id).addEventListener('click', () => {
       localHsFeedback[v.id] = { ...(localHsFeedback[v.id] || {}), status: 'approved' };
       collapseHsCard(card, v);
+      updateHsSummary();
     });
     card.querySelector('#hsedits-' + v.id).addEventListener('click', () => {
       localHsFeedback[v.id] = { ...(localHsFeedback[v.id] || {}), status: 'needs_edits', resolved: false };
@@ -393,6 +460,7 @@ function buildHsCard(v, fb) {
       card.querySelector('#hsnw-' + v.id).classList.add('visible');
       card.className = 'rv-card rv-needs-edits';
       card.querySelector('#hsnote-' + v.id)?.focus();
+      updateHsSummary();
     });
     card.querySelector('#hsnote-' + v.id)?.addEventListener('input', e => {
       if (!localHsFeedback[v.id]) localHsFeedback[v.id] = {};

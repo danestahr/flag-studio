@@ -373,7 +373,7 @@ header {
 /* Preview */
 .rv-preview {
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 7519 / 4669;
   background: var(--gray-50);
   border-radius: 8px;
   overflow: hidden;

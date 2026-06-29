@@ -1,12 +1,13 @@
 import { HS, UI, eyedropperBtn, mergeBanner, renderTextControls, syncAlignBtns } from './state.js';
+import './text-layers.js';
 import { goStep } from './app.js';
 import { renderBannerSection, wireCanvasTextEditing, wireElementDrag, wireQuickAddHover } from './banner.js';
 import { applyTlSlotImgStyle, openTlLibPicker, openTlSidePanel, redrawTplPreview, renderTemplateLogoControls, renderTplSlotBody, snapTlSlotsToDefaults, tlSource, wireTlSlotFreeDrag } from './template-logos.js';
 import { applyHsStep1Zoom, wireCanvasZoom } from './var-canvas.js';
 import { cropSvgToArtwork } from './logo-utils.js';
 import { saveDraftInternal } from './export.js';
-import { HS_H, HS_TEMPLATES, HS_W, emptyBanner, emptyTemplateLogos } from '../hole-sign-data.js';
-import { escXml, getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
+import { HS_FONTS, HS_H, HS_TEMPLATES, HS_W, emptyBanner, emptyTemplateLogos } from '../hole-sign-data.js';
+import { escXml, getBannerRect, getLogoZone, getTemplateLogoSlots, renderHoleSignInto, wrapText } from '../hole-sign-render.js';
 import { uploadLogo } from '../supabase.js';
 
 export function buildBackgroundSection() {
@@ -160,19 +161,32 @@ export function renderDesignMenuList(activeTmpl) {
     const c = HS.templateLogos?.count ?? 0;
     rows.push(menuRow('logos', 'Template logos', c ? `${c} logo${c > 1 ? 's' : ''}` : 'Off'));
   }
-  return `
-    <div class="hs-menu-list">${rows.join('')}</div>
-    <div class="arow" style="margin-top:1rem">
-      <div></div>
-      <button class="btn primary" onclick="goStep(2)">Next: Variations →</button>
-    </div>`;
+  const tlCount = (HS.textLayers || []).length;
+  rows.push(menuRow('textLayers', 'Text layers', tlCount ? `${tlCount} layer${tlCount !== 1 ? 's' : ''}` : 'None'));
+  return `<div class="hs-menu-list">${rows.join('')}</div>`;
 }
 
 const HS_MENU_TITLES = {
   template: 'Template', mytemplates: 'My templates', background: 'Background',
   bannerTop: 'Top banner', bannerBottom: 'Bottom banner',
   top: 'Text', bottom: 'Bottom text', logos: 'Template logos', tplSlot: 'Logo options',
+  textLayers: 'Text layers',
 };
+
+function buildTextLayersSection() {
+  const layers = HS.textLayers || [];
+  const listRows = layers.map(l => `
+    <div class="hs-tl-list-row">
+      <span class="hs-tl-list-text">${escXml((l.text || 'Empty').slice(0, 32))}</span>
+      <button class="hs-tl-list-del" onclick="removeTextLayer('${l.id}')" title="Delete">✕</button>
+    </div>`).join('');
+  return `
+    <div class="hs-section">
+      <p style="font-size:12px;color:var(--gray-500);margin:0 0 12px">Free-floating text on the canvas. Click to select and move, double-click to edit.</p>
+      <button class="btn sm" onclick="addTextLayer()">+ Add text layer</button>
+      ${listRows ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:4px">${listRows}</div>` : ''}
+    </div>`;
+}
 
 export function renderDesignSection(key) {
   let body = '';
@@ -185,6 +199,7 @@ export function renderDesignSection(key) {
   else if (key === 'bottom')      body = renderTextControls('bottom', HS.bottomText);
   else if (key === 'logos')       body = renderTemplateLogoControls();
   else if (key === 'tplSlot')     body = `<div class="hs-section">${renderTplSlotBody(UI.hsMenuSlotIdx ?? 0)}</div>`;
+  else if (key === 'textLayers')  body = buildTextLayersSection();
   const backFn = key === 'tplSlot' ? "openHsMenu('logos')" : 'closeHsMenu(true)';
   return `
     <div class="hs-menu-section-header">
@@ -272,7 +287,10 @@ export function renderStep1() {
         <div class="ptitle">Design</div>
         <div class="psub">Choose a template, set the background, and configure text.</div>
       </div>
-      <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()">Save draft</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn sm primary" onclick="goStep(2)">Next: Variations →</button>
+        <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()">Save draft</button>
+      </div>
     </div>
     <div class="hs-design-layout">
       <div class="hs-design-preview-col">
@@ -553,7 +571,9 @@ export function updateStep1Preview() {
   // Background SVG. Strip the template-logo slots so the interactive DOM
   // overlays own the slot display (otherwise the SVG copy bleeds out from
   // behind the live overlay during drag/resize — the "halo").
-  const previewState = stripSlotImages(HS);
+  // Always hide text layers from the SVG — DOM overlays own the display to avoid
+  // the double-render halo (same pattern as template logo slots / stripSlotImages).
+  const previewState = { ...stripSlotImages(HS), hideTextLayers: (HS.textLayers || []).map(l => l.id) };
   const bg = document.createElement('div');
   bg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
   renderHoleSignInto(bg, previewState, { templateId: HS.templateStyle });
@@ -566,6 +586,7 @@ export function updateStep1Preview() {
   // (Banner drag is handled by the inline text-edit zones below.)
   wireElementDrag(el, 'logos');
   paintTplSlotOverlays(el, HS);
+  paintTextLayerOverlays(el, HS);
   wireCanvasTextEditing(el);
   // Show where each variation's logo will land, the same dashed placeholder used
   // on the Variations page, so the template preview reads as a full layout.
@@ -581,7 +602,7 @@ export function updateStep1Preview() {
   // current submenu and returns to the main menu list.
   el.addEventListener('click', e => {
     if (!UI.hsMenu) return;
-    const onInteractive = e.target.closest('.canvas-edit-zone,.tl-slot,.band-drag,.dzone,.qa-bar');
+    const onInteractive = e.target.closest('.canvas-edit-zone,.tl-slot,.band-drag,.dzone,.qa-bar,.hs-tl-overlay');
     if (!onInteractive) window.closeHsMenu(true);
   }, { capture: false });
 }
@@ -694,6 +715,244 @@ export function paintTplSlotOverlays(parentEl, state) {
         if (!HS.editingVarId) window.openHsMenuSection?.('logos');
         if (!cur?.logoSrc) openTlLibPicker(i, overlay);
       }
+    });
+
+    parentEl.appendChild(overlay);
+  });
+}
+
+function repositionToolbar(anchorEl) {
+  const tb = document.getElementById('hsTlToolbar');
+  if (!tb) return;
+  const r = anchorEl.getBoundingClientRect();
+  const tw = tb.offsetWidth || 380;
+  const th = tb.offsetHeight || 44;
+  const gap = 8;
+  const top = r.top >= th + gap * 2 ? r.top - th - gap : r.bottom + gap;
+  tb.style.top  = Math.max(gap, Math.min(window.innerHeight - th - gap, top)) + 'px';
+  tb.style.left = Math.max(gap, Math.min(window.innerWidth  - tw - gap, r.left + r.width / 2 - tw / 2)) + 'px';
+}
+
+export { repositionToolbar };
+
+// Measure the actual rendered width of a text layer's longest line using canvas.
+// Returns width in SVG sign coordinates.
+// Y/X snap targets drawn from banner and logo zone positions.
+function getSnapTargets(state) {
+  const ySnaps = [0, HS_H / 2, HS_H];
+  const xSnaps = [0, HS_W / 2, HS_W];
+  const bt = getBannerRect(state, 'top');
+  const bb = getBannerRect(state, 'bottom');
+  if (bt) { ySnaps.push(bt.y, bt.y + bt.h); }
+  if (bb) { ySnaps.push(bb.y, bb.y + bb.h); }
+  const lz = getLogoZone(state, state.templateStyle);
+  if (lz) { ySnaps.push(lz.y, lz.y + lz.h); xSnaps.push(lz.x, lz.x + lz.w); }
+  return {
+    ySnaps: [...new Set(ySnaps)].sort((a, b) => a - b),
+    xSnaps: [...new Set(xSnaps)].sort((a, b) => a - b),
+  };
+}
+
+function snapNearest(val, snaps, threshold) {
+  let best = val, bestDist = threshold;
+  for (const s of snaps) {
+    const d = Math.abs(val - s);
+    if (d < bestDist) { best = s; bestDist = d; }
+  }
+  return best;
+}
+
+export function paintTextLayerOverlays(parentEl, state) {
+  parentEl.querySelectorAll('.hs-tl-overlay').forEach(el => el.remove());
+  const layers = state.textLayers || [];
+  if (!layers.length) return;
+  const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
+  const { ySnaps, xSnaps } = getSnapTargets(state);
+
+  layers.forEach(layer => {
+    const sc = parentEl.offsetHeight / HS_H;
+    const fontFamily = HS_FONTS.find(f => f.id === layer.font)?.family || "'DM Serif Display', serif";
+    const fsPx = Math.max(8, Math.round(layer.size * sc));
+    const isActive = UI.activeTextLayerId === layer.id;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'hs-tl-overlay' + (isActive ? ' selected' : '');
+    overlay.dataset.tlId = layer.id;
+    // No fixed height — auto-sizes to text content. Wrapping + font-size changes
+    // both flow into height naturally, giving real-time resize feedback.
+    overlay.style.cssText = `position:absolute;left:${pct(layer.x, HS_W)};top:${pct(layer.y, HS_H)};width:${pct(layer.w, HS_W)};`;
+
+    // Permanent text content — the only visual render (SVG copy always hidden).
+    // Normal-flow div so the overlay auto-sizes to it; white-space:pre-wrap so
+    // the box width constrains lines and height grows automatically.
+    const textDiv = document.createElement('div');
+    textDiv.className = 'hs-tl-content';
+    textDiv.style.cssText = [
+      'width:100%;pointer-events:none;overflow:visible;',
+      `font-family:${fontFamily};font-size:${fsPx}px;`,
+      `color:${layer.color};text-align:${layer.align || 'center'};`,
+      'line-height:1.1;white-space:pre-wrap;word-break:break-word;',
+    ].join('');
+    textDiv.textContent = layer.text || 'Text';
+    overlay.appendChild(textDiv);
+
+    // ── Resize / scale handles ────────────────────────────────────────────────
+    // All handles are always in the DOM; CSS controls opacity/pointer-events.
+
+    // Left-edge handle — drags left edge, keeps right edge fixed
+    const lh = document.createElement('div');
+    lh.className = 'hs-tl-resize-l';
+    let lhStartX, lhStartLayerX, lhStartW;
+    lh.addEventListener('pointerdown', e => {
+      e.stopPropagation();
+      lh.setPointerCapture(e.pointerId);
+      lhStartX = e.clientX; lhStartLayerX = layer.x; lhStartW = layer.w;
+      document.body.style.cursor = 'ew-resize';
+      e.preventDefault();
+    });
+    lh.addEventListener('pointermove', e => {
+      if (!lh.hasPointerCapture(e.pointerId)) return;
+      const sx = parentEl.offsetWidth / HS_W;
+      const dx = (e.clientX - lhStartX) / sx;
+      const rightEdge = lhStartLayerX + lhStartW;
+      const newW = Math.max(layer.size, Math.round(lhStartW - dx));
+      layer.x = rightEdge - newW; layer.w = newW;
+      overlay.style.left  = pct(layer.x, HS_W);
+      overlay.style.width = pct(newW, HS_W);
+    });
+    lh.addEventListener('pointerup', () => {
+      document.body.style.cursor = '';
+      if (HS.editingVarId) window._hsRenderVariationPreview?.();
+      else updateStep1Preview();
+    });
+    overlay.appendChild(lh);
+
+    // Right-edge handle — drags right edge, keeps left edge fixed
+    const rh = document.createElement('div');
+    rh.className = 'hs-tl-resize-r';
+    let rhStartX, rhStartW;
+    rh.addEventListener('pointerdown', e => {
+      e.stopPropagation();
+      rh.setPointerCapture(e.pointerId);
+      rhStartX = e.clientX; rhStartW = layer.w;
+      document.body.style.cursor = 'ew-resize';
+      e.preventDefault();
+    });
+    rh.addEventListener('pointermove', e => {
+      if (!rh.hasPointerCapture(e.pointerId)) return;
+      const sx = parentEl.offsetWidth / HS_W;
+      const newW = Math.max(layer.size, Math.round(rhStartW + (e.clientX - rhStartX) / sx));
+      layer.w = newW;
+      overlay.style.width = pct(newW, HS_W);
+    });
+    rh.addEventListener('pointerup', () => {
+      document.body.style.cursor = '';
+      if (HS.editingVarId) window._hsRenderVariationPreview?.();
+      else updateStep1Preview();
+    });
+    overlay.appendChild(rh);
+
+    // Corner handles — drag outward to increase font size, inward to decrease.
+    // xSign / ySign indicate the "outward" direction for each corner.
+    const makeCorner = (cls, xSign, ySign) => {
+      const ch = document.createElement('div');
+      ch.className = `hs-tl-resize-corner ${cls}`;
+      let chStartX, chStartY, chStartSize;
+      ch.addEventListener('pointerdown', e => {
+        e.stopPropagation();
+        ch.setPointerCapture(e.pointerId);
+        chStartX = e.clientX; chStartY = e.clientY; chStartSize = layer.size;
+        document.body.style.cursor = getComputedStyle(ch).cursor || 'nwse-resize';
+        e.preventDefault();
+      });
+      ch.addEventListener('pointermove', e => {
+        if (!ch.hasPointerCapture(e.pointerId)) return;
+        const dx = (e.clientX - chStartX) * xSign;
+        const dy = (e.clientY - chStartY) * ySign;
+        // Use whichever axis is being dragged more strongly
+        const outward = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+        const newSize = Math.max(60, Math.min(1200, Math.round(chStartSize + outward * 1.5)));
+        layer.size = newSize;
+        const sc = parentEl.offsetHeight / HS_H;
+        textDiv.style.fontSize = Math.max(8, Math.round(newSize * sc)) + 'px';
+        // Sync toolbar slider live
+        const slider = document.getElementById('hsTlSizeSlider');
+        const val    = document.getElementById('hsTlSizeVal');
+        if (slider) slider.value = newSize;
+        if (val) val.textContent = newSize;
+      });
+      ch.addEventListener('pointerup', () => {
+        document.body.style.cursor = '';
+        if (HS.editingVarId) window._hsRenderVariationPreview?.();
+        else updateStep1Preview();
+      });
+      return ch;
+    };
+    overlay.appendChild(makeCorner('tl', -1, -1));
+    overlay.appendChild(makeCorner('tr',  1, -1));
+    overlay.appendChild(makeCorner('bl', -1,  1));
+    overlay.appendChild(makeCorner('br',  1,  1));
+
+    overlay.addEventListener('click', e => {
+      e.stopPropagation();
+      document.querySelectorAll('.hs-tl-overlay').forEach(el => el.classList.remove('selected'));
+      overlay.classList.add('selected');
+      UI.activeTextLayerId = layer.id;
+      window.openTextLayerToolbar?.(layer.id, overlay);
+    });
+
+    overlay.addEventListener('dblclick', e => {
+      e.stopPropagation();
+      window.enterTextLayerEditMode?.(layer.id, overlay);
+    });
+
+    let startCX, startCY, startX, startY, didDrag = false;
+
+    overlay.addEventListener('pointerdown', e => {
+      if (e.target.closest('.hs-tl-editor-wrap, .hs-tl-resize-l, .hs-tl-resize-r, .hs-tl-resize-corner')) return;
+      overlay.setPointerCapture(e.pointerId);
+      startCX = e.clientX; startCY = e.clientY;
+      startX = layer.x;    startY = layer.y;
+      didDrag = false;
+      e.preventDefault();
+    });
+
+    overlay.addEventListener('pointermove', e => {
+      if (!overlay.hasPointerCapture(e.pointerId)) return;
+      const sx = parentEl.offsetWidth  / HS_W;
+      const sy = parentEl.offsetHeight / HS_H;
+      const dx = (e.clientX - startCX) / sx;
+      const dy = (e.clientY - startCY) / sy;
+
+      if (!didDrag && Math.hypot(dx, dy) > 5) {
+        didDrag = true;
+        window.closeTextLayerToolbar?.();
+        document.body.style.cursor = 'grabbing';
+      }
+      if (!didDrag) return;
+
+      let nx = Math.round(startX + dx);
+      let ny = Math.round(startY + dy);
+      if (e.shiftKey) {
+        nx = snapNearest(nx, xSnaps, 200);
+        ny = snapNearest(ny, ySnaps, 200);
+      }
+      layer.x = nx; layer.y = ny;
+      overlay.style.left = pct(nx, HS_W);
+      overlay.style.top  = pct(ny, HS_H);
+    });
+
+    overlay.addEventListener('pointerup', () => {
+      document.body.style.cursor = '';
+      if (didDrag) {
+        if (HS.editingVarId) window._hsRenderVariationPreview?.();
+        else updateStep1Preview();
+        if (UI.activeTextLayerId === layer.id) {
+          const newOverlay = parentEl.querySelector(`.hs-tl-overlay[data-tl-id="${layer.id}"]`);
+          if (newOverlay) requestAnimationFrame(() => window.openTextLayerToolbar?.(layer.id, newOverlay));
+        }
+      }
+      didDrag = false;
     });
 
     parentEl.appendChild(overlay);

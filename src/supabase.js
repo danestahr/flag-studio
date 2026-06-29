@@ -131,7 +131,7 @@ export async function saveFlagConfig(projectId, state) {
       flag_id: state.flagId,
       colors: state.colors,
       base_assignment: state.baseAssignment,
-      variations: { layout: state.logoLayout || 'single', items: state.variations },
+      variations: { layout: state.logoLayout || 'single', items: state.variations, gsTag: state.gsTag ?? false, gsTagMode: state.gsTagMode ?? 'auto', gsTagColor: state.gsTagColor ?? '#ffffff' },
       same_logo_on_both_sides: state.sameLogoOnBothSides,
       status: 'draft',
       updated_at: new Date().toISOString(),
@@ -260,6 +260,15 @@ export async function loadOrderIntake(projectId) {
   return data || null;
 }
 
+// ── Customer info (editable, separate from original intake) ──
+export async function upsertCustomerInfo(projectId, info) {
+  const { error } = await supabase
+    .from('projects')
+    .update({ customer_info: info, updated_at: new Date().toISOString() })
+    .eq('id', projectId);
+  if (error) throw error;
+}
+
 // ── Feedback ───────────────────────────────────────────────
 export async function submitFeedback(projectId, productType, feedbackItems) {
   const { error } = await supabase
@@ -318,4 +327,25 @@ export async function sendOrderConfirmation(payload) {
 
 export async function sendProofReady(payload) {
   return callEdgeFunction('send-proof-ready', payload);
+}
+
+export async function sendPrestigeOrder(projectId, projectName, zipBlob) {
+  const params = new URLSearchParams({ projectId, projectName });
+  const url = `${SUPABASE_URL}/functions/v1/send-prestige-order?${params}`;
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || SUPABASE_ANON_KEY;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${token}`,
+    },
+    body: zipBlob,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Prestige send failed (${res.status}): ${text}`);
+  }
+  return res.json();
 }

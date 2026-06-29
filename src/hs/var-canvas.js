@@ -4,7 +4,7 @@ import { getEffectiveState, getEffectiveVariation } from './state.js';
 import { getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
 import { hideHsToolbar, prepareLogo, applyFillToVariation } from './logo-utils.js';
 import { isDisplayableImage, fileTypeLabel } from '../media-utils.js';
-import { stripSlotImages, paintTplSlotOverlays } from './design.js';
+import { stripSlotImages, paintTplSlotOverlays, paintTextLayerOverlays } from './design.js';
 import { wireCanvasTextEditing, wireElementDrag, wireQuickAddHover } from './banner.js';
 import { showHsToolbar } from './var-toolbar.js';
 import { renderVarList } from './variations.js';
@@ -260,7 +260,10 @@ export function renderVariationPreview() {
   const bgVarForRender = isFullGraphic
     ? getEffectiveVariation(activeVar)
     : (activeVar && !activeVar.logoSrc ? getEffectiveVariation(activeVar) : null);
-  const bgState = isEditingActive ? stripSlotImages(effState) : effState;
+  // Only hide text layers from the SVG when editing (they become interactive DOM overlays).
+  // When just viewing, let them render in the SVG directly.
+  const hideTextLayers = isEditingActive ? (effState.textLayers || []).map(l => l.id) : [];
+  const bgState = { ...(isEditingActive ? stripSlotImages(effState) : effState), hideTextLayers };
   renderHoleSignInto(bgSvgDiv, bgState, bgVarForRender);
   const bgSvgEl = bgSvgDiv.querySelector('svg');
   if (bgSvgEl) {
@@ -277,6 +280,31 @@ export function renderVariationPreview() {
   }
 
   const variation = getEffectiveVariation(activeVar);
+
+  // Full-artboard design: image fills the entire canvas, replaces the logo zone.
+  if (activeVar?.artboardSrc) {
+    const img = document.createElement('img');
+    img.src = activeVar.artboardSrc;
+    img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;';
+    preview.appendChild(img);
+    // Clickable surface so the toolbar can be opened for Replace/Remove
+    const abZone = document.createElement('div');
+    abZone.style.cssText = 'position:absolute;inset:0;cursor:pointer;';
+    abZone.addEventListener('click', e => {
+      e.stopPropagation();
+      if (UI.hsActiveZone?.dzone === abZone) { hideHsToolbar(); UI.hsActiveZone = null; return; }
+      UI.hsActiveZone = { dzone: abZone, variation };
+      showHsToolbar(abZone);
+    });
+    preview.appendChild(abZone);
+    if (isEditingActive) {
+      paintTplSlotOverlays(preview, effState);
+      paintTextLayerOverlays(preview, effState);
+      wireCanvasTextEditing(preview);
+      wireQuickAddHover(preview);
+    }
+    return;
+  }
   if (!variation) return;
   const lz = getLogoZone(effState, effState.templateStyle);
   const dzone = document.createElement('div');
@@ -384,7 +412,10 @@ export function renderVariationPreview() {
   if (isEditingActive) {
     wireElementDrag(preview, 'logos');
     paintTplSlotOverlays(preview, effState);
+    paintTextLayerOverlays(preview, effState);
     wireCanvasTextEditing(preview);
     wireQuickAddHover(preview);
   }
 }
+
+window._hsRenderVariationPreview = renderVariationPreview;
