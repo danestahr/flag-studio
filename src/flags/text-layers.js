@@ -238,6 +238,13 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
 
   wrap.querySelectorAll('.flag-tl-overlay').forEach(el => el.remove());
 
+  // Centre guides for text dragging — span the whole canvas (unlike the logo
+  // zone's own guides, which are scoped to that zone's box), since text can be
+  // placed anywhere on the flag.
+  wrap.querySelectorAll('.flag-tl-guide-h, .flag-tl-guide-v').forEach(el => el.remove());
+  const tlGh = document.createElement('div'); tlGh.className = 'dz-guide-h flag-tl-guide-h'; wrap.appendChild(tlGh);
+  const tlGv = document.createElement('div'); tlGv.className = 'dz-guide-v flag-tl-guide-v'; wrap.appendChild(tlGv);
+
   // Keep a live ResizeObserver so font sizes stay correct when the canvas is zoomed
   if (wrap._flagTlRO) wrap._flagTlRO.disconnect();
   if (Array.isArray(textLayers) && textLayers.length) {
@@ -385,14 +392,31 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
         document.body.style.cursor = 'grabbing';
       }
       if (!didDrag) return;
-      layer.x = Math.max(-layer.w + 5, Math.min(95, startX + dx));
-      layer.y = Math.max(0, Math.min(100, startY + dy));
-      overlay.style.left = layer.x + '%';
-      overlay.style.top  = layer.y + '%';
+      let nx = Math.max(-layer.w + 5, Math.min(95, startX + dx));
+      let ny = Math.max(0, Math.min(100, startY + dy));
+
+      // Snap the text box's own center (not just its top-left anchor) to the
+      // canvas center — matches the logo drop-zone's snap-to-center behavior.
+      const halfWPct = layer.w / 2;
+      const halfHPct = (overlay.offsetHeight / wrap.offsetHeight * 100) / 2;
+      const snapTolX = 5 / wrap.offsetWidth  * 100;
+      const snapTolY = 5 / wrap.offsetHeight * 100;
+      const snapH = Math.abs((nx + halfWPct) - 50) < snapTolX;
+      const snapV = Math.abs((ny + halfHPct) - 50) < snapTolY;
+      if (snapH) nx = 50 - halfWPct;
+      if (snapV) ny = 50 - halfHPct;
+      wrap.classList.toggle('dz-adjusting', true);
+      wrap.classList.toggle('snap-h', snapH);
+      wrap.classList.toggle('snap-v', snapV);
+
+      layer.x = nx; layer.y = ny;
+      overlay.style.left = nx + '%';
+      overlay.style.top  = ny + '%';
     });
 
     overlay.addEventListener('pointerup', () => {
       document.body.style.cursor = '';
+      wrap.classList.remove('dz-adjusting', 'snap-h', 'snap-v');
       if (didDrag) {
         onChange();
         if (_activeFlagTlId === layer.id) {

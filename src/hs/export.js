@@ -9,12 +9,15 @@ import JSZip from 'jszip';
 export function renderGallery() {
   const panel = document.getElementById('panel-3');
   panel.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div class="p1-header">
       <div>
         <div class="ptitle">Gallery & export</div>
         <div class="psub">Review all variations and export or share.</div>
       </div>
-      <button class="btn sm" onclick="tryGoStep(2)">← Variations</button>
+      <div class="p1-header-actions">
+        <button class="btn sm" onclick="tryGoStep(2)">← Variations</button>
+        <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
+      </div>
     </div>
     <div class="s5layout">
       <div>

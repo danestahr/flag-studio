@@ -3,7 +3,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 const SENDGRID_API_KEY = Deno.env.get('SENDGRID_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const FROM_EMAIL = 'dane@danestahr.com';
+const FROM_EMAIL = 'designstudio@golfstatus.com';
 const FROM_NAME = 'GolfStatus Design Studio';
 
 const CORS = {
@@ -37,6 +37,7 @@ interface OrderPayload {
   eventDate: string;
   shipping?: Shipping;
   flagStyle: string;
+  flagStyleName?: string;
   flagColors: Array<{ name: string; hex: string }>;
   flagSetup?: string;
   flagQty?: number;
@@ -166,7 +167,7 @@ function buildHtml(p: OrderPayload): string {
       ${row('Ship to', formatShipping(p.shipping), { vtop: true })}
 
       <tr><td colspan="2" style="padding:14px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Design</td></tr>
-      ${row('Flag style', `<span style="text-transform:capitalize;">${esc(p.flagStyle)}</span>`)}
+      ${row('Flag style', esc(p.flagStyleName || p.flagStyle))}
       ${colorRows}
       ${row('Setup', formatSetup(p.flagSetup))}
       ${p.flagQty ? row('Quantity', `${esc(String(p.flagQty))} flag${p.flagQty === 1 ? '' : 's'}`) : ''}

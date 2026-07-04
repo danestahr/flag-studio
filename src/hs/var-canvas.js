@@ -127,6 +127,22 @@ export function positionWrap(wrap, ld) {
 
 // ── Logo drag/resize interaction ───────────────────────────
 
+// The logo's x/y are stored as % of its zone box, but the zone is now just a
+// placement suggestion, not a hard boundary — a logo should be draggable
+// anywhere across the whole sign canvas. #hsSignPreview's own overflow:hidden
+// clips it once it bleeds past the canvas/bleed edge. Convert the canvas
+// bounds into that zone-relative % space.
+function canvasBoundsInZonePct(dz) {
+  const dzRect = dz.getBoundingClientRect();
+  const containerRect = document.getElementById('hsSignPreview').getBoundingClientRect();
+  return {
+    minX: (containerRect.left - dzRect.left) / dzRect.width  * 100,
+    maxX: (containerRect.right - dzRect.left) / dzRect.width  * 100,
+    minY: (containerRect.top  - dzRect.top)  / dzRect.height * 100,
+    maxY: (containerRect.bottom - dzRect.top) / dzRect.height * 100,
+  };
+}
+
 export function setupHsInteraction(dz, wrap, handle, variation) {
   let mode = null;
   let startPX, startPY, startX, startY, rStartX, rStartW, dzRect;
@@ -155,13 +171,19 @@ export function setupHsInteraction(dz, wrap, handle, variation) {
   });
 
   wrap.addEventListener('pointermove', e => {
+    // hasPointerCapture guards against a dropped/lost pointerup leaving `mode`
+    // stuck set — without it, a later hover-only pointermove would move/resize
+    // the logo using the stale start point from the previous gesture.
     if (!mode) return;
+    if (mode === 'move' && !wrap.hasPointerCapture(e.pointerId)) return;
+    if (mode === 'resize' && !handle.hasPointerCapture(e.pointerId)) return;
     const ld = variation.logoData || { x: 50, y: 50, w: 90 };
     if (mode === 'move') {
       const dx = (e.clientX - startPX) / dzRect.width  * 100;
       const dy = (e.clientY - startPY) / dzRect.height * 100;
-      let nx = startX + dx;
-      let ny = startY + dy;
+      const bounds = canvasBoundsInZonePct(dz);
+      let nx = Math.max(bounds.minX, Math.min(bounds.maxX, startX + dx));
+      let ny = Math.max(bounds.minY, Math.min(bounds.maxY, startY + dy));
       const snapX = 5 / dzRect.width  * 100;
       const snapY = 5 / dzRect.height * 100;
       const snapH = Math.abs(nx - 50) < snapX;
@@ -184,7 +206,7 @@ export function setupHsInteraction(dz, wrap, handle, variation) {
   });
 
   handle.addEventListener('pointermove', e => {
-    if (mode !== 'resize') return;
+    if (mode !== 'resize' || !handle.hasPointerCapture(e.pointerId)) return;
     const ld = variation.logoData || { x: 50, y: 50, w: 90 };
     const delta = (e.clientX - rStartX) / dzRect.width * 100 * 2;
     ld.w = Math.max(10, rStartW + delta);
@@ -200,6 +222,8 @@ export function setupHsInteraction(dz, wrap, handle, variation) {
   };
   wrap.addEventListener('pointerup', onUp);
   handle.addEventListener('pointerup', onUp);
+  wrap.addEventListener('pointercancel', onUp);
+  handle.addEventListener('pointercancel', onUp);
 }
 
 // ── Variation preview ──────────────────────────────────────

@@ -3,11 +3,10 @@ import { requireAuth } from '../auth.js';
 
 await requireAuth();
 
-import { S, setDragLogoId } from '../state.js';
+import { S, setDragLogoId, DEFAULT_COLORS } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
-import { getFlag, applyColors, showGsTagVariant } from '../render.js';
+import { getFlag, applyColors, showGsTagVariant, resolveColors } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
-import { loadGsTag, isLightColor } from '../gsTag.js';
 import {
   createProject, updateProject, loadProject,
   saveFlagConfig, loadFlagConfig,
@@ -17,6 +16,9 @@ import {
 import { initDropZones, renderDropZones, hideZoneToolbar } from './drop-zones.js';
 
 let isDirty = false;
+
+const _SUPPORTS_EYEDROPPER = typeof window !== 'undefined' && 'EyeDropper' in window;
+const _EYEDROPPER_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 7l6 6"/><path d="M14 4l3 3a2.121 2.121 0 0 1 0 3l-1.5 1.5-6-6L11 4a2.121 2.121 0 0 1 3 0z"/><path d="M9.5 8.5L3 15v3h3l6.5-6.5"/></svg>`;
 
 function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -48,6 +50,8 @@ initDropZones({
 // ── Internal step nav (steps 1–3 within this page) ────────
 
 function goStep(n) {
+  // No visible Save Draft button — every step change persists instead.
+  if (S.projectId) window.saveDraft?.().catch(() => {});
   document.querySelectorAll('.panel').forEach((p, i) => p.classList.toggle('visible', i === n - 1));
   document.querySelectorAll('.step-item').forEach((s, i) => {
     s.classList.remove('active', 'done');
@@ -72,14 +76,6 @@ function renderFlagGrid() {
     </div>`).join('');
 }
 
-function _autoTagStyle(flag, colors) {
-  const keyZone = flag.tagKeyZone || 'zone-primary';
-  const hex = colors[keyZone];
-  if (hex) return isLightColor(hex) ? 'Light' : 'Dark';
-  // No color set: flags with tagKeyZone have lighter secondary areas by design
-  return flag.tagKeyZone ? 'Light' : 'Dark';
-}
-
 function showFlagExpanded(id) {
   const flag = FLAGS.find(f => f.id === id);
   if (!flag) return;
@@ -99,12 +95,10 @@ function refreshFlagExpanded() {
   }
   preview.innerHTML = `<svg viewBox="${flag.viewBox || '0 0 7519 4669'}" width="100%" height="100%">${flag.svgContent}</svg>`;
   const svg = preview.querySelector('svg');
-  applyColors(svg, S.colors, flag.noColors);
+  applyColors(svg, S.colors, flag.noColors, flag);
   if (S.gsTag) {
-    const style = S.gsTagMode === 'light' ? 'Dark'
-      : S.gsTagMode === 'dark' ? 'Light'
-      : _autoTagStyle(flag, S.colors);
-    showGsTagVariant(svg, style, 'front');
+    const keyZone = flag.tagKeyZone || 'zone-primary';
+    showGsTagVariant(svg, 'front', S.gsTagMode, resolveColors(S.colors, flag)[keyZone]);
   }
 }
 
@@ -130,6 +124,41 @@ window.clearFlagSelection = function () {
   markDirty();
 };
 
+// Custom-hex row (always visible, not a popover) + preset swatch grid for a
+// Step-1 zone. The leading swatch is a real <input type=color> once a color
+// is set (click it to reopen the native picker); before that it's a
+// decorative rainbow/plus circle that opens a hidden color input.
+function p1ZonePickerHtml(zid, hex) {
+  const swatch = hex
+    ? `<input type="color" id="p1cn-${zid}" value="${hex}" oninput="p1CSync('${zid}',this.value)">`
+    : `<div class="csw" onclick="document.getElementById('p1cn-${zid}').click()"></div>
+       <input type="color" id="p1cn-${zid}" value="#1A4A2E" oninput="p1CSync('${zid}',this.value)" style="position:absolute;opacity:0;width:0;height:0">`;
+  return `<div class="ve-custom-row">
+      ${swatch}
+      <input type="text" class="hexin" id="p1ch-${zid}" value="${hex || ''}" maxlength="7" placeholder="#000000" oninput="p1CSyncN('${zid}',this.value)">
+      ${_SUPPORTS_EYEDROPPER ? `<button type="button" class="eyedropper-btn" onclick="p1Eyedrop('${zid}')" title="Pick color from screen">${_EYEDROPPER_SVG}</button>` : ''}
+      <button class="cpop-apply" onclick="p1CApply('${zid}')">Apply</button>
+    </div>
+    <div class="swatch-grid" id="p1sg-${zid}">
+      ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${hex === c.hex ? 'sel' : ''}"
+        style="background:${c.hex}" title="${c.name}"
+        onclick="pickColor('${zid}','${c.hex}')"></div>`).join('')}
+    </div>`;
+}
+
+function borderMatchLabel(flag) {
+  return flag.colorZones.some(z => z.id === 'zone-secondary') ? 'Secondary Color' : 'Primary Color';
+}
+
+function borderToggleHtml(flag) {
+  const matches = !('zone-border' in S.colors);
+  return `<label class="gs-tag-label" style="margin-bottom:8px">
+    <input type="checkbox" class="gs-toggle-input" ${matches ? 'checked' : ''} onchange="toggleBorderMatch(this.checked)">
+    <span class="gs-toggle-switch"></span>
+    <span class="gs-toggle-text">Match ${borderMatchLabel(flag)}</span>
+  </label>`;
+}
+
 function renderP1Colors() {
   const container = document.getElementById('p1colorZones');
   if (!container) return;
@@ -147,57 +176,21 @@ function renderP1Colors() {
   ];
 
   container.innerHTML = zones.map(z => {
-    const label = z.id === 'zone-primary' ? 'Primary Color' : 'Secondary Color';
-    const hex = S.colors[z.id];
-    const col = COLORS.find(c => c.hex === hex);
-    if (hex) {
-      return `<div class="p1zone">
-        <div class="zlabel">${label}</div>
-        <div class="color-chip-picked">
-          <span class="chip-dot" style="background:${hex};${hex === '#FFFFFF' ? 'border:1px solid var(--gray-200)' : ''}"></span>
-          <div class="chip-info">
-            <span class="chip-name">${col?.name || hex}</span>
-            <span class="chip-hex">${hex}</span>
-          </div>
-          <button class="chip-clear" onclick="clearColor('${z.id}')">×</button>
-        </div>
-      </div>`;
+    const label = z.label || (z.id === 'zone-primary' ? 'Primary Color' : 'Color');
+    if (z.id === 'zone-border') {
+      const matches = !('zone-border' in S.colors);
+      const body = matches ? '' : p1ZonePickerHtml('zone-border', S.colors['zone-border']);
+      return `<div class="p1zone"><div class="zlabel">${label}</div>${borderToggleHtml(flag)}${body}</div>`;
     }
-    return `<div class="p1zone">
-      <div class="zlabel">${label}</div>
-      <div class="swatch-grid" id="p1sg-${z.id}">
-        ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''}"
-          style="background:${c.hex}" title="${c.name}"
-          onclick="pickColor('${z.id}','${c.hex}')"></div>`).join('')}
-        <div class="csw-wrap">
-          <div class="csw" onclick="p1ToggleCPop('${z.id}')"></div>
-          <div class="cpop" id="p1cpop-${z.id}">
-            <div class="cpop-lbl">Custom color</div>
-            <div class="cpop-prev" id="p1cprev-${z.id}" style="background:#1A4A2E"></div>
-            <div class="cpop-row">
-              <input type="color" id="p1cn-${z.id}" value="#1A4A2E" oninput="p1CSync('${z.id}',this.value)">
-              <input type="text" class="hexin" id="p1ch-${z.id}" value="#1A4A2E" maxlength="7" placeholder="#000000" oninput="p1CSyncN('${z.id}',this.value)">
-            </div>
-            <button class="cpop-apply" onclick="p1CApply('${z.id}')">Apply</button>
-          </div>
-        </div>
-      </div>
-    </div>`;
+    return `<div class="p1zone"><div class="zlabel">${label}</div>${p1ZonePickerHtml(z.id, S.colors[z.id])}</div>`;
   }).join('');
 }
-
-window.clearColor = function (zoneId) {
-  delete S.colors[zoneId];
-  renderP1Colors();
-  refreshFlagPreviews();
-  refreshColorPrev();
-  checkStep1();
-  syncSidebar();
-};
 
 window.toggleGsTag = function (checked) {
   S.gsTag = checked;
   document.getElementById('gsTagModeWrap').style.display = checked ? 'flex' : 'none';
+  const text = document.getElementById('gsTagToggleText');
+  if (text) text.textContent = checked ? 'On' : 'Off';
   refreshFlagPreviews();
   refreshColorPrev();
   markDirty();
@@ -214,6 +207,8 @@ window.setGsTagMode = function (mode) {
 function syncGsTagUI() {
   const check = document.getElementById('gsTagCheck');
   if (check) check.checked = S.gsTag;
+  const text = document.getElementById('gsTagToggleText');
+  if (text) text.textContent = S.gsTag ? 'On' : 'Off';
   const wrap = document.getElementById('gsTagModeWrap');
   if (wrap) wrap.style.display = S.gsTag ? 'flex' : 'none';
   document.querySelectorAll('.gs-mode-btn').forEach(b => b.classList.toggle('active', b.id === 'gsMode-' + (S.gsTagMode || 'auto')));
@@ -225,45 +220,78 @@ function refreshFlagPreviews() {
     if (!card) return;
     const svg = card.querySelector('svg');
     if (!svg) return;
-    applyColors(svg, S.colors, f.noColors);
+    applyColors(svg, S.colors, f.noColors, f);
     if (S.gsTag) {
-      const style = S.gsTagMode === 'light' ? 'Light'
-        : S.gsTagMode === 'dark' ? 'Dark'
-        : _autoTagStyle(f, S.colors);
-      showGsTagVariant(svg, style, 'front');
+      const keyZone = f.tagKeyZone || 'zone-primary';
+      showGsTagVariant(svg, 'front', S.gsTagMode, resolveColors(S.colors, f)[keyZone]);
     }
   });
 }
 
 function checkStep1() {
+  // Colors are optional — resolveColors() fills unpicked zones with defaults,
+  // so only a style selection is required to continue.
   const flag = getFlag();
-  const ok = !!flag && (
-    flag.noColors ||
-    (!!S.colors['zone-primary'] && (!flag.colorZones.some(z => z.id === 'zone-secondary') || !!S.colors['zone-secondary']))
-  );
   const btn = document.getElementById('s1next');
-  if (btn) btn.disabled = !ok;
+  if (btn) btn.disabled = !flag;
   const hint = document.getElementById('s1hint');
-  if (hint) hint.textContent = ok ? '' : !flag ? 'Pick a style' : 'Pick colors to continue';
+  if (hint) hint.textContent = flag ? '' : 'Pick a style';
+  const gsTagSection = document.getElementById('gsTagSection');
+  if (gsTagSection) gsTagSection.style.display = flag?.noGsTag ? 'none' : '';
 }
 
-window.p1ToggleCPop = function (zid) {
-  const p = document.getElementById('p1cpop-' + zid);
-  const open = p.classList.contains('open');
-  document.querySelectorAll('.cpop').forEach(x => x.classList.remove('open'));
-  if (!open) p.classList.add('open');
-};
-window.p1CSync   = (zid, h) => { document.getElementById('p1ch-' + zid).value = h; document.getElementById('p1cprev-' + zid).style.background = h; };
-window.p1CSyncN  = (zid, h) => { const c = h.startsWith('#') ? h : '#' + h; if (/^#[0-9A-Fa-f]{6}$/.test(c)) { document.getElementById('p1cn-' + zid).value = c; document.getElementById('p1cprev-' + zid).style.background = c; } };
-window.p1CApply  = function (zid) {
+window.p1CSync  = (zid, h) => { const inp = document.getElementById('p1ch-' + zid); if (inp) inp.value = h; };
+window.p1CSyncN = (zid, h) => { const c = h.startsWith('#') ? h : '#' + h; if (/^#[0-9A-Fa-f]{6}$/.test(c)) { const inp = document.getElementById('p1cn-' + zid); if (inp) inp.value = c; } };
+window.p1CApply = function (zid) {
   const h = document.getElementById('p1ch-' + zid).value;
   const c = h.startsWith('#') ? h : '#' + h;
   if (!/^#[0-9A-Fa-f]{6}$/.test(c)) return;
-  document.getElementById('p1cpop-' + zid).classList.remove('open');
   pickColor(zid, c);
+};
+window.p1Eyedrop = async function (zid) {
+  if (!('EyeDropper' in window)) return;
+  try {
+    const r = await new window.EyeDropper().open();
+    pickColor(zid, r.sRGBHex);
+  } catch { /* user canceled */ }
 };
 
 // ── Step 2: Colors ─────────────────────────────────────────
+
+function s2ZonePickerHtml(zid) {
+  const hex = S.colors[zid];
+  const swatch = hex
+    ? `<input type="color" id="cn-${zid}" value="${hex}" oninput="cSync('${zid}',this.value)">`
+    : `<div class="csw" onclick="document.getElementById('cn-${zid}').click()"></div>
+       <input type="color" id="cn-${zid}" value="#1A4A2E" oninput="cSync('${zid}',this.value)" style="position:absolute;opacity:0;width:0;height:0">`;
+  return `<div class="ve-custom-row">
+      ${swatch}
+      <input type="text" class="hexin" id="ch-${zid}" value="${hex || ''}" maxlength="7" placeholder="#000000" oninput="cSyncN('${zid}',this.value)">
+      ${_SUPPORTS_EYEDROPPER ? `<button type="button" class="eyedropper-btn" onclick="cEyedrop('${zid}')" title="Pick color from screen">${_EYEDROPPER_SVG}</button>` : ''}
+      <button class="cpop-apply" onclick="cApply('${zid}')">Apply</button>
+    </div>
+    <div class="swatch-grid" id="sg-${zid}">
+      ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${hex === c.hex ? 'sel' : ''}"
+        style="background:${c.hex}" data-hex="${c.hex}" title="${c.name}"
+        onclick="pickColor('${zid}','${c.hex}')"></div>`).join('')}
+    </div>`;
+}
+
+window.toggleBorderMatch = function (matches) {
+  if (matches) {
+    delete S.colors['zone-border'];
+  } else if (!('zone-border' in S.colors)) {
+    S.colors['zone-border'] = null; // independent mode — nothing chosen yet, show the picker
+  }
+  renderP1Colors();
+  setupColors();
+  refreshFlagPreviews();
+  refreshColorPrev();
+  checkStep1();
+  checkColors();
+  syncSidebar();
+  markDirty();
+};
 
 function setupColors() {
   const flag = getFlag();
@@ -275,42 +303,26 @@ function setupColors() {
     checkColors();
     return;
   }
-  document.getElementById('colorZones').innerHTML = flag.colorZones.map(z => `
-    <div>
-      <div class="zlabel">${z.id === 'zone-primary' ? 'Primary Color' : 'Secondary Color'}</div>
-      <div class="swatch-grid" id="sg-${z.id}">
-        ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${S.colors[z.id] === c.hex ? 'sel' : ''}"
-          style="background:${c.hex}" data-hex="${c.hex}" title="${c.name}"
-          onclick="pickColor('${z.id}','${c.hex}')"></div>`).join('')}
-        <div class="csw-wrap">
-          <div class="csw ${!COLORS.find(c => c.hex === S.colors[z.id]) && S.colors[z.id] ? 'sel' : ''}"
-            id="csw-${z.id}" onclick="toggleCPop('${z.id}')"></div>
-          <div class="cpop" id="cpop-${z.id}">
-            <div class="cpop-lbl">Custom color</div>
-            <div class="cpop-prev" id="cprev-${z.id}" style="background:${S.colors[z.id] || '#1A4A2E'}"></div>
-            <div class="cpop-row">
-              <input type="color" id="cn-${z.id}" value="${S.colors[z.id] || '#1A4A2E'}" oninput="cSync('${z.id}',this.value)">
-              <input type="text" class="hexin" id="ch-${z.id}" value="${S.colors[z.id] || '#1A4A2E'}" maxlength="7" placeholder="#000000" oninput="cSyncN('${z.id}',this.value)">
-            </div>
-            <button class="cpop-apply" onclick="cApply('${z.id}')">Apply</button>
-          </div>
-        </div>
-      </div>
-    </div>`).join('');
+  document.getElementById('colorZones').innerHTML = flag.colorZones.map(z => {
+    const label = z.label || (z.id === 'zone-primary' ? 'Primary Color' : 'Color');
+    if (z.id === 'zone-border') {
+      const matches = !('zone-border' in S.colors);
+      const body = matches ? '' : s2ZonePickerHtml('zone-border');
+      return `<div class="p1zone"><div class="zlabel">${label}</div>${borderToggleHtml(flag)}${body}</div>`;
+    }
+    return `<div class="p1zone"><div class="zlabel">${label}</div>${s2ZonePickerHtml(z.id)}</div>`;
+  }).join('');
   document.getElementById('colorPrevName').textContent = flag.name;
   refreshColorPrev();
   checkColors();
-  document.addEventListener('click', closePops, { capture: true });
 }
 
 window.pickColor = function (zid, hex) {
   S.colors[zid] = hex;
-  document.querySelectorAll(`#sg-${zid} .swatch`).forEach(s => s.classList.toggle('sel', s.dataset.hex === hex));
-  const cs = document.getElementById('csw-' + zid);
-  if (cs) cs.classList.toggle('sel', !COLORS.some(c => c.hex === hex));
-  refreshColorPrev();
-  checkColors();
+  // Full re-render (not just toggling .sel on the changed swatch) since the
+  // border zone's preview can depend on whichever zone was just picked.
   renderP1Colors();
+  setupColors();
   refreshFlagPreviews();
   checkStep1();
   syncSidebar();
@@ -324,42 +336,35 @@ function refreshColorPrev() {
   if (!box) return;
   box.innerHTML = `<svg viewBox="${flag.viewBox || '0 0 7519 4669'}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${flag.svgContent}</svg>`;
   const svg = box.querySelector('svg');
-  applyColors(svg, S.colors, flag.noColors);
+  applyColors(svg, S.colors, flag.noColors, flag);
   if (S.gsTag) {
-    const style = S.gsTagMode === 'light' ? 'Dark'
-      : S.gsTagMode === 'dark' ? 'Light'
-      : _autoTagStyle(flag, S.colors);
-    showGsTagVariant(svg, style, 'front');
+    const keyZone = flag.tagKeyZone || 'zone-primary';
+    showGsTagVariant(svg, 'front', S.gsTagMode, resolveColors(S.colors, flag)[keyZone]);
   }
   refreshFlagExpanded();
 }
 
 function checkColors() {
+  // Colors are optional — resolveColors() fills unpicked zones with defaults.
   const flag = getFlag();
-  if (!flag) return;
   const btn = document.getElementById('s2next');
-  if (btn) btn.disabled = !flag.noColors && !flag.colorZones.every(z => S.colors[z.id]);
+  if (btn) btn.disabled = !flag;
 }
 
-window.toggleCPop = function (zid) {
-  const p = document.getElementById('cpop-' + zid);
-  const open = p.classList.contains('open');
-  document.querySelectorAll('.cpop').forEach(x => x.classList.remove('open'));
-  if (!open) p.classList.add('open');
-};
-function closePops(e) {
-  if (!e.target.closest('.csw-wrap')) document.querySelectorAll('.cpop').forEach(x => x.classList.remove('open'));
-}
-window.cSync  = (z, h) => { document.getElementById('ch-' + z).value = h; document.getElementById('cprev-' + z).style.background = h; };
-window.cSyncN = (z, h) => { const c = h.startsWith('#') ? h : '#' + h; if (/^#[0-9A-Fa-f]{6}$/.test(c)) { document.getElementById('cn-' + z).value = c; document.getElementById('cprev-' + z).style.background = c; } };
+window.cSync  = (z, h) => { const inp = document.getElementById('ch-' + z); if (inp) inp.value = h; };
+window.cSyncN = (z, h) => { const c = h.startsWith('#') ? h : '#' + h; if (/^#[0-9A-Fa-f]{6}$/.test(c)) { const inp = document.getElementById('cn-' + z); if (inp) inp.value = c; } };
 window.cApply = function (z) {
   const h = document.getElementById('ch-' + z).value;
   const c = h.startsWith('#') ? h : '#' + h;
   if (!/^#[0-9A-Fa-f]{6}$/.test(c)) return;
-  document.querySelectorAll(`#sg-${z} .swatch`).forEach(s => s.classList.remove('sel'));
-  document.getElementById('csw-' + z)?.classList.add('sel');
-  document.getElementById('cpop-' + z)?.classList.remove('open');
   pickColor(z, c);
+};
+window.cEyedrop = async function (z) {
+  if (!('EyeDropper' in window)) return;
+  try {
+    const r = await new window.EyeDropper().open();
+    pickColor(z, r.sRGBHex);
+  } catch { /* user canceled */ }
 };
 
 // ── Step 3: Logo library ───────────────────────────────────
@@ -435,7 +440,7 @@ function setupLibrary() {
   if (!svg) return;
   svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
   svg.innerHTML = flag.svgContent;
-  applyColors(svg, S.colors, flag.noColors);
+  applyColors(svg, S.colors, flag.noColors, flag);
   renderLib();
   renderDropZones('baseWrap', 'baseSvg', [], 'front', () => {});
 }
@@ -508,9 +513,10 @@ window.goToVariations = async function () {
 
 // ── Init ──────────────────────────────────────────────────
 
-await Promise.all([loadAllFlags(FLAGS), loadGsTag()]);
+await loadAllFlags(FLAGS);
 renderFlagGrid();
 renderP1Colors();
+syncGsTagUI();
 
 const _urlProject = new URLSearchParams(window.location.search).get('project');
 if (_urlProject) {
@@ -526,7 +532,7 @@ if (_urlProject) {
     S.library = logos;
     if (flagCfg) {
       S.flagId = flagCfg.flag_id;
-      S.colors = flagCfg.colors || {};
+      S.colors = (flagCfg.colors && Object.keys(flagCfg.colors).length) ? flagCfg.colors : { ...DEFAULT_COLORS };
       const varData = flagCfg.variations || [];
       const varItems = Array.isArray(varData) ? varData : (varData.items || []);
       S.variations = varItems.map(v => ({ ...v, backAssignment: v.backAssignment || {} }));
