@@ -399,12 +399,7 @@ function renderStep5() {
       <div class="${ack1CheckCls}"></div>
       <div class="ack-text">I acknowledge that final artwork approval is required at least 17 days before the event to avoid rush fees. If the event is on a weekend or Monday, this deadline will be moved to the preceding Friday.</div>
     </div>
-    ${e.ackDeadline ? `<div class="form-error" style="margin-top:-12px;margin-bottom:12px">${esc(e.ackDeadline)}</div>` : ''}
-    <div class="${ack2Cls}" onclick="window.toggleAck('pricing')">
-      <div class="${ack2CheckCls}"></div>
-      <div class="ack-text">I acknowledge that if I am submitting more than 3 total logos/designs, the price point for the flags will be $1,099.</div>
-    </div>
-    ${e.ackPricing ? `<div class="form-error" style="margin-top:-12px;margin-bottom:12px">${esc(e.ackPricing)}</div>` : ''}
+    
 
     <div class="rs-divider"></div>
 
@@ -484,17 +479,24 @@ function coloredSvgInner(svgText, primaryHex, secondaryHex) {
     const el = svgEl.querySelector('#zone-primary');
     if (el) {
       el.setAttribute('fill', primaryHex);
-      el.querySelectorAll('rect,path,polygon,circle,ellipse').forEach(c => c.setAttribute('fill', primaryHex));
+      el.querySelectorAll('rect,path,polygon,circle,ellipse').forEach(c => {
+        if (!c.closest('[id^="Bleed"]')) c.setAttribute('fill', primaryHex);
+      });
     }
+    svgEl.querySelectorAll('[id^="zone-primary"]').forEach(el => el.setAttribute('fill', primaryHex));
   }
   if (secondaryHex) {
     const el = svgEl.querySelector('#zone-secondary');
     if (el) {
       el.setAttribute('fill', secondaryHex);
-      el.querySelectorAll('rect,path,polygon,circle,ellipse').forEach(c => c.setAttribute('fill', secondaryHex));
+      el.querySelectorAll('rect,path,polygon,circle,ellipse').forEach(c => {
+        if (!c.closest('[id^="Bleed"]')) c.setAttribute('fill', secondaryHex);
+      });
     }
+    svgEl.querySelectorAll('[id^="zone-secondary"]').forEach(el => el.setAttribute('fill', secondaryHex));
   }
   svgEl.querySelectorAll('[id*="logo-placement"]').forEach(g => g.setAttribute('display', 'none'));
+  svgEl.querySelector('[id="GolfStatus Tag"]')?.setAttribute('display', 'none');
   return svgEl.innerHTML;
 }
 
@@ -510,7 +512,7 @@ function renderCollapsibleFlagPicker() {
     const inner = svgText ? coloredSvgInner(svgText, primaryHex, secondaryHex) : '';
     const vb = flag?.viewBox || '0 0 7519 4669';
     return `<div class="picker-collapsed" onclick="window.openPicker('flagStyle')" style="cursor:pointer">
-      <div class="picker-flag-thumb">${inner ? `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">${inner}</svg>` : ''}</div>
+      <div class="picker-flag-thumb">${inner ? `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%" fill="none">${inner}</svg>` : ''}</div>
       <span class="picker-collapsed-name">${esc(label)}</span>
       <span style="flex:1"></span>
       <button class="picker-clear-btn" onclick="event.stopPropagation();window.clearPicker('flagStyle')" title="Clear">×</button>
@@ -522,7 +524,7 @@ function renderCollapsibleFlagPicker() {
     const svgText = svgCache.get(flag.name) || '';
     const inner = svgText ? coloredSvgInner(svgText, primaryHex, secondaryHex) : '';
     return `<div class="flag-tmpl-card${isActive ? ' active' : ''}" onclick="window.selectFlagStyle('${flag.id}')">
-      <div class="flag-tmpl-thumb">${inner ? `<svg viewBox="${flag.viewBox}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">${inner}</svg>` : '<div style="width:100%;height:100%;background:var(--gray-100)"></div>'}</div>
+      <div class="flag-tmpl-thumb">${inner ? `<svg viewBox="${flag.viewBox}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%" fill="none">${inner}</svg>` : '<div style="width:100%;height:100%;background:var(--gray-100)"></div>'}</div>
       <div class="flag-tmpl-name">${flag.name}</div>
     </div>`;
   }).join('');
@@ -736,6 +738,7 @@ window.orderSubmit = async function () {
       ack_pricing: O.ackPricing,
     });
 
+    const selectedFlagForEmail = FLAGS.find(f => f.id === O.flagStyle);
     sendOrderConfirmation({
       contactName: O.contactName,
       contactEmail: O.contactEmail,
@@ -751,6 +754,7 @@ window.orderSubmit = async function () {
         country: O.country,
       },
       flagStyle: O.flagStyle,
+      flagStyleName: selectedFlagForEmail ? selectedFlagForEmail.name : O.flagStyle,
       flagColors: [O.flagPrimaryColor, O.flagSecondaryColor].filter(Boolean),
       flagSetup: O.flagSetup,
       flagQty: O.flagQty,

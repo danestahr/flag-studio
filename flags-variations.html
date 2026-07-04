@@ -40,10 +40,6 @@
         <div><div class="step-label">Gallery</div><div class="step-desc">Review &amp; export</div></div>
       </div>
     </div>
-    <div style="padding:0 1.5rem 1.5rem;display:flex;flex-direction:column;gap:8px">
-      <button class="btn sm" id="saveDesignsBtn" onclick="saveDraft()" style="width:100%;justify-content:center">Save draft</button>
-      <div id="saveStatus" style="font-size:12px;color:var(--gray-400);text-align:center;min-height:16px"></div>
-    </div>
   </aside>
 
   <main class="main">
@@ -54,25 +50,18 @@
           <div class="psub">Select a variation, then drag logos into zones or use the buttons to add content.</div>
         </div>
         <div class="var-page-actions">
-          <div class="sides-row" style="margin:0">
-            <label class="check-label">
-              <input type="checkbox" id="diffSidesCheck" onchange="toggleDiffSides(this.checked)">
-              Both sides
-            </label>
-          </div>
           <div id="logoLayoutRow" style="display:none">
             <div class="face-toggle-row">
               <button class="face-tab active" id="layoutBtnSingle" onclick="setLogoLayout('single')">Full logo</button>
               <button class="face-tab" id="layoutBtnMulti" onclick="setLogoLayout('multi')">Multi</button>
             </div>
           </div>
-          <div style="position:relative">
-            <button class="btn sm" id="varAddBtn" onclick="toggleVarAddMenu(event)">+ Add</button>
-            <div id="varAddMenu" class="var-add-menu" style="display:none">
-              <button class="var-add-opt" onclick="addFlagText();closeVarAddMenu()">T+ Text</button>
-              <button class="var-add-opt" onclick="addLogoToCanvas();closeVarAddMenu()">⊕ Logo</button>
-            </div>
+          <button class="btn sm" id="backToDesignBtn" style="display:none">← Design</button>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+            <button class="btn sm" id="saveDesignsBtn" onclick="saveDraft()" style="display:none">Save draft</button>
+            <div id="saveStatus" style="font-size:11px;color:var(--gray-400);text-align:center;min-height:14px"></div>
           </div>
+          <button class="btn primary" onclick="goToGallery()">Gallery →</button>
         </div>
       </div>
       <div class="var-strip-wrap">
@@ -86,9 +75,9 @@
       </div>
       <div class="s4layout">
         <div class="var-canvas-panel">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
             <span style="font-size:13px;font-weight:500" id="activeVarName">Variation 1</span>
-            <span style="font-size:12px;color:var(--gray-400)">Drag logos into zones</span>
+            <button class="btn sm" id="varAddBtn" onclick="openVarAddMenu(event)" title="Add text or logo">+</button>
           </div>
           <div id="varEditNote" class="var-edit-note" style="display:none">
             <div class="var-edit-note-body">
@@ -98,32 +87,34 @@
             <button class="var-edit-resolve-btn" id="varEditResolveBtn" onclick="resolveEdit()">Mark as resolved</button>
             <span class="var-edit-resolved-tag" id="varEditResolvedTag" style="display:none">Resolved</span>
           </div>
-          <div class="canvas-zoom-row">
-            <span class="canvas-zoom-value" id="flagZoomValue">100%</span>
-            <button class="canvas-zoom-reset" id="flagZoomReset" onclick="setFlagZoom(100)" style="display:none">Reset</button>
-            <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
-          </div>
-          <div class="canvas-scroll" id="flagCanvasScroll" style="display:flex;align-items:flex-start;">
-            <div class="canvas-zoom-wrap" id="flagZoomWrap">
-              <div id="singleCanvas">
+          <div class="canvas-preview-box">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:.5rem">
+              <div class="face-toggle-row">
+                <button class="face-tab active" id="faceTabFront" onclick="setActiveFace('front')">Front</button>
+                <button class="face-tab" id="faceTabBack" onclick="setActiveFace('back')">Back</button>
+              </div>
+              <div class="sides-row" id="sameSidesRow" style="display:none">
+                <label class="gs-tag-label">
+                  <input type="checkbox" id="sameSidesCheck" class="gs-toggle-input" onchange="toggleSameSides(this.checked)">
+                  <span class="gs-toggle-text">Same Front &amp; Back Design</span>
+                  <span class="gs-toggle-switch"></span>
+                </label>
+              </div>
+            </div>
+            <div class="canvas-scroll" id="flagCanvasScroll" style="display:flex;align-items:flex-start;">
+              <div class="canvas-zoom-wrap" id="flagZoomWrap">
                 <div class="flag-wrap" id="varWrap">
                   <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
                 </div>
               </div>
-              <div id="dualCanvas" style="display:none" class="dual-canvas-row">
-                <div>
-                  <div class="dual-canvas-label">Front</div>
-                  <div class="flag-wrap" id="varWrapFront">
-                    <svg class="bsvg" id="varSvgFront" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
-                  </div>
-                </div>
-                <div>
-                  <div class="dual-canvas-label">Back</div>
-                  <div class="flag-wrap" id="varWrapBack">
-                    <svg class="bsvg" id="varSvgBack" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
-                  </div>
-                </div>
-              </div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-top:.5rem">
+            <div class="canvas-bleed-hint" style="margin:0;text-align:left">Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.</div>
+            <div class="canvas-zoom-row" style="margin:0">
+              <span class="canvas-zoom-value" id="flagZoomValue">100%</span>
+              <button class="canvas-zoom-reset" id="flagZoomReset" onclick="setFlagZoom(100)" style="display:none">Reset</button>
+              <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
             </div>
           </div>
         </div>
@@ -142,29 +133,27 @@
           </div>
         </div>
       </div>
-      <div class="arow">
-        <button class="btn" id="backToDesignBtn">← Design</button>
-        <div style="display:flex;gap:8px">
-          <button class="btn primary" onclick="goToGallery()">Gallery →</button>
-        </div>
-      </div>
     </div>
   </main>
 </div>
 
 <script type="module" src="/src/flags/variations.js"></script>
 <script>
-  document.getElementById('backToDesignBtn').addEventListener('click', () => {
+  document.getElementById('backToDesignBtn').addEventListener('click', async () => {
     const p = new URLSearchParams(window.location.search).get('project');
+    await window.saveDraft?.();
     window.location.href = 'flags.html' + (p ? '?project=' + p : '');
   });
-  document.getElementById('navDesign').addEventListener('click', () => {
+  document.getElementById('navDesign').addEventListener('click', async () => {
     const p = new URLSearchParams(window.location.search).get('project');
+    await window.saveDraft?.();
     window.location.href = 'flags.html' + (p ? '?project=' + p : '');
   });
-  document.getElementById('navGallery').addEventListener('click', () => {
+  document.getElementById('navGallery').addEventListener('click', async () => {
     const p = new URLSearchParams(window.location.search).get('project');
-    if (p) window.location.href = 'flags-gallery.html?project=' + p;
+    if (!p) return;
+    await window.saveDraft?.();
+    window.location.href = 'flags-gallery.html?project=' + p;
   });
 </script>
 </body>

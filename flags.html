@@ -55,7 +55,7 @@
         <div class="p1-header-actions">
           <span class="s1hint-text" id="s1hint">Pick colors and select a style</span>
           <button class="btn primary" id="s1next" disabled onclick="goToVariations()">Next: Variations →</button>
-          <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" title="Save draft">Save draft</button>
+          <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" title="Save draft" style="display:none">Save draft</button>
         </div>
       </div>
       <div class="p1-split">
@@ -68,27 +68,43 @@
         </div>
         <!-- Right: controls -->
         <div class="p1-controls-col">
-          <div class="p1zones" id="p1colorZones"></div>
-          <div class="gs-tag-row">
-            <label class="gs-tag-label">
-              <input type="checkbox" id="gsTagCheck" onchange="toggleGsTag(this.checked)" class="gs-toggle-input">
-              <span class="gs-toggle-switch"></span>
-              <span class="gs-toggle-text">GolfStatus tag</span>
-            </label>
-            <div class="gs-mode-wrap" id="gsTagModeWrap" style="display:none">
-              <button class="gs-mode-btn active" id="gsMode-auto" onclick="setGsTagMode('auto')">Auto</button>
-              <button class="gs-mode-btn" id="gsMode-dark" onclick="setGsTagMode('dark')">Black</button>
-              <button class="gs-mode-btn" id="gsMode-light" onclick="setGsTagMode('light')">White</button>
+          <div class="p1zones p1-section" id="p1colorZones"></div>
+          <div id="gsTagSection" class="p1-section p1-section-divided">
+            <div class="zlabel">GolfStatus Tag</div>
+            <div class="gs-tag-row">
+              <label class="gs-tag-label">
+                <input type="checkbox" id="gsTagCheck" onchange="toggleGsTag(this.checked)" class="gs-toggle-input">
+                <span class="gs-toggle-switch"></span>
+                <span class="gs-toggle-text" id="gsTagToggleText">Off</span>
+              </label>
+              <div class="gs-mode-wrap" id="gsTagModeWrap" style="display:none">
+                <button class="gs-mode-btn active" id="gsMode-auto" onclick="setGsTagMode('auto')">Auto</button>
+                <button class="gs-mode-btn" id="gsMode-dark" onclick="setGsTagMode('dark')">Black</button>
+                <button class="gs-mode-btn" id="gsMode-light" onclick="setGsTagMode('light')">White</button>
+              </div>
             </div>
           </div>
-          <div class="flag-grid" id="flagGrid"></div>
+          <div id="flagStylesSection" class="p1-section">
+            <div class="zlabel">Flag Styles</div>
+            <div class="flag-grid" id="flagGrid"></div>
+          </div>
         </div>
       </div>
     </div>
 
     <!-- Step 2 -->
     <div class="panel" id="panel-2">
-      <div><div class="ptitle">Master colors</div><div class="psub">These colors apply to all variations.</div></div>
+      <div class="p1-header">
+        <div>
+          <div class="ptitle">Master colors</div>
+          <div class="psub">These colors apply to all variations.</div>
+        </div>
+        <div class="p1-header-actions">
+          <button class="btn sm" onclick="goStep(1)">← Back</button>
+          <button class="btn primary" id="s2next" disabled onclick="goToVariations()">Next: Variations →</button>
+          <button class="btn sm save-draft-btn" onclick="saveDraft()" style="display:none">Save draft</button>
+        </div>
+      </div>
       <div class="color-layout">
         <div id="colorZones" style="display:flex;flex-direction:column;gap:1.5rem"></div>
         <div class="ppanel">
@@ -97,15 +113,21 @@
           <div style="font-size:13px;color:var(--gray-400)" id="colorPrevName"></div>
         </div>
       </div>
-      <div class="arow">
-        <button class="btn" onclick="goStep(1)">← Back</button>
-        <button class="btn primary" id="s2next" disabled onclick="goStep(4)">Next: Variations →</button>
-      </div>
     </div>
 
     <!-- Step 3 -->
     <div class="panel" id="panel-3">
-      <div><div class="ptitle">Logo library</div><div class="psub">Upload all logos you'll use across variations. Drag them into the zones on the flag to set a base assignment.</div></div>
+      <div class="p1-header">
+        <div>
+          <div class="ptitle">Logo library</div>
+          <div class="psub">Upload all logos you'll use across variations. Drag them into the zones on the flag to set a base assignment.</div>
+        </div>
+        <div class="p1-header-actions">
+          <button class="btn sm" onclick="goStep(2)">← Back</button>
+          <button class="btn primary" onclick="goToVariations()">Next: Variations →</button>
+          <button class="btn sm save-draft-btn" onclick="saveDraft()" style="display:none">Save draft</button>
+        </div>
+      </div>
       <div class="s3layout">
         <div class="lib-panel">
           <div class="lib-title">Uploaded logos</div>
@@ -124,20 +146,25 @@
             <span class="canvas-label">Base assignment</span>
             <span class="canvas-hint">Drag from library into a zone</span>
           </div>
+          <div class="canvas-bleed-hint">Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.</div>
           <div class="flag-wrap" id="baseWrap">
             <svg class="bsvg" id="baseSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
           </div>
         </div>
       </div>
-      <div class="arow">
-        <button class="btn" onclick="goStep(2)">← Back</button>
-        <button class="btn primary" onclick="goStep(4)">Next: Variations →</button>
-      </div>
     </div>
 
     <!-- Steps 4 & 5 live on flags-variations.html and flags-gallery.html -->
     <div class="panel" id="panel-4" style="display:none">
-      <div><div class="ptitle">Variations</div><div class="psub">Each variation swaps logos on the same master. Select a variation, then drag logos from the library into zones.</div></div>
+      <div class="p1-header">
+        <div>
+          <div class="ptitle">Variations</div>
+          <div class="psub">Each variation swaps logos on the same master. Select a variation, then drag logos from the library into zones.</div>
+        </div>
+        <div class="p1-header-actions">
+          <button class="btn sm save-draft-btn" id="saveDesignsBtn" onclick="saveDraft()">Save draft</button>
+        </div>
+      </div>
       <div class="sides-row">
         <label class="check-label">
           <input type="checkbox" id="diffSidesCheck" onchange="toggleDiffSides(this.checked)">
@@ -179,7 +206,12 @@
             <button class="canvas-zoom-reset" id="flagZoomReset" onclick="setFlagZoom(100)" style="display:none">Reset</button>
             <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
           </div>
+          <div class="canvas-bleed-hint">Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.</div>
           <div class="canvas-scroll" id="flagCanvasScroll">
+            <div id="varCanvasEmpty" class="var-canvas-empty" style="display:none">
+              <span style="font-size:32px;line-height:1;opacity:.3">⚑</span>
+              <span>No variations — add one to get started</span>
+            </div>
             <div class="canvas-zoom-wrap" id="flagZoomWrap">
               <!-- Single canvas (same logo front & back) -->
               <div id="singleCanvas">
@@ -206,23 +238,31 @@
           </div>
         </div>
         <div class="var-list-panel">
-          <div class="var-list-title">All variations</div>
+          <div class="var-list-header">
+            <div class="var-list-title">All variations</div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn sm" onclick="goStep(2)">← Design</button>
+              <button class="btn sm" onclick="addVariation()">+ Add variation</button>
+              <button class="btn sm primary" onclick="goStep(5)">Gallery →</button>
+            </div>
+          </div>
           <div class="var-list" id="varList"></div>
-          <button class="add-var" onclick="addVariation()">+ Add variation</button>
-        </div>
-      </div>
-      <div class="arow">
-        <button class="btn" onclick="goStep(2)">← Back</button>
-        <div style="display:flex;gap:8px">
-          <button class="btn" id="saveDesignsBtn" onclick="saveDraft()">Save designs</button>
-          <button class="btn primary" onclick="goStep(5)">Gallery →</button>
         </div>
       </div>
     </div>
 
     <!-- Step 5 -->
     <div class="panel" id="panel-5">
-      <div><div class="ptitle">Gallery</div><div class="psub">Review all variations and export.</div></div>
+      <div class="p1-header">
+        <div>
+          <div class="ptitle">Gallery</div>
+          <div class="psub">Review all variations and export.</div>
+        </div>
+        <div class="p1-header-actions">
+          <button class="btn sm" onclick="goStep(4)">← Back</button>
+          <button class="btn sm save-draft-btn" onclick="saveDraft()">Save draft</button>
+        </div>
+      </div>
       <div class="s5layout">
         <div>
           <!-- Single-face view -->
@@ -295,9 +335,6 @@
           </div>
         </div>
       </div>
-      <div class="arow">
-        <button class="btn" onclick="goStep(4)">← Back</button>
-      </div>
     </div>
 
   </main>
@@ -329,13 +366,17 @@
 
 <script type="module" src="/src/flags/design.js"></script>
 <script>
-  document.getElementById('navVariations').addEventListener('click', () => {
+  document.getElementById('navVariations').addEventListener('click', async () => {
     const p = new URLSearchParams(window.location.search).get('project');
-    if (p) window.location.href = 'flags-variations.html?project=' + p;
+    if (!p) return;
+    await window.saveDraft?.();
+    window.location.href = 'flags-variations.html?project=' + p;
   });
-  document.getElementById('navGallery').addEventListener('click', () => {
+  document.getElementById('navGallery').addEventListener('click', async () => {
     const p = new URLSearchParams(window.location.search).get('project');
-    if (p) window.location.href = 'flags-gallery.html?project=' + p;
+    if (!p) return;
+    await window.saveDraft?.();
+    window.location.href = 'flags-gallery.html?project=' + p;
   });
 </script>
 </body>

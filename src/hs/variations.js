@@ -16,15 +16,15 @@ import { openDefaultsPanel } from './defaults.js';
 export function renderStep2() {
   const panel = document.getElementById('panel-2');
   panel.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div class="p1-header">
       <div>
         <div class="ptitle">Variations</div>
         <div class="psub">Upload sponsor logos and build one variation per sponsor. <strong>Each sign is printed front and back</strong> with the same design.</div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div class="p1-header-actions">
         <button class="btn sm" onclick="tryGoStep(1)">← Design</button>
-        <button class="btn sm primary" onclick="goStep(3)">Gallery & export →</button>
-        <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()">Save draft</button>
+        <button class="btn primary" onclick="goStep(3)">Gallery & export →</button>
+        <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
       </div>
     </div>
     <div class="var-strip-wrap">
@@ -41,6 +41,7 @@ export function renderStep2() {
           <button class="canvas-zoom-reset" id="hsZoomReset" onclick="setHsZoom(100)" style="display:none">Reset</button>
           <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
         </div>
+        <div class="canvas-bleed-hint">Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed sign.</div>
         <div class="canvas-scroll" id="hsCanvasScroll">
           <div class="canvas-scroll-inner">
             <div class="canvas-zoom-wrap" id="hsZoomWrap">

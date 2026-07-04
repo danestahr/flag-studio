@@ -257,7 +257,12 @@ export function wireTlSlotDragResize(overlay, img, handle, idx) {
   });
   const SNAP_PCT = 4; // % within which to snap to center on each axis
   const onMove = e => {
+    // hasPointerCapture guards against a dropped/lost pointerup leaving `mode`
+    // stuck set — without it, a later hover-only pointermove would move/resize
+    // the slot using the stale start point from the previous gesture.
     if (!mode) return;
+    if (mode === 'move' && !overlay.hasPointerCapture(e.pointerId)) return;
+    if (mode === 'resize' && !handle.hasPointerCapture(e.pointerId)) return;
     const slot = HS.templateLogos.slots[idx];
     const rect = overlay.getBoundingClientRect();
     if (mode === 'move') {
@@ -292,6 +297,8 @@ export function wireTlSlotDragResize(overlay, img, handle, idx) {
   };
   overlay.addEventListener('pointerup', onUp);
   handle.addEventListener('pointerup', onUp);
+  overlay.addEventListener('pointercancel', onUp);
+  handle.addEventListener('pointercancel', onUp);
 }
 
 // Drag and resize the slot box itself (sets per-slot freeX/freeY/freeW/freeH).
@@ -328,7 +335,12 @@ export function wireTlSlotFreeDrag(overlay, handle, idx, signRect, onTap) {
   });
 
   const onMove = e => {
+    // hasPointerCapture guards against a dropped/lost pointerup leaving `mode`
+    // stuck set — without it, a later hover-only pointermove would move/resize
+    // the slot using the stale start point from the previous gesture.
     if (!mode) return;
+    if (mode === 'move' && !overlay.hasPointerCapture(e.pointerId)) return;
+    if (mode === 'resize' && !handle.hasPointerCapture(e.pointerId)) return;
     const pr = overlay.parentElement?.getBoundingClientRect();
     const scaleX = pr ? pr.width / HS_W : 1;
     const scaleY = pr ? pr.height / HS_H : 1;
@@ -373,6 +385,8 @@ export function wireTlSlotFreeDrag(overlay, handle, idx, signRect, onTap) {
   };
   overlay.addEventListener('pointerup', onUp);
   handle.addEventListener('pointerup', onUp);
+  overlay.addEventListener('pointercancel', onUp);
+  handle.addEventListener('pointercancel', onUp);
 }
 
 export function openTlLibPicker(idx, anchorEl) {

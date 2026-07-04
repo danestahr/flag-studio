@@ -282,14 +282,14 @@ export function renderStep1() {
   UI.hsMenuAnimate = false;
 
   panel.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div class="p1-header">
       <div>
         <div class="ptitle">Design</div>
         <div class="psub">Choose a template, set the background, and configure text.</div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <button class="btn sm primary" onclick="goStep(2)">Next: Variations →</button>
-        <button class="btn sm" id="saveDraftBtn" onclick="saveDraft()">Save draft</button>
+      <div class="p1-header-actions">
+        <button class="btn primary" onclick="goStep(2)">Next: Variations →</button>
+        <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
       </div>
     </div>
     <div class="hs-design-layout">
@@ -299,6 +299,7 @@ export function renderStep1() {
           <button class="canvas-zoom-reset" id="hsStep1ZoomReset" onclick="setHsStep1Zoom(100)" style="display:none">Reset</button>
           <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
         </div>
+        <div class="canvas-bleed-hint">Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed sign.</div>
         <div class="canvas-scroll hs-step1-scroll" id="hsStep1Scroll">
           <div class="canvas-scroll-inner">
             <div class="hs-step1-zoom-wrap" id="hsStep1ZoomWrap">

@@ -21,6 +21,8 @@ let activeFace = 'front';
 let gFace = 'front';
 let feedbackChannel = null;
 let isDirty = false;
+let p1EditZones = new Set();
+let colorEditZones = new Set();
 
 function esc(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -111,30 +113,37 @@ function renderP1Colors() {
   container.innerHTML = P1_ZONES.map(z => {
     const hex = S.colors[z.id];
     const col = COLORS.find(c => c.hex === hex);
-    if (hex) {
-      return `<div class="p1zone">
+    const isEdit = p1EditZones.has(z.id);
+    if (hex && !isEdit) {
+      return `<div class="color-zone">
         <div class="zlabel">${z.label}</div>
         <div class="color-chip-picked">
           <span class="chip-dot" style="background:${hex};${hex === '#FFFFFF' ? 'border:1px solid var(--gray-200)' : ''}"></span>
-          <span>${col?.name || hex}</span>
-          <button class="chip-clear" onclick="clearColor('${z.id}')">×</button>
+          <div class="chip-info">
+            <span class="chip-name">${col?.name || hex}</span>
+            ${col?.name ? `<span class="chip-hex">${hex}</span>` : ''}
+          </div>
+          <button class="chip-clear" onclick="p1EditColor('${z.id}')">×</button>
         </div>
       </div>`;
     }
-    return `<div class="p1zone">
-      <div class="zlabel">${z.label}</div>
+    return `<div class="color-zone">
+      <div class="color-zone-hdr">
+        <div class="zlabel">${z.label}</div>
+        ${isEdit && hex ? `<button class="btn-link-small" onclick="p1CancelEdit('${z.id}')">Cancel</button>` : ''}
+      </div>
       <div class="swatch-grid" id="p1sg-${z.id}">
-        ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''}"
-          style="background:${c.hex}" title="${c.name}"
+        ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${hex === c.hex ? 'sel' : ''}"
+          style="background:${c.hex}" data-hex="${c.hex}" title="${c.name}"
           onclick="pickColor('${z.id}','${c.hex}')"></div>`).join('')}
         <div class="csw-wrap">
-          <div class="csw" onclick="p1ToggleCPop('${z.id}')"></div>
+          <div class="csw${hex && !COLORS.find(c => c.hex === hex) ? ' sel' : ''}" onclick="p1ToggleCPop('${z.id}')"></div>
           <div class="cpop" id="p1cpop-${z.id}">
             <div class="cpop-lbl">Custom color</div>
-            <div class="cpop-prev" id="p1cprev-${z.id}" style="background:#1A4A2E"></div>
+            <div class="cpop-prev" id="p1cprev-${z.id}" style="background:${hex || '#1A4A2E'}"></div>
             <div class="cpop-row">
-              <input type="color" id="p1cn-${z.id}" value="#1A4A2E" oninput="p1CSync('${z.id}',this.value)">
-              <input type="text" class="hexin" id="p1ch-${z.id}" value="#1A4A2E" maxlength="7" placeholder="#000000" oninput="p1CSyncN('${z.id}',this.value)">
+              <input type="color" id="p1cn-${z.id}" value="${hex || '#1A4A2E'}" oninput="p1CSync('${z.id}',this.value)">
+              <input type="text" class="hexin" id="p1ch-${z.id}" value="${hex || '#1A4A2E'}" maxlength="7" placeholder="#000000" oninput="p1CSyncN('${z.id}',this.value)">
             </div>
             <button class="cpop-apply" onclick="p1CApply('${z.id}')">Apply</button>
           </div>
@@ -144,12 +153,14 @@ function renderP1Colors() {
   }).join('');
 }
 
-window.clearColor = function (zoneId) {
-  delete S.colors[zoneId];
+window.p1EditColor = function (zoneId) {
+  p1EditZones.add(zoneId);
   renderP1Colors();
-  refreshFlagPreviews();
-  checkStep1();
-  syncSidebar();
+};
+
+window.p1CancelEdit = function (zoneId) {
+  p1EditZones.delete(zoneId);
+  renderP1Colors();
 };
 
 function refreshFlagPreviews() {
@@ -196,42 +207,80 @@ window.p1CApply = function (zid) {
 };
 
 // ── STEP 2 ────────────────────────────────────────────────
+function renderColorZone(z) {
+  const hex = S.colors[z.id];
+  const col = COLORS.find(c => c.hex === hex);
+  const isEdit = colorEditZones.has(z.id);
+  if (hex && !isEdit) {
+    return `<div class="color-zone" data-zone="${z.id}">
+      <div class="zlabel">${z.label}</div>
+      <div class="color-chip-picked">
+        <span class="chip-dot" style="background:${hex};${hex === '#FFFFFF' ? 'border:1px solid var(--gray-200)' : ''}"></span>
+        <div class="chip-info">
+          <span class="chip-name">${col?.name || hex}</span>
+          ${col?.name ? `<span class="chip-hex">${hex}</span>` : ''}
+        </div>
+        <button class="chip-clear" onclick="colorEditZone('${z.id}')">×</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="color-zone" data-zone="${z.id}">
+    <div class="color-zone-hdr">
+      <div class="zlabel">${z.label}</div>
+      ${isEdit && hex ? `<button class="btn-link-small" onclick="colorCollapseZone('${z.id}')">Cancel</button>` : ''}
+    </div>
+    <div class="swatch-grid" id="sg-${z.id}">
+      ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${hex === c.hex ? 'sel' : ''}"
+        style="background:${c.hex}" data-hex="${c.hex}" title="${c.name}"
+        onclick="pickColor('${z.id}','${c.hex}')"></div>`).join('')}
+      <div class="csw-wrap">
+        <div class="csw ${!COLORS.find(c => c.hex === hex) && hex ? 'sel' : ''}"
+          id="csw-${z.id}" onclick="toggleCPop('${z.id}')"></div>
+        <div class="cpop" id="cpop-${z.id}">
+          <div class="cpop-lbl">Custom color</div>
+          <div class="cpop-prev" id="cprev-${z.id}" style="background:${hex || '#1A4A2E'}"></div>
+          <div class="cpop-row">
+            <input type="color" id="cn-${z.id}" value="${hex || '#1A4A2E'}" oninput="cSync('${z.id}',this.value)">
+            <input type="text" class="hexin" id="ch-${z.id}" value="${hex || '#1A4A2E'}" maxlength="7" placeholder="#000000" oninput="cSyncN('${z.id}',this.value)">
+          </div>
+          <button class="cpop-apply" onclick="cApply('${z.id}')">Apply</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
 function setupColors() {
   const flag = getFlag();
   if (!flag) return;
-  document.getElementById('colorZones').innerHTML = flag.colorZones.map(z => `
-    <div>
-      <div class="zlabel">${z.label}</div>
-      <div class="swatch-grid" id="sg-${z.id}">
-        ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${S.colors[z.id] === c.hex ? 'sel' : ''}"
-          style="background:${c.hex}" data-hex="${c.hex}" title="${c.name}"
-          onclick="pickColor('${z.id}','${c.hex}')"></div>`).join('')}
-        <div class="csw-wrap">
-          <div class="csw ${!COLORS.find(c => c.hex === S.colors[z.id]) && S.colors[z.id] ? 'sel' : ''}"
-            id="csw-${z.id}" onclick="toggleCPop('${z.id}')"></div>
-          <div class="cpop" id="cpop-${z.id}">
-            <div class="cpop-lbl">Custom color</div>
-            <div class="cpop-prev" id="cprev-${z.id}" style="background:${S.colors[z.id] || '#1A4A2E'}"></div>
-            <div class="cpop-row">
-              <input type="color" id="cn-${z.id}" value="${S.colors[z.id] || '#1A4A2E'}" oninput="cSync('${z.id}',this.value)">
-              <input type="text" class="hexin" id="ch-${z.id}" value="${S.colors[z.id] || '#1A4A2E'}" maxlength="7" placeholder="#000000" oninput="cSyncN('${z.id}',this.value)">
-            </div>
-            <button class="cpop-apply" onclick="cApply('${z.id}')">Apply</button>
-          </div>
-        </div>
-      </div>
-    </div>`).join('');
+  colorEditZones.clear();
+  document.getElementById('colorZones').innerHTML = flag.colorZones.map(renderColorZone).join('');
   document.getElementById('colorPrevName').textContent = flag.name;
   refreshColorPrev();
   checkColors();
   document.addEventListener('click', closePops, { capture: true });
 }
 
+function swapZoneEl(zid) {
+  const el = document.querySelector(`[data-zone="${zid}"]`);
+  if (!el) { setupColors(); return; }
+  const flag = getFlag();
+  const z = flag?.colorZones.find(z => z.id === zid);
+  if (!z) { setupColors(); return; }
+  const tmp = document.createElement('div');
+  tmp.innerHTML = renderColorZone(z);
+  el.replaceWith(tmp.firstElementChild);
+}
+
+window.colorEditZone = function (zid) { colorEditZones.add(zid); swapZoneEl(zid); };
+window.colorCollapseZone = function (zid) { colorEditZones.delete(zid); swapZoneEl(zid); };
+
 window.pickColor = function (zid, hex) {
   S.colors[zid] = hex;
-  document.querySelectorAll(`#sg-${zid} .swatch`).forEach(s => s.classList.toggle('sel', s.dataset.hex === hex));
-  const cs = document.getElementById('csw-' + zid);
-  if (cs) cs.classList.toggle('sel', !COLORS.some(c => c.hex === hex));
+  p1EditZones.delete(zid);
+  colorEditZones.delete(zid);
+  // Re-render step 2 zone tile if visible
+  if (document.querySelector(`[data-zone="${zid}"]`)) swapZoneEl(zid);
   refreshColorPrev();
   checkColors();
   renderP1Colors();

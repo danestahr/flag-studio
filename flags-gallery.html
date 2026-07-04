@@ -51,27 +51,10 @@
         <div id="varList" class="var-list"></div>
         <div class="var-details-sticky">
           <div class="review-card">
-            <div class="rc-title" id="detailsVarName">—</div>
-            <div id="gDetails"></div>
-            <div class="face-toggle-row" style="margin:.5rem 0 .75rem">
-              <button class="face-tab active" id="gFtFront" onclick="setGFace('front')">Front</button>
-              <button class="face-tab" id="gFtBack" onclick="setGFace('back')">Back</button>
-            </div>
-            <div class="exp-row">
-              <button class="btn sm" id="expPdf" onclick="expPDF()">
-                <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PDF
-              </button>
-              <button class="btn sm" id="expPng" onclick="expPNG()">
-                <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG
-              </button>
-            </div>
-            <button class="btn sm" style="width:100%;justify-content:center" onclick="expAllPNG()">Export all as PNG</button>
+            <button class="btn sm primary" style="width:100%;justify-content:center" onclick="expAllPDF()">↓ Download all as PDF</button>
             <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)">
               <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-400);font-weight:500;margin-bottom:6px">Print files</div>
-              <div class="exp-row">
-                <button class="btn sm primary" id="expPrintPdfBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('pdf')">↓ PDF zip</button>
-                <button class="btn sm primary" id="expPrintPngBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('png')">↓ PNG zip</button>
-              </div>
+              <button class="btn sm primary" style="width:100%;justify-content:center" id="expPrintPdfBtn" onclick="downloadForPrint()">↓ Print download (PDF zip)</button>
               <div id="expPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px;margin-top:6px"></div>
               <button class="btn sm" style="width:100%;justify-content:center;margin-top:6px" onclick="sendToPrestige()">✉ Send to Prestige Flag</button>
             </div>

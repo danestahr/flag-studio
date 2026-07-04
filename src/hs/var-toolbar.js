@@ -36,11 +36,12 @@ export function ensureHsToolbar() {
     const origText = btn.textContent;
     btn.textContent = '…';
     btn.disabled = true;
-    // Spinner overlay on the dzone while processing
+    // Spinner overlay on the placed logo (not the whole zone) while processing
     const dz = UI.hsActiveZone?.dzone;
+    const logoWrap = dz?.querySelector('.dz-logo-wrap') || dz;
     const spinner = document.createElement('div');
     spinner.className = 'logo-processing-spinner';
-    dz?.appendChild(spinner);
+    logoWrap?.appendChild(spinner);
     try {
       const oldId = v.logoId;
       const logo = HS.library.find(l => l.id === oldId) || { src: v.logoSrc, name: 'logo.png' };

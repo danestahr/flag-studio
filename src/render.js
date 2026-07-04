@@ -1,9 +1,28 @@
-import { S } from './state.js';
+import { S, DEFAULT_COLORS } from './state.js';
 import { FLAGS } from './data.js';
 import { isLightColor } from './gsTag.js';
 import { HS_FONTS } from './hole-sign-data.js';
 
 export const getFlag = () => FLAGS.find(f => f.id === S.flagId);
+
+// Fills in any zone the user hasn't picked a color for so rendering — and the
+// step "Next" buttons — never block on an unmade choice. Primary/secondary
+// fall back to DEFAULT_COLORS; the border zone (which has no default of its
+// own) "inherits" whichever color ends up in secondary, or primary for flags
+// with no secondary zone (Plain, Pennant, Swallow Tail, Putting Green Flag).
+export function resolveColors(colors, flag) {
+  if (!colors) return colors;
+  const withDefaults = { ...colors };
+  flag?.colorZones?.forEach(z => {
+    if (z.id !== 'zone-border' && !withDefaults[z.id]) {
+      withDefaults[z.id] = DEFAULT_COLORS[z.id] || DEFAULT_COLORS['zone-primary'];
+    }
+  });
+  if (withDefaults['zone-border']) return withDefaults;
+  const hasSecondary = flag?.colorZones?.some(z => z.id === 'zone-secondary');
+  withDefaults['zone-border'] = hasSecondary ? withDefaults['zone-secondary'] : withDefaults['zone-primary'];
+  return withDefaults;
+}
 
 function gsTagCenterX(tagGroup) {
   try {
@@ -20,7 +39,10 @@ function gsTagCenterX(tagGroup) {
   return min < max ? (min + max) / 2 : 0;
 }
 
-export function showGsTagVariant(svg, style, face = 'front') {
+// face: 'front' | 'back' — which side's tag group to show (the other is hidden)
+// mode: 'auto' | 'dark' | 'light' — 'auto' picks black/white from keyHex's lightness
+// keyHex: background color behind the tag, used to resolve 'auto'
+export function showGsTagVariant(svg, face = 'front', mode = 'auto', keyHex = null) {
   const tagGroup = svg.querySelector('[id="GolfStatus Tag"]');
   if (!tagGroup) return;
   if (face === 'back') {
@@ -30,35 +52,48 @@ export function showGsTagVariant(svg, style, face = 'front') {
     tagGroup.removeAttribute('transform');
   }
   tagGroup.removeAttribute('display');
-  const baseStyle = style === 'Custom' ? 'Dark' : style;
-  const activeId = `${face === 'back' ? 'Back' : 'Front'} - ${baseStyle} Tag`;
-  ['Front - Dark Tag', 'Front - Light Tag', 'Back - Dark Tag', 'Back - Light Tag'].forEach(id => {
-    const el = tagGroup.querySelector(`[id="${id}"]`);
-    if (el) el.setAttribute('display', id === activeId ? '' : 'none');
-  });
-  if (style === 'Custom' && S.gsTagColor) {
-    const activeEl = tagGroup.querySelector(`[id="${activeId}"]`);
-    if (activeEl) activeEl.querySelectorAll('path').forEach(p => p.setAttribute('fill', S.gsTagColor));
-  }
+
+  // Legacy templates only ever baked a single ("Dark") variant under the old
+  // naming — fall back to it so those flags don't need re-exporting.
+  const frontEl = tagGroup.querySelector('[id="Front Tag"]') || tagGroup.querySelector('[id="Front - Dark Tag"]');
+  const backEl = tagGroup.querySelector('[id="Back Tag"]') || tagGroup.querySelector('[id="Back - Dark Tag"]');
+  if (frontEl) frontEl.setAttribute('display', face === 'front' ? '' : 'none');
+  if (backEl) backEl.setAttribute('display', face === 'back' ? '' : 'none');
+
+  const activeEl = face === 'back' ? backEl : frontEl;
+  if (!activeEl) return;
+  const color = mode === 'dark' ? '#000000'
+    : mode === 'light' ? '#ffffff'
+    : isLightColor(keyHex) ? '#000000' : '#ffffff';
+  activeEl.querySelectorAll('path,rect,circle,polygon,ellipse').forEach(p => p.setAttribute('fill', color));
 }
 
-export function applyColors(svgEl, colors, skipColors = false) {
+export function applyColors(svgEl, colors, skipColors = false, flag = null) {
   svgEl.setAttribute('fill', 'none'); // original SVGs have fill="none" on root; preserve when injecting innerHTML
   svgEl.querySelectorAll('[id*="logo-placement"]').forEach(g => g.setAttribute('display', 'none'));
   svgEl.querySelectorAll('[id="GolfStatus Tag"]').forEach(g => g.setAttribute('display', 'none'));
   if (skipColors) return;
+  colors = resolveColors(colors, flag);
   Object.entries(colors).forEach(([zid, hex]) => {
     if (!hex) return;
     const el = svgEl.querySelector('#' + zid);
     if (!el) return;
     el.setAttribute('fill', hex);
+    // Some templates group a stroke-only decorative accent (e.g. a dashed
+    // stitch line) under a zone id — it has no fill of its own, relying on
+    // inheriting the root's fill="none". Now that the zone's <g> carries an
+    // explicit fill, that inheritance would paint the accent solid instead
+    // of leaving it as a line — force it back to none rather than the zone hex.
     el.querySelectorAll('rect,path,polygon,circle,ellipse').forEach(c => {
-      if (!c.closest('[id^="Bleed"]')) c.setAttribute('fill', hex);
+      if (c.closest('[id^="Bleed"]')) return;
+      c.setAttribute('fill', c.hasAttribute('fill') ? hex : 'none');
     });
   });
   Object.entries(colors).forEach(([zid, hex]) => {
     if (!hex) return;
-    svgEl.querySelectorAll('[id^="' + zid + '"]').forEach(el => el.setAttribute('fill', hex));
+    svgEl.querySelectorAll('[id^="' + zid + '"]').forEach(el => {
+      if (el.hasAttribute('fill') && el.getAttribute('fill') !== 'none') el.setAttribute('fill', hex);
+    });
   });
 }
 
@@ -74,7 +109,7 @@ export function normaliseLogos(logosOrAssignment) {
   });
 }
 
-export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = []) {
+export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null) {
   const flag = flagOverride || getFlag();
   if (!flag) return null;
   const colors = colorsOverride || S.colors;
@@ -96,7 +131,7 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
   } else {
     svg.innerHTML = flag.svgContent;
   }
-  applyColors(svg, colors, flag.noColors);
+  applyColors(svg, colors, flag.noColors, flag);
 
   const list = normaliseLogos(logos);
   if (zone && list.length) {
@@ -119,14 +154,12 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
       svg.appendChild(img);
     });
   }
-  if (S.gsTag) {
+  const gst = gsTagOpts ?? { enabled: S.gsTag, mode: S.gsTagMode };
+  if (gst.enabled) {
     const keyZone = flag.tagKeyZone || 'zone-primary';
-    const keyHex = colors[keyZone];
-    const style = S.gsTagMode === 'light' ? 'Dark'
-      : S.gsTagMode === 'dark' ? 'Light'
-      : keyHex ? (isLightColor(keyHex) ? 'Light' : 'Dark')
-      : (flag.tagKeyZone ? 'Light' : 'Dark');
-    showGsTagVariant(svg, style, face);
+    // Resolve so the tag's auto light/dark pick matches the background it's
+    // actually rendered on, even when that zone fell back to a default color.
+    showGsTagVariant(svg, face, gst.mode, resolveColors(colors, flag)[keyZone]);
   }
 
   if (textLayers?.length) {
@@ -180,9 +213,9 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
   return svg;
 }
 
-export function renderInto(el, logos, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = []) {
+export function renderInto(el, logos, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null) {
   el.innerHTML = '';
-  const svg = makeSvg(logos, '100%', '100%', face, mirrorX, flagOverride, colorsOverride, textLayers);
+  const svg = makeSvg(logos, '100%', '100%', face, mirrorX, flagOverride, colorsOverride, textLayers, gsTagOpts);
   if (svg) {
     svg.style.cssText = 'display:block;width:100%;height:100%';
     el.appendChild(svg);
