@@ -56,7 +56,7 @@ function ensureDefaultsPanel() {
         <div style="display:flex;align-items:center;gap:8px">
           <button class="btn sm" onclick="document.getElementById('hsDefaultUploadFile').click()">+ Upload</button>
           <input type="file" id="hsDefaultUploadFile" accept="image/*,.pdf,.ai,.eps" multiple style="display:none">
-          <button class="hs-defaults-close" onclick="closeDefaultsPanel()">✕</button>
+          <button class="hs-defaults-close" onclick="closeDefaultsPanel()" aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
         </div>
       </div>
       <div class="hs-defaults-body" id="hsDefaultsBody">
@@ -127,12 +127,12 @@ function renderLibrary() {
              data-id="${item.id}">
           <div class="hs-default-img-wrap">
             ${logoThumbHtml(item.src, item.name)}
-            <div class="hs-default-check">✓</div>
+            <div class="hs-default-check"><i class="fa-solid fa-check" aria-hidden="true"></i></div>
           </div>
           <div class="hs-default-footer">
             <span class="hs-default-name" title="${item.name}">${item.name}</span>
             <button class="hs-default-del" title="Delete from library"
-              data-del-id="${item.id}">✕</button>
+              data-del-id="${item.id}"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
           </div>
         </div>`).join('')}
     </div>`;

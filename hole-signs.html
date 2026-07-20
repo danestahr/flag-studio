@@ -13,54 +13,14 @@
 
 <header>
   <div style="display:flex;align-items:center;gap:1.5rem">
-    <a href="/" class="back-link">← Projects</a>
-    <div class="logo"><div class="logo-mark"></div>GolfStatus Design Studio</div><span class="beta-tag">Beta</span>
+    <a href="/" class="back-link"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Projects</a>
+    <div class="logo"><svg class="logo-mark" viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="GolfStatus"><path d="M41.71 49.73H8.02C3.6 49.73 0 46.13 0 41.71V8.02C0 3.6 3.6 0 8.02 0H41.71C46.13 0 49.73 3.6 49.73 8.02V41.71C49.73 46.13 46.13 49.73 41.71 49.73ZM8.02 0.93C4.11 0.93 0.93 4.11 0.93 8.02V41.71C0.93 45.62 4.11 48.8 8.03 48.8H41.72C45.63 48.8 48.82 45.62 48.82 41.71V8.02C48.82 4.11 45.64 0.93 41.72 0.93H8.02Z" fill="currentColor"/><path d="M24.87 6.61999C16.97 6.61999 10.55 13.09 10.55 21.05C10.55 23.87 11.36 26.6 12.89 28.95L12.93 29.01C13.1 29.27 13.29 29.54 13.48 29.79L23.23 42.44C23.23 42.44 23.23 42.44 23.23 42.45L23.72 43.12V42.43C23.72 37.55 22.25 35.63 21.73 34.83C21.63 34.67 21.66 34.4 21.65 34.17C21.65 34.05 21.75 33.96 21.86 33.97C22.84 34.23 23.85 34.36 24.88 34.36C25.91 34.36 26.93 34.23 27.91 33.97C28.01 33.97 28.09 34.06 28.09 34.17C28.09 34.39 28.12 34.67 28.01 34.83C27.49 35.63 26.02 37.55 26.02 42.43V43.07L26.71 42.17L36.17 29.88C38.14 27.33 39.18 24.27 39.18 21.04C39.18 13.09 32.76 6.60999 24.86 6.60999L24.87 6.61999ZM31.91 30.43C29.85 31.95 27.42 32.75 24.88 32.75C21.08 32.75 17.47 30.9 15.23 27.81C11.35 22.46 12.52 14.92 17.83 11.01C19.89 9.48999 22.32 8.68998 24.86 8.68998C28.66 8.68998 32.27 10.54 34.51 13.63C38.39 18.98 37.22 26.52 31.91 30.43Z" fill="currentColor"/></svg>GolfStatus Design Studio</div><span class="beta-tag">Beta</span>
   </div>
   <span class="header-sub">Tournament hole sign configurator</span>
 </header>
 
 <div class="layout">
-  <aside class="sidebar">
-    <div style="padding:1.25rem 1.5rem 0">
-      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);margin-bottom:6px">Project name</div>
-      <input id="projectNameInput" class="hexin" style="width:100%;height:36px" placeholder="e.g. Ascot 2026 Final"
-        oninput="setProjectName(this.value)">
-    </div>
-    <div class="sdivider" style="margin:.75rem 1.5rem"></div>
-    <div class="steps-nav">
-      <div class="step-item active" data-step="1" onclick="tryGoStep(1)">
-        <div class="step-num"><span>1</span></div>
-        <div>
-          <div class="step-label">Design</div>
-          <div class="step-desc">Background &amp; text</div>
-        </div>
-      </div>
-      <div class="step-item" data-step="2" onclick="tryGoStep(2)">
-        <div class="step-num"><span>2</span></div>
-        <div>
-          <div class="step-label">Variations</div>
-          <div class="step-desc">Sponsor logos</div>
-        </div>
-      </div>
-      <div class="step-item" data-step="3" onclick="tryGoStep(3)">
-        <div class="step-num"><span>3</span></div>
-        <div>
-          <div class="step-label">Gallery &amp; export</div>
-          <div class="step-desc">Review &amp; download</div>
-        </div>
-      </div>
-    </div>
-    <div class="sdivider"></div>
-    <div class="ssummary">
-      <div class="stitle">Summary</div>
-      <div class="srow">
-        <span class="skey">Variations</span>
-        <span class="sval" id="sumVC" style="color:var(--gray-400)">—</span>
-      </div>
-    </div>
-    <div id="customerSection" style="display:none"></div>
-    <div class="sdivider"></div>
-  </aside>
+  <aside class="sidebar" id="sidebar"></aside>
 
   <main class="main">
     <div class="panel visible" id="panel-1"></div>

@@ -1,13 +1,14 @@
-import { HS, UI, eyedropperBtn, mergeBanner, renderTextControls, syncAlignBtns } from './state.js';
+import { HS, UI, eyedropperBtn, mergeBanner } from './state.js';
 import './text-layers.js';
 import { goStep } from './app.js';
-import { renderBannerSection, wireCanvasTextEditing, wireElementDrag, wireQuickAddHover } from './banner.js';
+import { renderBannerSection, wireBannerHeightHandles, wireBannerSpacingHandles, wireCanvasTextEditing, wireElementDrag, wireQuickAddHover } from './banner.js';
 import { applyTlSlotImgStyle, openTlLibPicker, openTlSidePanel, redrawTplPreview, renderTemplateLogoControls, renderTplSlotBody, snapTlSlotsToDefaults, tlSource, wireTlSlotFreeDrag } from './template-logos.js';
-import { applyHsStep1Zoom, wireCanvasZoom } from './var-canvas.js';
+import { applyHsStep1Zoom, initHsStep1Canvas } from './var-canvas.js';
 import { cropSvgToArtwork } from './logo-utils.js';
 import { saveDraftInternal } from './export.js';
-import { HS_FONTS, HS_H, HS_TEMPLATES, HS_W, emptyBanner, emptyTemplateLogos } from '../hole-sign-data.js';
-import { escXml, getBannerRect, getLogoZone, getTemplateLogoSlots, renderHoleSignInto, wrapText } from '../hole-sign-render.js';
+import { HS_DEFAULT_TEMPLATES, HS_FONTS, HS_H, HS_TEMPLATES, HS_W, emptyBanner, emptyTemplateLogos } from '../hole-sign-data.js';
+import { escXml, getBannerRect, getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
+import { wrapText } from '../text-utils.js';
 import { uploadLogo } from '../supabase.js';
 
 export function buildBackgroundSection() {
@@ -85,6 +86,11 @@ export function buildBackgroundSection() {
     </div>`;
 }
 
+// Layouts (HS_TEMPLATES, structural) and default designs (HS_DEFAULT_TEMPLATES,
+// styled starting points shipped with the app) live in one combined grid —
+// they're both just "pick a starting template" cards to the user. "My
+// templates" (localStorage, per-browser) stays its own section below since
+// it's independently save/deletable.
 export function buildTemplateSection() {
   return `
     <div class="hs-section">
@@ -100,8 +106,13 @@ export function buildTemplateSection() {
             ${showBadge ? '<span class="hs-tmpl-badge">Changes made</span>' : ''}
           </div>`;
         }).join('')}
+        ${HS_DEFAULT_TEMPLATES.map(t => `
+          <div class="hs-template-card" onclick="applyDefaultTemplate('${t.id}')">
+            <div class="hs-template-thumb" id="hs-dtmpl-${t.id}"></div>
+          </div>`).join('')}
       </div>
-    </div>`;
+    </div>
+    ${buildMyTemplatesSection()}`;
 }
 
 export function buildMyTemplatesSection() {
@@ -115,7 +126,7 @@ export function buildMyTemplatesSection() {
             <div class="hs-template-card" onclick="applyCustomTemplate('${t.id}')">
               <div class="hs-template-thumb" id="hs-ctmpl-${t.id}"></div>
               <div class="hs-template-name">${escXml(t.name)}</div>
-              <button class="hs-tmpl-del" onclick="event.stopPropagation();deleteCustomTemplate('${t.id}')">×</button>
+              <button class="hs-tmpl-del" onclick="event.stopPropagation();deleteCustomTemplate('${t.id}')"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
             </div>`).join('')}
         </div>` : `<div style="font-size:12px;color:var(--gray-400);margin-bottom:8px">No saved templates yet.</div>`}
       <button class="btn sm" style="width:100%;justify-content:center" onclick="showSaveTmplForm()">+ Save current as template</button>
@@ -137,15 +148,13 @@ export function menuRow(key, label, hint, handler = 'openHsMenu') {
     <button class="hs-menu-row" onclick="${handler}('${key}')">
       <span class="hs-menu-row-label">${label}</span>
       <span class="hs-menu-row-hint">${hint}</span>
-      <span class="hs-menu-row-chev">›</span>
+      <span class="hs-menu-row-chev"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></span>
     </button>`;
 }
 
 export function renderDesignMenuList(activeTmpl) {
   const rows = [];
   rows.push(menuRow('template', 'Template', escXml(activeTmpl.name)));
-  const customs = loadCustomTemplates();
-  rows.push(menuRow('mytemplates', 'My templates', customs.length ? `${customs.length} saved` : 'None'));
   const bg = HS.background;
   const bgHint = bg.type === 'color'
     ? `<span class="hs-menu-swatch" style="background:${escXml(bg.color)}"></span>`
@@ -153,57 +162,31 @@ export function renderDesignMenuList(activeTmpl) {
   rows.push(menuRow('background', 'Background', bgHint));
   rows.push(menuRow('bannerTop',    'Top banner',    HS.bannerTop?.enabled    ? 'On' : 'Off'));
   rows.push(menuRow('bannerBottom', 'Bottom banner', HS.bannerBottom?.enabled ? 'On' : 'Off'));
-  if (activeTmpl.supportsText) {
-    rows.push(menuRow('top', 'Text', HS.topText.text ? escXml(HS.topText.text) : 'Empty'));
-    rows.push(menuRow('bottom', 'Bottom text', HS.bottomText.text ? escXml(HS.bottomText.text) : 'Empty'));
-  }
   if (activeTmpl.id !== 'hole-sign-logo-only') {
     const c = HS.templateLogos?.count ?? 0;
     rows.push(menuRow('logos', 'Template logos', c ? `${c} logo${c > 1 ? 's' : ''}` : 'Off'));
   }
-  const tlCount = (HS.textLayers || []).length;
-  rows.push(menuRow('textLayers', 'Text layers', tlCount ? `${tlCount} layer${tlCount !== 1 ? 's' : ''}` : 'None'));
   return `<div class="hs-menu-list">${rows.join('')}</div>`;
 }
 
 const HS_MENU_TITLES = {
-  template: 'Template', mytemplates: 'My templates', background: 'Background',
+  template: 'Template', background: 'Background',
   bannerTop: 'Top banner', bannerBottom: 'Bottom banner',
-  top: 'Text', bottom: 'Bottom text', logos: 'Template logos', tplSlot: 'Logo options',
-  textLayers: 'Text layers',
+  logos: 'Template logos', tplSlot: 'Logo options',
 };
-
-function buildTextLayersSection() {
-  const layers = HS.textLayers || [];
-  const listRows = layers.map(l => `
-    <div class="hs-tl-list-row">
-      <span class="hs-tl-list-text">${escXml((l.text || 'Empty').slice(0, 32))}</span>
-      <button class="hs-tl-list-del" onclick="removeTextLayer('${l.id}')" title="Delete">✕</button>
-    </div>`).join('');
-  return `
-    <div class="hs-section">
-      <p style="font-size:12px;color:var(--gray-500);margin:0 0 12px">Free-floating text on the canvas. Click to select and move, double-click to edit.</p>
-      <button class="btn sm" onclick="addTextLayer()">+ Add text layer</button>
-      ${listRows ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:4px">${listRows}</div>` : ''}
-    </div>`;
-}
 
 export function renderDesignSection(key) {
   let body = '';
   if (key === 'template')         body = buildTemplateSection();
-  else if (key === 'mytemplates') body = buildMyTemplatesSection();
   else if (key === 'background')  body = buildBackgroundSection();
   else if (key === 'bannerTop')    body = renderBannerSection('top');
   else if (key === 'bannerBottom') body = renderBannerSection('bottom');
-  else if (key === 'top')         body = renderTextControls('top', HS.topText);
-  else if (key === 'bottom')      body = renderTextControls('bottom', HS.bottomText);
   else if (key === 'logos')       body = renderTemplateLogoControls();
   else if (key === 'tplSlot')     body = `<div class="hs-section">${renderTplSlotBody(UI.hsMenuSlotIdx ?? 0)}</div>`;
-  else if (key === 'textLayers')  body = buildTextLayersSection();
   const backFn = key === 'tplSlot' ? "openHsMenu('logos')" : 'closeHsMenu(true)';
   return `
     <div class="hs-menu-section-header">
-      <button class="hs-menu-back" onclick="${backFn}">← Back</button>
+      <button class="hs-menu-back" onclick="${backFn}"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
       <span class="hs-menu-section-title">${HS_MENU_TITLES[key] || ''}</span>
     </div>
     ${body}`;
@@ -288,33 +271,21 @@ export function renderStep1() {
         <div class="psub">Choose a template, set the background, and configure text.</div>
       </div>
       <div class="p1-header-actions">
-        <button class="btn primary" onclick="goStep(2)">Next: Variations →</button>
+        <button class="btn primary" onclick="goStep(2)">Next: Variations <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
         <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
       </div>
     </div>
     <div class="hs-design-layout">
       <div class="hs-design-preview-col">
-        <div class="canvas-zoom-row">
-          <span class="canvas-zoom-value" id="hsStep1ZoomValue">100%</span>
-          <button class="canvas-zoom-reset" id="hsStep1ZoomReset" onclick="setHsStep1Zoom(100)" style="display:none">Reset</button>
-          <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
-        </div>
-        <div class="canvas-bleed-hint">Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed sign.</div>
-        <div class="canvas-scroll hs-step1-scroll" id="hsStep1Scroll">
-          <div class="canvas-scroll-inner">
-            <div class="hs-step1-zoom-wrap" id="hsStep1ZoomWrap">
-              <div class="hs-sign-thumb" id="hsStep1Preview"></div>
-            </div>
-          </div>
-        </div>
+        <div class="var-canvas-panel" id="hsStep1CanvasPanel"></div>
       </div>
       <div class="hs-design-controls${animClass}">${controlsInner}</div>
     </div>`;
 
   window.goStep = goStep;
 
+  initHsStep1Canvas(document.getElementById('hsStep1CanvasPanel'));
   applyHsStep1Zoom(UI.hsStep1Zoom);
-  wireCanvasZoom('hsStep1Scroll', 'hsStep1ZoomWrap', () => UI.hsStep1Zoom, applyHsStep1Zoom);
   updateStep1Preview();
   // Built-in template thumbnails always show the pristine default state, so
   // the user sees exactly what they'll get when clicking the card (which
@@ -328,32 +299,11 @@ export function renderStep1() {
     const el = document.getElementById('hs-ctmpl-' + t.id);
     if (el) renderHoleSignInto(el, t, { templateId: t.templateStyle });
   });
+  HS_DEFAULT_TEMPLATES.forEach(t => {
+    const el = document.getElementById('hs-dtmpl-' + t.id);
+    if (el) renderHoleSignInto(el, t, { templateId: t.templateStyle });
+  });
 }
-
-window.setHsTextProp = function (which, key, val) {
-  const obj = which === 'top' ? HS.topText : HS.bottomText;
-  const cap = which.charAt(0).toUpperCase() + which.slice(1);
-  if (key === 'size') {
-    obj.size = parseInt(val, 10);
-    const lbl = document.getElementById('hs' + cap + 'SizeLabel');
-    if (lbl) lbl.textContent = obj.size + 'pt';
-  } else {
-    obj[key] = val;
-  }
-  updateStep1Preview();
-  // Directly update the active class on alignment toggle buttons so the visual
-  // reflects the new value without a full controls re-render.
-  if (key === 'align') syncAlignBtns(val);
-};
-
-window.setHsTextColorHex = function (which, val) {
-  const c = val.startsWith('#') ? val : '#' + val;
-  if (/^#[0-9A-Fa-f]{6}$/.test(c)) {
-    const obj = which === 'top' ? HS.topText : HS.bottomText;
-    obj.color = c;
-    updateStep1Preview();
-  }
-};
 
 window.setBgType = function (type) {
   HS.background.type = type;
@@ -470,6 +420,37 @@ export function hasBuiltInTemplateChanges() {
       || (HS.templateLogos?.count ?? 0) !== 0;
 }
 
+// Swapping templates changes *structure* (background, banners, logo layout)
+// — the user's own caption text shouldn't have to be retyped just because
+// the surrounding template changed. Capture it beforehand (falling back to
+// whichever slot — plain text band vs. banner — currently holds it, since
+// different templates put the same caption in different places)...
+function captureUserCaptions() {
+  return {
+    primary:      HS.topText?.text?.trim()           || HS.bannerTop?.topText?.text?.trim()    || '',
+    primarySub:   HS.bannerTop?.subText?.text?.trim() || '',
+    secondary:    HS.bottomText?.text?.trim()          || HS.bannerBottom?.topText?.text?.trim() || '',
+    secondarySub: HS.bannerBottom?.subText?.text?.trim() || '',
+  };
+}
+
+// ...then re-apply it into whichever slot the *new* template structure
+// actually uses. Only overwrites when the user had actually typed something
+// — an untouched template's own placeholder/blank text is left alone, so a
+// pristine template swap still looks like that template, not a mash-up.
+function restoreUserCaptions(prev) {
+  if (prev.primary) {
+    if (HS.bannerTop?.enabled) HS.bannerTop.topText.text = prev.primary;
+    else HS.topText.text = prev.primary;
+  }
+  if (prev.primarySub && HS.bannerTop?.enabled) HS.bannerTop.subText.text = prev.primarySub;
+  if (prev.secondary) {
+    if (HS.bannerBottom?.enabled) HS.bannerBottom.topText.text = prev.secondary;
+    else HS.bottomText.text = prev.secondary;
+  }
+  if (prev.secondarySub && HS.bannerBottom?.enabled) HS.bannerBottom.subText.text = prev.secondarySub;
+}
+
 window.pickOnboardingTemplate = function (templateId) {
   UI.hsOnboarding = false;
   HS.templateStyle = templateId;
@@ -478,8 +459,10 @@ window.pickOnboardingTemplate = function (templateId) {
 };
 
 window.setHsTemplate = function (templateId) {
+  const prev = captureUserCaptions();
   HS.templateStyle = templateId;
   applyBuiltInDefaults();
+  restoreUserCaptions(prev);
   renderStep1();
 };
 
@@ -532,6 +515,7 @@ window.deleteCustomTemplate = function (id) {
 window.applyCustomTemplate = function (id) {
   const tmpl = loadCustomTemplates().find(t => t.id === id);
   if (!tmpl) return;
+  const prev = captureUserCaptions();
   HS.templateStyle = tmpl.templateStyle;
   HS.background    = { ...tmpl.background };
   HS.topText       = { ...tmpl.topText };
@@ -539,6 +523,7 @@ window.applyCustomTemplate = function (id) {
   HS.bannerTop    = mergeBanner(tmpl.bannerTop    || (tmpl.banner?.position !== 'bottom' ? tmpl.banner : null));
   HS.bannerBottom = mergeBanner(tmpl.bannerBottom || (tmpl.banner?.position === 'bottom' ? tmpl.banner : null));
   HS.templateLogos = cloneTemplateLogos(tmpl.templateLogos);
+  restoreUserCaptions(prev);
   HS.templateLogos.slots.forEach(s => {
     if (s.logoSrc && s.logoArtworkBounds) {
       cropSvgToArtwork(s.logoSrc, s.logoArtworkBounds).then(t => {
@@ -546,6 +531,24 @@ window.applyCustomTemplate = function (id) {
       }).catch(() => {});
     }
   });
+  renderStep1();
+};
+
+// Global default templates never carry a baked-in logo slot (that's always
+// project-specific artwork), so unlike applyCustomTemplate above there's no
+// cropSvgToArtwork re-crop step needed here.
+window.applyDefaultTemplate = function (id) {
+  const tmpl = HS_DEFAULT_TEMPLATES.find(t => t.id === id);
+  if (!tmpl) return;
+  const prev = captureUserCaptions();
+  HS.templateStyle = tmpl.templateStyle;
+  HS.background    = { ...tmpl.background };
+  HS.topText       = { ...tmpl.topText };
+  HS.bottomText    = { ...tmpl.bottomText };
+  HS.bannerTop     = mergeBanner(tmpl.bannerTop);
+  HS.bannerBottom  = mergeBanner(tmpl.bannerBottom);
+  HS.templateLogos = cloneTemplateLogos(tmpl.templateLogos);
+  restoreUserCaptions(prev);
   renderStep1();
 };
 
@@ -572,9 +575,11 @@ export function updateStep1Preview() {
   // Background SVG. Strip the template-logo slots so the interactive DOM
   // overlays own the slot display (otherwise the SVG copy bleeds out from
   // behind the live overlay during drag/resize — the "halo").
-  // Always hide text layers from the SVG — DOM overlays own the display to avoid
-  // the double-render halo (same pattern as template logo slots / stripSlotImages).
-  const previewState = { ...stripSlotImages(HS), hideTextLayers: (HS.textLayers || []).map(l => l.id) };
+  // Always hide text layers (and top/bottom band text) from the SVG — DOM
+  // overlays own the display to avoid the double-render halo, and so the
+  // corner-resize handles can scale the visible text in real time instead of
+  // only an invisible proxy (same pattern as template logo slots / stripSlotImages).
+  const previewState = { ...stripSlotImages(HS), hideTextLayers: (HS.textLayers || []).map(l => l.id), hideText: ['top', 'bottom'] };
   const bg = document.createElement('div');
   bg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
   renderHoleSignInto(bg, previewState, { templateId: HS.templateStyle });
@@ -589,6 +594,8 @@ export function updateStep1Preview() {
   paintTplSlotOverlays(el, HS);
   paintTextLayerOverlays(el, HS);
   wireCanvasTextEditing(el);
+  wireBannerHeightHandles(el);
+  wireBannerSpacingHandles(el);
   // Show where each variation's logo will land, the same dashed placeholder used
   // on the Variations page, so the template preview reads as a full layout.
   const lz = getLogoZone(HS, HS.templateStyle);
@@ -603,7 +610,7 @@ export function updateStep1Preview() {
   // current submenu and returns to the main menu list.
   el.addEventListener('click', e => {
     if (!UI.hsMenu) return;
-    const onInteractive = e.target.closest('.canvas-edit-zone,.tl-slot,.band-drag,.dzone,.qa-bar,.hs-tl-overlay');
+    const onInteractive = e.target.closest('.canvas-edit-zone,.tl-slot,.band-drag,.dzone,.qa-bar,.hs-tl-overlay,.hs-banner-height-handle,.hs-banner-spacing-handle');
     if (!onInteractive) window.closeHsMenu(true);
   }, { capture: false });
 }
@@ -662,7 +669,7 @@ export function paintTplSlotOverlays(parentEl, state) {
       editBtn.textContent = 'Edit';
       const delBtn = document.createElement('button');
       delBtn.className = 'tl-slot-act-btn danger';
-      delBtn.textContent = '✕';
+      delBtn.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
       actions.appendChild(editBtn);
       actions.appendChild(delBtn);
       overlay.appendChild(actions);
@@ -690,7 +697,7 @@ export function paintTplSlotOverlays(parentEl, state) {
     } else {
       const ph = document.createElement('div');
       ph.className = 'tl-slot-placeholder';
-      ph.innerHTML = '<span>+</span><span class="tl-slot-ph-label">Add logo</span>';
+      ph.innerHTML = '<span><i class="fa-solid fa-plus" aria-hidden="true"></i></span><span class="tl-slot-ph-label">Add logo</span>';
       overlay.appendChild(ph);
     }
 
@@ -722,8 +729,8 @@ export function paintTplSlotOverlays(parentEl, state) {
   });
 }
 
-function repositionToolbar(anchorEl) {
-  const tb = document.getElementById('hsTlToolbar');
+function repositionToolbar(anchorEl, toolbarId = 'hsTlToolbar') {
+  const tb = document.getElementById(toolbarId);
   if (!tb) return;
   const r = anchorEl.getBoundingClientRect();
   const tw = tb.offsetWidth || 380;
@@ -858,11 +865,12 @@ export function paintTextLayerOverlays(parentEl, state) {
     const makeCorner = (cls, xSign, ySign) => {
       const ch = document.createElement('div');
       ch.className = `hs-tl-resize-corner ${cls}`;
-      let chStartX, chStartY, chStartSize;
+      let chStartX, chStartY, chStartSize, chStartW, chStartLayerX;
       ch.addEventListener('pointerdown', e => {
         e.stopPropagation();
         ch.setPointerCapture(e.pointerId);
         chStartX = e.clientX; chStartY = e.clientY; chStartSize = layer.size;
+        chStartW = layer.w; chStartLayerX = layer.x;
         document.body.style.cursor = getComputedStyle(ch).cursor || 'nwse-resize';
         e.preventDefault();
       });
@@ -872,10 +880,21 @@ export function paintTextLayerOverlays(parentEl, state) {
         const dy = (e.clientY - chStartY) * ySign;
         // Use whichever axis is being dragged more strongly
         const outward = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
-        const newSize = Math.max(60, Math.min(1200, Math.round(chStartSize + outward * 1.5)));
+        const newSize = Math.max(60, Math.min(2000, Math.round(chStartSize + outward * 1.5)));
         layer.size = newSize;
         const sc = parentEl.offsetHeight / HS_H;
         textDiv.style.fontSize = Math.max(8, Math.round(newSize * sc)) + 'px';
+
+        // Scale the box's width along with the font size (same ratio), growing
+        // outward from its center — otherwise the box lags behind and the text
+        // just wraps onto more lines instead of visibly growing.
+        const ratio = newSize / chStartSize;
+        const newW = Math.max(newSize, Math.round(chStartW * ratio));
+        layer.w = newW;
+        layer.x = chStartLayerX + Math.round((chStartW - newW) / 2);
+        overlay.style.width = pct(newW, HS_W);
+        overlay.style.left  = pct(layer.x, HS_W);
+
         // Sync toolbar slider live
         const slider = document.getElementById('hsTlSizeSlider');
         const val    = document.getElementById('hsTlSizeVal');

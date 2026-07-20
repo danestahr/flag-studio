@@ -2,7 +2,7 @@ import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { supabase } from './supabase.js';
 
 // ── Palette ────────────────────────────────────────────────
-const GREEN = rgb(0x1A/255, 0x4A/255, 0x2E/255);
+const HEADER_BG = rgb(0x23/255, 0x23/255, 0x23/255);
 const GOLD  = rgb(0xC8/255, 0x97/255, 0x2A/255);
 const BLACK = rgb(0x11/255, 0x11/255, 0x10/255);
 const GRAY  = rgb(0x5A/255, 0x5A/255, 0x54/255);
@@ -52,12 +52,12 @@ async function loadApprovalStatus(projectId, productType) {
 
 // ── Page chrome ───────────────────────────────────────────
 const W = 612, H = 792, M = 48;
-const HEADER_H = 60;  // green bar (56) + gold rule (4)
+const HEADER_H = 60;  // header bar (56) + gold rule (4)
 const CONTENT_TOP = H - HEADER_H - 20;   // y where content starts after header
 const CONTENT_BOT = 36;                  // bottom margin
 
 function drawHeader(page, bold, reg) {
-  page.drawRectangle({ x: 0, y: H - 56, width: W, height: 56, color: GREEN });
+  page.drawRectangle({ x: 0, y: H - 56, width: W, height: 56, color: HEADER_BG });
   page.drawText('FLAG STUDIO', { x: M, y: H - 36, size: 18, font: bold, color: WHITE });
   const sub = 'Order Summary';
   page.drawText(sub, { x: W - M - reg.widthOfTextAtSize(sub, 10), y: H - 36, size: 10, font: reg, color: rgb(1,1,1,0.65) });
@@ -135,6 +135,55 @@ function drawRow(cursor, label, value, { labelFont, valueFont, size = 11 }) {
   cursor.setY(y - 2);
 }
 
+// Two label:value entries on a single line, side by side — used to consolidate
+// short fields (Event/Course, Contact/Email, etc.) so sections take fewer rows.
+function drawRowPair(cursor, entries, { labelFont, valueFont, size = 10 }) {
+  const colW = (W - M * 2) / 2;
+  const labelW = 66;
+  cursor.ensureSpace(size * 1.5 + 4);
+  const page = cursor.current();
+  const y = cursor.getY();
+  entries.forEach((entry, i) => {
+    if (!entry) return;
+    const [label, value] = entry;
+    const x = M + i * colW;
+    page.drawText(label + ':', { x, y, size, font: labelFont, color: GRAY });
+    page.drawText(String(value || '—'), { x: x + labelW, y, size, font: valueFont, color: BLACK });
+  });
+  cursor.setY(y - size * 1.5 - 2);
+}
+
+// One line of small colour swatches + "Label #HEX" text, wrapping to a new
+// line only if it overflows the content width (rare — most flags use 1-2 zones).
+function drawColorSwatchLine(cursor, colorEntries, { valueFont, size = 9 }) {
+  if (!colorEntries?.length) return;
+  const sw = 8;
+  const gapAfterSwatch = 4;
+  const gapBetween = 16;
+  const maxX = W - M;
+  cursor.ensureSpace(size * 1.5 + 4);
+  let page = cursor.current();
+  let y = cursor.getY();
+  let x = M;
+  for (const entry of colorEntries) {
+    const text = `${entry.label}: ${entry.name} ${entry.hex.toUpperCase()}`;
+    const textW = valueFont.widthOfTextAtSize(text, size);
+    const entryW = sw + gapAfterSwatch + textW;
+    if (x !== M && x + entryW > maxX) {
+      y -= size * 1.5;
+      cursor.setY(y);
+      cursor.ensureSpace(size * 1.5 + 4);
+      page = cursor.current();
+      y = cursor.getY();
+      x = M;
+    }
+    page.drawRectangle({ x, y: y - sw + 6, width: sw, height: sw, color: hexToRgb(entry.hex), borderColor: LGRAY, borderWidth: 0.5 });
+    page.drawText(text, { x: x + sw + gapAfterSwatch, y, size, font: valueFont, color: BLACK });
+    x += entryW + gapBetween;
+  }
+  cursor.setY(y - size * 1.5 - 2);
+}
+
 // ── Main export ───────────────────────────────────────────
 /**
  * @param {object} opts
@@ -144,7 +193,7 @@ function drawRow(cursor, label, value, { labelFont, valueFont, size = 11 }) {
  * @param {string}   [opts.templateName]
  * @param {number}   [opts.variationCount]
  * @param {number}   [opts.quantity]
- * @param {Array}    [opts.variationImages]  [{name, frontPng: Uint8Array, backPng: Uint8Array}]
+ * @param {Array}    [opts.variationImages]  [{name, frontPng: Uint8Array, backPng: Uint8Array, flagName, colorEntries}]
  */
 export async function buildOrderSummaryPdf({
   projectId,
@@ -182,7 +231,7 @@ export async function buildOrderSummaryPdf({
     cursor.setY(y);
   }
 
-  // ── Customer Information ─────────────────────────────────
+  // ── Customer Information (shown once, packed two fields per line) ────
   drawSectionHeader(cursor, 'Customer Information', bold);
 
   const addrParts = [
@@ -193,36 +242,44 @@ export async function buildOrderSummaryPdf({
 
   const effectiveAttn = ci.attn || ci.contact_name;
 
-  for (const [label, value] of [
-    ['Event',            ci.event_name],
-    ['Course',           ci.course_name],
-    ['Event Date',       formatDate(ci.event_date)],
-    ['Contact',          ci.contact_name],
-    ['Email',            ci.contact_email],
-    effectiveAttn       ? ['ATTN',            effectiveAttn] : null,
-    ['Shipping Address', addrParts],
-  ].filter(Boolean)) {
-    drawRow(cursor, label, value, { labelFont: bold, valueFont: reg });
+  const infoEntries = [
+    ['Event',      ci.event_name],
+    ['Course',     ci.course_name],
+    ['Event Date', formatDate(ci.event_date)],
+    ['Contact',    ci.contact_name],
+    ['Email',      ci.contact_email],
+    effectiveAttn ? ['ATTN', effectiveAttn] : null,
+  ].filter(Boolean);
+  for (let i = 0; i < infoEntries.length; i += 2) {
+    drawRowPair(cursor, [infoEntries[i], infoEntries[i + 1] || null], { labelFont: bold, valueFont: reg });
   }
-  cursor.moveY(-14);
+  drawRow(cursor, 'Shipping Address', addrParts, { labelFont: bold, valueFont: reg, size: 10 });
+  cursor.moveY(-10);
 
   // ── Design Details ───────────────────────────────────────
   drawSectionHeader(cursor, 'Design Details', bold);
 
-  for (const [label, value] of [
-    templateName           ? ['Flag Template', templateName]                                                              : null,
-    ci.flag_setup          ? ['Setup',         ci.flag_setup === 'same' ? 'Same front & back' : 'Different front & back'] : null,
-    variationCount != null ? ['Variations',    String(variationCount)]                                                    : null,
-    quantity != null       ? ['Signs',         String(quantity)]                                                          : null,
-    ci.flag_qty            ? ['Ordered Qty',   String(ci.flag_qty)]                                                       : null,
-    ci.design_notes        ? ['Notes',         ci.design_notes]                                                           : null,
-  ].filter(Boolean)) {
-    drawRow(cursor, label, value, { labelFont: bold, valueFont: reg });
+  // Flag Template is shown per-variation below when variations are present —
+  // only fall back to a single project-level line when there's nothing to break out.
+  const designEntries = [
+    (!variationImages.length && templateName) ? ['Flag Template', templateName] : null,
+    ci.flag_setup          ? ['Setup',      ci.flag_setup === 'same' ? 'Same front & back' : 'Different front & back'] : null,
+    variationCount != null ? ['Variations', String(variationCount)] : null,
+    quantity != null       ? ['Signs',      String(quantity)] : null,
+    ci.flag_qty            ? ['Ordered Qty', String(ci.flag_qty)] : null,
+  ].filter(Boolean);
+  for (let i = 0; i < designEntries.length; i += 2) {
+    drawRowPair(cursor, [designEntries[i], designEntries[i + 1] || null], { labelFont: bold, valueFont: reg });
   }
-  cursor.moveY(-14);
+  if (ci.design_notes) {
+    drawRow(cursor, 'Notes', ci.design_notes, { labelFont: bold, valueFont: reg, size: 10 });
+  }
+  cursor.moveY(-10);
 
   // ── Colour Assignments ───────────────────────────────────
-  if (colorEntries.length) {
+  // Only shown as a standalone section as a fallback — when variations exist,
+  // each variation lists its own colours below instead.
+  if (!variationImages.length && colorEntries.length) {
     drawSectionHeader(cursor, 'Colour Assignments', bold);
     const sw = 14;
     for (const entry of colorEntries) {
@@ -236,48 +293,71 @@ export async function buildOrderSummaryPdf({
     }
   }
 
-  // ── Variation images (flow inline, same page) ─────────────
+  // ── Variations (flow inline, packed so multiple fit per page) ─────
+  // Each variation carries its own flag style + colour assignment (variations
+  // can override both), so those are shown per-block instead of once globally.
   if (variationImages.length) {
-    cursor.moveY(-20);
+    cursor.moveY(-8);
     drawSectionHeader(cursor, 'Flag Variations', bold);
 
-    // Flag aspect ~7519:4669. Two images side-by-side with gap.
-    const gap  = 12;
-    const imgW = Math.floor((W - M * 2 - gap) / 2);   // ~252
-    const imgH = Math.round(imgW / (7519 / 4669));      // ~156
+    // Flag aspect ~7519:4669. Front/back shown smaller than a full-bleed print
+    // so a style + colour line fits above them and 2+ variations fit per page.
+    const gap    = 12;
+    const imgW   = 204;
+    const imgH   = Math.round(imgW / (7519 / 4669)); // ~127
+    const pairW  = imgW * 2 + gap;
+    const xOff   = M + Math.round((W - M * 2 - pairW) / 2);
 
     for (let i = 0; i < variationImages.length; i++) {
-      const { name, frontPng, backPng } = variationImages[i];
-      const blockH = 14 + 12 + imgH + 20; // name + face labels + image + margin
+      const { name, frontPng, backPng, flagName, colorEntries: varColors } = variationImages[i];
+      const colorLineH = varColors?.length ? 16 : 0;
+      const blockH = 14 + colorLineH + 12 + imgH + 14; // name/style + colours + face labels + image + margin
 
-      cursor.ensureSpace(blockH);
-      const page = cursor.current();
+      cursor.ensureSpace(blockH + (i > 0 ? 8 : 0));
+      let page = cursor.current();
       let y = cursor.getY();
 
-      // Variation name
+      if (i > 0) {
+        page.drawLine({ start: { x: M, y: y + 6 }, end: { x: W - M, y: y + 6 }, thickness: 0.5, color: LGRAY });
+      }
+
+      // Variation name (left) + flag style (right), one line
       page.drawText(name || `Variation ${i + 1}`, { x: M, y, size: 11, font: bold, color: BLACK });
+      if (flagName) {
+        const label = `Style: ${flagName}`;
+        const w = reg.widthOfTextAtSize(label, 9);
+        page.drawText(label, { x: W - M - w, y, size: 9, font: reg, color: GRAY });
+      }
       y -= 14;
 
+      // Colour assignment for this variation
+      if (varColors?.length) {
+        cursor.setY(y);
+        drawColorSwatchLine(cursor, varColors, { valueFont: reg, size: 9 });
+        page = cursor.current();
+        y = cursor.getY();
+      }
+
       // "Front" / "Back" labels
-      page.drawText('Front', { x: M,            y, size: 8, font: reg, color: GRAY });
-      page.drawText('Back',  { x: M + imgW + gap, y, size: 8, font: reg, color: GRAY });
+      page.drawText('Front', { x: xOff,            y, size: 8, font: reg, color: GRAY });
+      page.drawText('Back',  { x: xOff + imgW + gap, y, size: 8, font: reg, color: GRAY });
       y -= 12;
 
       // Images
       if (frontPng) {
         try {
           const img = await doc.embedPng(frontPng);
-          page.drawImage(img, { x: M, y: y - imgH, width: imgW, height: imgH });
+          page.drawImage(img, { x: xOff, y: y - imgH, width: imgW, height: imgH });
         } catch { /* skip */ }
       }
       if (backPng) {
         try {
           const img = await doc.embedPng(backPng);
-          page.drawImage(img, { x: M + imgW + gap, y: y - imgH, width: imgW, height: imgH });
+          page.drawImage(img, { x: xOff + imgW + gap, y: y - imgH, width: imgW, height: imgH });
         } catch { /* skip */ }
       }
 
-      cursor.setY(y - imgH - 20);
+      cursor.setY(y - imgH - 14);
     }
   }
 

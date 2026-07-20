@@ -4,6 +4,7 @@ import { uploadLogo } from '../supabase.js';
 import { logoThumbHtml } from '../media-utils.js';
 
 let _onLibraryUpdated = () => {};
+let _ensureProject = async () => {};
 // { layerId, logos, dz, wrapId, svgId, face, onChange }
 // layerId === '_add_' means "add new logo" mode
 let _activeLayer = null;
@@ -14,7 +15,18 @@ let _activeLayer = null;
 let _addTrigger = null;
 
 export function initDropZones({ ensureProject, markDirty, onLibraryUpdated } = {}) {
+  _ensureProject = ensureProject || _ensureProject;
   _onLibraryUpdated = onLibraryUpdated || _onLibraryUpdated;
+}
+
+// Upload a file dropped from outside the app (Finder/Explorer) so it lands in
+// the project's logo library, same as a manual library upload.
+async function uploadDroppedFile(file) {
+  await _ensureProject();
+  const logo = await uploadLogo(S.projectId, file);
+  S.library.push(logo);
+  _onLibraryUpdated();
+  return logo;
 }
 
 // Full-canvas "you can drop here" overlay while dragging a logo from the
@@ -43,6 +55,26 @@ export function hideZoneToolbar() {
   _activeLayer?.dz?.querySelectorAll('.dz-logo-wrap').forEach(w => w.classList.remove('selected'));
   _activeLayer = null;
 }
+
+function removeActiveLogo() {
+  if (!_activeLayer || _activeLayer.layerId === '_add_') return;
+  const { layerId, logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _activeLayer;
+  const idx = logos.findIndex(l => l.id === layerId);
+  if (idx >= 0) logos.splice(idx, 1);
+  hideZoneToolbar();
+  renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
+  onChange();
+}
+
+// Delete/Backspace removes the selected logo, unless the user is typing in a
+// text field or editing a text layer (which has its own keydown handling).
+document.addEventListener('keydown', e => {
+  if (!_activeLayer || _activeLayer.layerId === '_add_') return;
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (document.activeElement?.closest?.('input, textarea, select, [contenteditable]')) return;
+  e.preventDefault();
+  removeActiveLogo();
+});
 
 function positionToolbar(anchorEl, show = false) {
   const tb = document.getElementById('dzToolbar');
@@ -114,12 +146,12 @@ function ensureToolbar() {
   t.id = 'dzToolbar';
   t.className = 'dz-toolbar';
   t.innerHTML = `
-    <button class="dz-tb-btn" id="dzTbBack" title="Send to back">↙ Back</button>
-    <button class="dz-tb-btn" id="dzTbFront" title="Bring to front">↗ Front</button>
+    <button class="dz-tb-btn" id="dzTbBack" title="Send to back"><i class="fa-solid fa-arrow-down"></i> Back</button>
+    <button class="dz-tb-btn" id="dzTbFront" title="Bring to front"><i class="fa-solid fa-arrow-up"></i> Front</button>
     <div class="dz-tb-sep" id="dzTbOrderSep"></div>
     <button class="dz-tb-btn" id="dzTbRemove">Remove</button>
     <div class="dz-tb-sep" id="dzTbSep"></div>
-    <button class="dz-tb-btn" id="dzTbRemoveBg" title="Remove background">✦ Remove BG</button>
+    <button class="dz-tb-btn" id="dzTbRemoveBg" title="Remove background"><i class="fa-solid fa-wand-magic-sparkles"></i> Remove BG</button>
     <div class="dz-tb-sep" id="dzTbRemoveBgSep"></div>
     <div style="position:relative">
       <button class="dz-tb-btn" id="dzTbReplace">Replace ▾</button>
@@ -148,15 +180,7 @@ function ensureToolbar() {
     onChange();
   });
 
-  document.getElementById('dzTbRemove').addEventListener('click', () => {
-    if (!_activeLayer || _activeLayer.layerId === '_add_') return;
-    const { layerId, logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _activeLayer;
-    const idx = logos.findIndex(l => l.id === layerId);
-    if (idx >= 0) logos.splice(idx, 1);
-    hideZoneToolbar();
-    renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
-    onChange();
-  });
+  document.getElementById('dzTbRemove').addEventListener('click', removeActiveLogo);
 
   document.getElementById('dzTbRemoveBg').addEventListener('click', async () => {
     if (!_activeLayer || _activeLayer.layerId === '_add_') return;
@@ -165,16 +189,16 @@ function ensureToolbar() {
     const logo = layer && S.library.find(l => l.id === layer.logoId);
     if (!logo) return;
     const btn = document.getElementById('dzTbRemoveBg');
-    const origText = btn.textContent;
+    const origHTML = btn.innerHTML;
     btn.disabled = true;
-    btn.textContent = '…';
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Removing…';
     const logoWrap = dz.querySelector(`.dz-logo-wrap[data-layer-id="${layerId}"]`) || dz;
     const spinner = document.createElement('div');
     spinner.className = 'logo-processing-spinner';
     logoWrap.appendChild(spinner);
     try {
       const { removeBackground } = await import('@imgly/background-removal');
-      btn.textContent = '↑';
+      btn.innerHTML = '<i class="fa-solid fa-arrow-up-from-bracket"></i> Uploading…';
       const blob = await removeBackground(logo.src);
       const file = new File([blob], logo.name.replace(/\.[^.]+$/, '') + ' (no bg).png', { type: 'image/png' });
       const newLogo = await uploadLogo(S.projectId, file);
@@ -188,7 +212,7 @@ function ensureToolbar() {
     } catch (err) {
       console.error('Background removal failed', err);
       spinner.remove();
-      btn.textContent = origText;
+      btn.innerHTML = origHTML;
       btn.disabled = false;
     }
   });
@@ -519,14 +543,26 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
       if (wrap.contains(e.relatedTarget)) return;
       hideDragOverlay(wrap);
     });
-    wrap.addEventListener('drop', e => {
+    wrap.addEventListener('drop', async e => {
       if (wrap._dzReadonly) return;
       e.preventDefault();
       hideDragOverlay(wrap);
-      const dragId = _dragLogoId;
-      if (!dragId) return;
       const ctx = wrap._dzDropCtx;
       if (!ctx) return;
+
+      const file = e.dataTransfer.files?.[0];
+      if (file) {
+        try {
+          const logo = await uploadDroppedFile(file);
+          ctx.logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75 });
+          renderDropZones(ctx.wrapId, ctx.svgId, ctx.logos, ctx.face, ctx.onChange, ctx.flagOverride, ctx.colorsOverride, ctx.gsTagOpts);
+          ctx.onChange();
+        } catch (err) { console.error('Logo upload failed', err); }
+        return;
+      }
+
+      const dragId = _dragLogoId;
+      if (!dragId) return;
       ctx.logos.push({ id: 'pl-' + Date.now(), logoId: dragId, x: 50, y: 50, w: 75 });
       setDragLogoId(null);
       renderDropZones(ctx.wrapId, ctx.svgId, ctx.logos, ctx.face, ctx.onChange, ctx.flagOverride, ctx.colorsOverride, ctx.gsTagOpts);

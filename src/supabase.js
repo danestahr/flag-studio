@@ -260,6 +260,17 @@ export async function loadOrderIntake(projectId) {
   return data || null;
 }
 
+// Customer-facing event name (distinct from the internal project name) —
+// prefers the editable customer_info record, falls back to the original
+// order-form intake.
+export async function loadEventName(projectId) {
+  const [{ data: project }, { data: intake }] = await Promise.all([
+    supabase.from('projects').select('customer_info').eq('id', projectId).maybeSingle(),
+    supabase.from('order_intakes').select('event_name').eq('project_id', projectId).maybeSingle(),
+  ]);
+  return project?.customer_info?.event_name || intake?.event_name || null;
+}
+
 // ── Customer info (editable, separate from original intake) ──
 export async function upsertCustomerInfo(projectId, info) {
   const { error } = await supabase

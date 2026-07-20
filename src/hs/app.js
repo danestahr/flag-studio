@@ -4,8 +4,9 @@ import { renderStep2, renderVarList } from './variations.js';
 import { cropSvgToArtwork } from './logo-utils.js';
 import { renderGallery, saveDraftInternal } from './export.js';
 import { emptyTemplateLogos } from '../hole-sign-data.js';
-import { getFeedback, loadHoleSignConfig, loadLogosForProject, loadOrderIntake, loadProject, supabase, updateProject } from '../supabase.js';
+import { getFeedback, loadHoleSignConfig, loadLogosForProject, loadOrderIntake, loadProject, supabase } from '../supabase.js';
 import { requireAuth } from '../auth.js';
+import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 
 function escHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -17,6 +18,18 @@ export async function init() {
   const projectId = new URLSearchParams(window.location.search).get('project');
   if (!projectId) { window.location.href = '/'; return; }
   HS.projectId = projectId;
+
+  renderSidebar(document.getElementById('sidebar'), {
+    projectType: 'Hole Signs',
+    activeStep: 1,
+    customerSection: true,
+    projectId,
+    steps: [
+      { id: 'navDesign', label: 'Design', desc: 'Background & text', onClick: () => window.goStep(1) },
+      { id: 'navVariations', label: 'Variations', desc: 'Sponsor logos', onClick: () => window.goStep(2) },
+      { id: 'navGallery', label: 'Gallery & export', desc: 'Review & download', onClick: () => window.goStep(3) },
+    ],
+  });
 
   try {
     const [project, hsCfg, logos] = await Promise.all([
@@ -94,8 +107,7 @@ export async function init() {
       }
     }
 
-    const nameInput = document.getElementById('projectNameInput');
-    if (nameInput) nameInput.value = HS.projectName;
+    setSidebarProjectName(HS.projectName, HS.projectId);
     loadOrderIntake(projectId).then(intake => {
       if (intake) renderCustomerSection(intake);
     }).catch(() => {});
@@ -184,17 +196,8 @@ window.tryGoStep = (n) => { if (n <= _hsMaxStep) goStep(n); };
 
 // ── Sidebar ────────────────────────────────────────────────
 export function updateSidebar() {
-  const vc = document.getElementById('sumVC');
-  if (vc) {
-    vc.textContent = HS.variations.length || '—';
-    vc.style.color = HS.variations.length ? 'var(--black)' : 'var(--gray-400)';
-  }
+  // Summary section removed — nothing to sync
 }
-
-window.setProjectName = function (val) {
-  HS.projectName = val;
-  if (HS.projectId) updateProject(HS.projectId, { name: val || null }).catch(() => {});
-};
 
 // Expose goStep globally for inline step navigation.
 window.goStep = goStep;

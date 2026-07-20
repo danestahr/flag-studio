@@ -259,7 +259,7 @@ export function buildVarTemplateSection(d, customs) {
           ${customs.map(t => `<option value="custom:${t.id}">${escXml(t.name)}</option>`).join('')}
         </optgroup>` : ''}
       </select>
-      <button class="hs-editor-link" onclick="setDraftTmpl('__default__')">↺ Revert to project default</button>
+      <button class="hs-editor-link" onclick="setDraftTmpl('__default__')"><i class="fa-solid fa-arrow-rotate-left" aria-hidden="true"></i> Revert to project default</button>
     </div>`;
 }
 
@@ -361,7 +361,7 @@ export function renderEditor() {
     const backFn = UI.hsVarMenu === 'tplSlot' ? "openHsVarMenu('logos')" : 'closeHsVarMenu()';
     body = `
       <div class="hs-menu-section-header">
-        <button class="hs-menu-back" onclick="${backFn}">← Back</button>
+        <button class="hs-menu-back" onclick="${backFn}"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
         <span class="hs-menu-section-title">${HS_VAR_MENU_TITLES[UI.hsVarMenu] || ''}</span>
       </div>
       ${section}`;
@@ -374,7 +374,7 @@ export function renderEditor() {
     <div class="var-editor">
       <div class="var-editor-header">
         <div class="var-editor-title">Editing: ${escXml(v.name)}</div>
-        <button class="vbtn" title="Cancel" onclick="cancelEditVar()">✕</button>
+        <button class="vbtn" title="Cancel" aria-label="Cancel" onclick="cancelEditVar()"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
       </div>
       <div class="hs-editor-body${animClass}">${body}</div>
     </div>`;

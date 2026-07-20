@@ -1,9 +1,11 @@
+import './icons.js';
 import { S } from './state.js';
 import { FLAGS } from './data.js';
-import { renderInto } from './render.js';
+import { getFlag, renderInto, preloadLogoAspects } from './render.js';
 import { loadAllFlags } from './svgLoader.js';
-import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback } from './supabase.js';
+import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase } from './supabase.js';
 import { renderHoleSignInto } from './hole-sign-render.js';
+import { esc } from './dom-utils.js';
 
 const root = document.getElementById('reviewRoot');
 const localFeedback = {};    // flags: { [variation_id]: { status, note, resolved } }
@@ -14,14 +16,90 @@ let previousReviewerName = '';
 let hsState = null;
 let hsVariations = [];
 let projectId = null;
+let reviewToken = null;
+let configChannel = null;
 
-function esc(s) {
-  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+// Loads the flag design (template, colors, variations, logo library) from a
+// freshly-fetched project record into `S`. Shared by the initial load and the
+// realtime refresh so the designer's edits don't require the customer to
+// reload the page to see them.
+async function loadFlagsInto(project) {
+  const flagCfg = project.flagConfig;
+  if (!flagCfg) { S.variations = []; return; }
+  S.flagId = flagCfg.flag_id;
+  S.colors = flagCfg.colors || {};
+  try { S.library = await loadLogosForProject(project.id); } catch { S.library = []; }
+  await preloadLogoAspects(S.library);
+  const varData = flagCfg.variations || [];
+  const varItems = Array.isArray(varData) ? varData : (varData.items || []);
+  S.logoLayout = Array.isArray(varData) ? 'single' : (varData.layout || 'single');
+  S.gsTag = Array.isArray(varData) ? false : (varData.gsTag ?? false);
+  S.gsTagMode = Array.isArray(varData) ? 'auto' : (varData.gsTagMode ?? 'auto');
+  S.variations = varItems.map(v => ({ ...v }));
+  S.sameLogoOnBothSides = !S.variations.some(v => (v.backLogos?.length || Object.keys(v.backAssignment || {}).length) > 0);
+  await loadAllFlags(FLAGS);
+  const activeFlag = FLAGS.find(f => f.id === S.flagId);
+  if (activeFlag?.logoZoneSets && S.logoLayout) {
+    activeFlag.logoZones = activeFlag.logoZoneSets[S.logoLayout] || activeFlag.logoZones;
+  }
+}
+
+// Same idea as loadFlagsInto, for the hole-sign design.
+function loadHsInto(project) {
+  const hsCfg = project.holeSignConfig;
+  if (!hsCfg) { hsState = null; hsVariations = []; return; }
+  // Spread all fields from `colors` so new design properties are picked up
+  // automatically when the hole sign editor adds them, without needing to
+  // manually update this page. `template_style` lives as a top-level DB
+  // column, not inside `colors`, so it's merged in separately.
+  hsState = {
+    templateStyle: hsCfg.template_style || 'hole-sign-1',
+    ...(hsCfg.colors || {}),
+  };
+  hsVariations = hsCfg.variations || [];
+}
+
+// Re-fetches the design (not feedback — that's a separate concern the
+// reviewer's own actions already keep in sync) and re-renders. Any
+// not-yet-submitted local approve/edit selections survive since `localFeedback`
+// /`localHsFeedback` are keyed by variation id and untouched here.
+async function reloadDesigns() {
+  try {
+    const project = await getProjectByToken(reviewToken);
+    await loadFlagsInto(project);
+    loadHsInto(project);
+    renderPage(project);
+  } catch (err) {
+    console.error('Could not refresh review page with latest design:', err);
+  }
+}
+
+function subscribeToDesignChanges() {
+  if (configChannel) configChannel.unsubscribe();
+  configChannel = supabase
+    .channel('review-config-' + projectId)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'flag_config', filter: `project_id=eq.${projectId}` }, reloadDesigns)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'hole_sign_config', filter: `project_id=eq.${projectId}` }, reloadDesigns)
+    .subscribe();
+}
+
+// A variation can override the project's flag template/colors/GS-tag
+// (mirrors the same resolution used in the designer's own gallery).
+function getVarFlag(v) {
+  if (!v) return getFlag();
+  const id = v.flagId || S.flagId;
+  return FLAGS.find(f => f.id === id) || getFlag();
+}
+function getVarColors(v) { return (v && v.colors) ? v.colors : S.colors; }
+function getVarGsTagOpts(v) {
+  if (!v || (v.gsTag === undefined && v.gsTagMode === undefined)) return null;
+  return { enabled: v.gsTag ?? S.gsTag, mode: v.gsTagMode ?? S.gsTagMode };
 }
 
 async function init() {
   const token = new URLSearchParams(window.location.search).get('token');
   if (!token) { showError('Invalid review link.'); return; }
+  reviewToken = token;
 
   root.innerHTML = '<div class="rv-loading">Loading…</div>';
 
@@ -30,23 +108,8 @@ async function init() {
     projectId = project.id;
 
     // ── Flags ──────────────────────────────────────────────
-    const flagCfg = project.flagConfig;
-    if (flagCfg) {
-      S.flagId = flagCfg.flag_id;
-      S.colors = flagCfg.colors || {};
-      try { S.library = await loadLogosForProject(project.id); } catch { S.library = []; }
-      const varData = flagCfg.variations || [];
-      const varItems = Array.isArray(varData) ? varData : (varData.items || []);
-      S.logoLayout = Array.isArray(varData) ? 'single' : (varData.layout || 'single');
-      S.gsTag = Array.isArray(varData) ? false : (varData.gsTag ?? false);
-      S.gsTagMode = Array.isArray(varData) ? 'auto' : (varData.gsTagMode ?? 'auto');
-      S.variations = varItems.map(v => ({ ...v }));
-      S.sameLogoOnBothSides = !S.variations.some(v => (v.backLogos?.length || Object.keys(v.backAssignment || {}).length) > 0);
-      await loadAllFlags(FLAGS);
-      const activeFlag = FLAGS.find(f => f.id === S.flagId);
-      if (activeFlag?.logoZoneSets && S.logoLayout) {
-        activeFlag.logoZones = activeFlag.logoZoneSets[S.logoLayout] || activeFlag.logoZones;
-      }
+    await loadFlagsInto(project);
+    if (project.flagConfig) {
       try {
         (await getFeedback(project.id, 'flags')).forEach(f => {
           localFeedback[f.variation_id] = { status: f.status, note: f.note || '', resolved: f.resolved || false };
@@ -57,17 +120,8 @@ async function init() {
     }
 
     // ── Hole signs ─────────────────────────────────────────
-    const hsCfg = project.holeSignConfig;
-    if (hsCfg) {
-      // Spread all fields from `colors` so new design properties are picked up
-      // automatically when the hole sign editor adds them, without needing to
-      // manually update this page. `template_style` lives as a top-level DB
-      // column, not inside `colors`, so it's merged in separately.
-      hsState = {
-        templateStyle: hsCfg.template_style || 'hole-sign-1',
-        ...(hsCfg.colors || {}),
-      };
-      hsVariations = hsCfg.variations || [];
+    loadHsInto(project);
+    if (project.holeSignConfig) {
       try {
         (await getFeedback(project.id, 'hole-signs')).forEach(f => {
           localHsFeedback[f.variation_id] = { status: f.status, note: f.note || '', resolved: f.resolved || false };
@@ -78,6 +132,7 @@ async function init() {
     }
 
     renderPage(project);
+    subscribeToDesignChanges();
   } catch (err) {
     console.error('Review page failed to load:', err);
     showError('Could not load this review. The link may be invalid or expired.');
@@ -118,10 +173,10 @@ function collapseCard(card, v) {
     <div class="rv-collapsed-row">
       <div class="rv-collapsed-thumb" id="rvct-${v.id}"></div>
       <div class="rv-vname">${esc(v.name)}</div>
-      <span class="rv-status-badge approved">✓ Approved</span>
+      <span class="rv-status-badge approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approved</span>
     </div>`;
   const thumbEl = card.querySelector('#rvct-' + v.id);
-  if (thumbEl) renderInto(thumbEl, v.logos || v.assignment, 'front', false, null, null, v.textLayers || []);
+  if (thumbEl) renderInto(thumbEl, v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
 }
 
 window.approveAll = function () {
@@ -186,7 +241,7 @@ function collapseHsCard(card, v) {
     <div class="rv-collapsed-row">
       <div class="hs-rv-thumb" id="hscthumb-${v.id}"></div>
       <div class="rv-vname">${esc(v.name)}</div>
-      <span class="rv-status-badge approved">✓ Approved</span>
+      <span class="rv-status-badge approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approved</span>
     </div>`;
   const el = card.querySelector('#hscthumb-' + v.id);
   const state = effectiveHsState(v);
@@ -257,12 +312,12 @@ function renderPage(project) {
       <div class="rv-hero">
         <div class="rv-project">${esc(project.name) || 'Review'}</div>
         <div class="rv-meta">${meta}</div>
-        <div class="rv-instructions${instructionsClass}">${allApproved ? '<span class="rv-instructions-icon">✓</span>' : ''}${instructionsText}</div>
+        <div class="rv-instructions${instructionsClass}">${allApproved ? '<span class="rv-instructions-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>' : ''}${instructionsText}</div>
       </div>
       ${nameRow}
 
       ${hasFlags ? `
-        ${hasHoleSigns ? '<div class="rv-section-title">🚩 Tournament Flags</div>' : ''}
+        ${hasHoleSigns ? '<div class="rv-section-title"><i class="fa-solid fa-flag" aria-hidden="true"></i> Tournament Flags</div>' : ''}
         <div class="rv-summary" id="rvSummary">
           <div class="rv-summary-left">
             <div class="rv-summary-counts">
@@ -281,7 +336,7 @@ function renderPage(project) {
       ` : ''}
 
       ${hasHoleSigns ? `
-        ${hasFlags ? '<div class="rv-section-title" style="margin-top:2.5rem">⛳ Hole Signs</div>' : ''}
+        ${hasFlags ? '<div class="rv-section-title" style="margin-top:2.5rem"><i class="fa-solid fa-signs-post" aria-hidden="true"></i> Hole Signs</div>' : ''}
         <div class="rv-summary" id="hsRvSummary">
           <div class="rv-summary-left">
             <div class="rv-summary-counts">
@@ -301,7 +356,7 @@ function renderPage(project) {
 
       ${allLocked ? '' : `
       <div class="rv-submit-row">
-        <button class="rv-submit-btn" id="rvSubmit" onclick="submitReview()">Submit feedback →</button>
+        <button class="rv-submit-btn" id="rvSubmit" onclick="submitReview()">Submit feedback <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
       </div>`}
     </div>`;
 
@@ -352,8 +407,8 @@ function buildCard(v, fb) {
   const actionsHtml = isLocked
     ? '<div class="rv-locked-msg">Edit request submitted. The designer has been notified and will update this design.</div>'
     : `<div class="rv-actions">
-        <button class="rv-btn approve" id="rapprove-${v.id}">✓ Approve</button>
-        <button class="rv-btn edits${effectiveStatus === 'needs_edits' ? ' active' : ''}" id="redits-${v.id}">✗ Request edits</button>
+        <button class="rv-btn approve" id="rapprove-${v.id}"><i class="fa-solid fa-check" aria-hidden="true"></i> Approve</button>
+        <button class="rv-btn edits${effectiveStatus === 'needs_edits' ? ' active' : ''}" id="redits-${v.id}"><i class="fa-solid fa-xmark" aria-hidden="true"></i> Request edits</button>
       </div>
       <div class="rv-note-wrap${effectiveStatus === 'needs_edits' ? ' visible' : ''}" id="rnw-${v.id}">
         <textarea class="rv-note" id="rnote-${v.id}" placeholder="What needs to change?">${effectiveStatus === 'needs_edits' ? (fb.note || '') : ''}</textarea>
@@ -373,10 +428,10 @@ function buildCard(v, fb) {
     ${actionsHtml}`;
 
   if (hasBack) {
-    renderInto(card.querySelector('#rvp-front-' + v.id), v.logos || v.assignment, 'front', false, null, null, v.textLayers || []);
-    renderInto(card.querySelector('#rvp-back-'  + v.id), v.backLogos || v.backAssignment || [], 'back', true, null, null, v.textLayers || []);
+    renderInto(card.querySelector('#rvp-front-' + v.id), v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
+    renderInto(card.querySelector('#rvp-back-'  + v.id), v.backLogos || v.backAssignment || [], 'back', false, getVarFlag(v), getVarColors(v), v.backTextLayers || [], getVarGsTagOpts(v));
   } else {
-    renderInto(card.querySelector('#rvp-' + v.id), v.logos || v.assignment, 'front', false, null, null, v.textLayers || []);
+    renderInto(card.querySelector('#rvp-' + v.id), v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
   }
 
   if (!isLocked) {
@@ -423,8 +478,8 @@ function buildHsCard(v, fb) {
   const actionsHtml = isLocked
     ? '<div class="rv-locked-msg">Edit request submitted. The designer has been notified and will update this design.</div>'
     : `<div class="rv-actions">
-        <button class="rv-btn approve" id="hsapprove-${v.id}">✓ Approve</button>
-        <button class="rv-btn edits${effectiveStatus === 'needs_edits' ? ' active' : ''}" id="hsedits-${v.id}">✗ Request edits</button>
+        <button class="rv-btn approve" id="hsapprove-${v.id}"><i class="fa-solid fa-check" aria-hidden="true"></i> Approve</button>
+        <button class="rv-btn edits${effectiveStatus === 'needs_edits' ? ' active' : ''}" id="hsedits-${v.id}"><i class="fa-solid fa-xmark" aria-hidden="true"></i> Request edits</button>
       </div>
       <div class="rv-note-wrap${effectiveStatus === 'needs_edits' ? ' visible' : ''}" id="hsnw-${v.id}">
         <textarea class="rv-note" id="hsnote-${v.id}" placeholder="What needs to change?">${effectiveStatus === 'needs_edits' ? (fb.note || '') : ''}</textarea>
@@ -499,14 +554,14 @@ window.submitReview = async function () {
     root.innerHTML = `
       <div class="rv-root">
         <div class="rv-success">
-          <span class="rv-success-icon">✓</span>
+          <span class="rv-success-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>
           <div class="rv-success-title">Feedback submitted</div>
           <div class="rv-success-sub">The design team will review your feedback and be in touch shortly.</div>
         </div>
       </div>`;
   } catch (err) {
     console.error('Submit failed:', err);
-    btn.textContent = 'Submit feedback →';
+    btn.innerHTML = 'Submit feedback <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>';
     btn.disabled = false;
     alert('Something went wrong submitting your feedback. Please try again.');
   }

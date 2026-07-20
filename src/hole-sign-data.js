@@ -49,9 +49,82 @@ export function emptyBanner() {
   return {
     enabled: false,
     height: HS_BANNER_DEFAULT_H,
-    spacing: 0,
+    spacing: 24,
+    valign: 'center', // vertical position of the title/sub block within the banner — 'top' | 'center' | 'bottom'
     bg: { type: 'color', color: '#E5E5E5', imageUrl: null, storagePath: null, imageX: 50, imageY: 50, imageScale: 100 },
     topText: { text: '', font: 'dm-serif', size: 260, color: '#111110' },
     subText: { text: '', font: 'dm-sans',  size: 140, color: '#111110' },
   };
 }
+
+// Global starter templates for the hole-sign Design step — same shape as a
+// saved "My templates" (localStorage) entry, but shipped with the app so
+// every project gets them instead of just the browser that saved them.
+// Promoted from staff-designed "My templates" entries; each one's assets
+// (background images etc.) must live in public/ rather than a project's
+// Supabase Storage folder, so the template stays valid for every project.
+export const HS_DEFAULT_TEMPLATES = [
+  {
+    id: 'default-1',
+    name: 'Template 1',
+    templateStyle: 'hole-sign-1',
+    background: { type: 'color', color: '#ffffff', imageUrl: null, storagePath: null },
+    topText:    { text: 'Hole Sponsored by', font: 'dm-serif', size: 331, color: '#000000' },
+    bottomText: { text: '[Tournament Name]', font: 'dm-serif', size: 184, color: '#6e6e6e' },
+    bannerTop:    emptyBanner(),
+    bannerBottom: emptyBanner(),
+    templateLogos: { ...emptyTemplateLogos(), size: 560, vAlign: 'bottom', hAlign: 'spread' },
+  },
+  {
+    id: 'default-2',
+    name: 'Template 2',
+    templateStyle: 'hole-sign-1',
+    background: {
+      type: 'image', color: '#ffffff',
+      imageUrl: '/hole-signs/templates/template-2-bg.jpg', storagePath: null,
+      imageOpacity: 41, overlayEnabled: false,
+    },
+    topText:    { text: 'Hole Sponsored by', font: 'dm-serif', size: 331, color: '#000000' },
+    bottomText: { text: '', font: 'dm-serif', size: 184, color: '#6e6e6e' },
+    bannerTop:    emptyBanner(),
+    bannerBottom: emptyBanner(),
+    templateLogos: { ...emptyTemplateLogos(), size: 560, vAlign: 'bottom', hAlign: 'spread' },
+  },
+  {
+    id: 'default-3',
+    name: 'Template 3',
+    templateStyle: 'hole-sign-1',
+    background: { type: 'color', color: '#ffffff', imageUrl: null, storagePath: null },
+    topText:    { text: '', font: 'dm-serif', size: 331, color: '#000000' },
+    bottomText: { text: '', font: 'dm-serif', size: 184, color: '#6e6e6e' },
+    bannerTop:    { ...emptyBanner(), enabled: true, height: 988, topText: { text: 'Hole Sponsored By', font: 'dm-serif', size: 260, color: '#111110' } },
+    bannerBottom: { ...emptyBanner(), enabled: true, height: 925, topText: { text: 'Tournament Name',   font: 'dm-serif', size: 260, color: '#111110' } },
+    templateLogos: { ...emptyTemplateLogos(), count: 2, size: 560, vAlign: 'bottom', hAlign: 'spread' },
+  },
+  {
+    id: 'default-4',
+    name: 'Template 4',
+    templateStyle: 'hole-sign-1',
+    background: { type: 'color', color: '#ffffff', imageUrl: null, storagePath: null },
+    topText:    { text: '', font: 'dm-serif', size: 331, color: '#000000' },
+    bottomText: { text: '', font: 'dm-serif', size: 184, color: '#6e6e6e' },
+    bannerTop: {
+      ...emptyBanner(), enabled: true, height: 1134,
+      topText: { text: 'Hole Sponsored By', font: 'dm-serif', size: 260, color: '#111110' },
+      subText: { text: 'Tournament Name',   font: 'dm-sans',  size: 140, color: '#111110' },
+    },
+    bannerBottom: { ...emptyBanner(), height: 925, topText: { text: 'Tournament Name', font: 'dm-serif', size: 260, color: '#111110' } },
+    templateLogos: { ...emptyTemplateLogos(), count: 2, size: 560, vAlign: 'bottom', hAlign: 'center' },
+  },
+  {
+    id: 'default-5',
+    name: 'Template 5',
+    templateStyle: 'hole-sign-1',
+    background: { type: 'color', color: '#ffffff', imageUrl: null, storagePath: null },
+    topText:    { text: '', font: 'dm-serif', size: 331, color: '#000000' },
+    bottomText: { text: '', font: 'dm-serif', size: 184, color: '#6e6e6e' },
+    bannerTop:    { ...emptyBanner(), enabled: true, height: 1134, topText: { text: 'Sponsored By', font: 'dm-serif', size: 260, color: '#111110' } },
+    bannerBottom: { ...emptyBanner(), height: 925, topText: { text: 'Tournament Name', font: 'dm-serif', size: 260, color: '#111110' } },
+    templateLogos: { ...emptyTemplateLogos(), count: 2, size: 560, vAlign: 'bottom', hAlign: 'center' },
+  },
+];

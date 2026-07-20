@@ -1,5 +1,6 @@
 import { HS_W, HS_H, HS_MARGIN, HS_GAP, HS_FONTS, normalizeTplLogoSize } from './hole-sign-data.js';
 import { isDisplayableImage, fileTypeLabel } from './media-utils.js';
+import { wrapText } from './text-utils.js';
 
 export function escXml(s) {
   return String(s)
@@ -8,6 +9,15 @@ export function escXml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+// Clamp a text box's stored width override (in sign coords) to the available
+// margin span and center it — shared by the SVG text renderer and the
+// on-canvas edit overlay so the two always agree on where the box actually is.
+function fitTextBox(overrideW, minW) {
+  const full = HS_W - 2 * HS_MARGIN;
+  const w = Math.max(Math.min(minW || 200, full), Math.min(full, Math.round(overrideW || full)));
+  return { w, x: HS_MARGIN + Math.round((full - w) / 2) };
 }
 
 function filePlaceholderSvg(x, y, w, h, label) {
@@ -50,13 +60,10 @@ export function computeTemplateLogoLayout(tl) {
     widths.push(slotWidthForRatio((tl.slots || [])[i], slotH));
   }
 
-  let stripH;
-  if (tl.hAlign === 'spread' || tl.stack === 'horizontal') {
-    stripH = slotH;
-  } else {
-    stripH = tl.count * slotH + (tl.count - 1) * gap;
-  }
-
+  // Logos always lay out side by side in a single row — hAlign only changes
+  // where that row sits (left/center/right-anchored, or spread across the
+  // full width), it never stacks them into a column.
+  const stripH = slotH;
   const slotsRel = [];
   if (tl.hAlign === 'spread') {
     if (tl.count === 1) {
@@ -69,7 +76,7 @@ export function computeTemplateLogoLayout(tl) {
       slotsRel.push({ dx: (innerW - widths[1]) / 2, dy: 0 });
       slotsRel.push({ dx: innerW - widths[2], dy: 0 });
     }
-  } else if (tl.stack === 'horizontal') {
+  } else {
     const sum = widths.reduce((s, w) => s + w, 0);
     const groupW = sum + (tl.count - 1) * gap;
     const baseX = tl.hAlign === 'right' ? innerW - groupW
@@ -79,14 +86,6 @@ export function computeTemplateLogoLayout(tl) {
     for (let i = 0; i < tl.count; i++) {
       slotsRel.push({ dx: x, dy: 0 });
       x += widths[i] + gap;
-    }
-  } else { // vertical stack — column based on the widest slot
-    const colW = Math.max(...widths);
-    const baseX = tl.hAlign === 'right' ? innerW - colW
-                : tl.hAlign === 'center' ? (innerW - colW) / 2
-                : 0;
-    for (let i = 0; i < tl.count; i++) {
-      slotsRel.push({ dx: baseX + (colW - widths[i]) / 2, dy: i * (slotH + gap) });
     }
   }
 
@@ -100,14 +99,48 @@ function bannerTextBlock(banner) {
   const sub = banner.subText || {};
   const hasTitle = !!(title.text && title.text.trim());
   const hasSub = !!(sub.text && sub.text.trim());
-  const maxW = HS_W - 2 * HS_MARGIN;
-  const titleLines = hasTitle ? wrapText(title.text, maxW, title.size) : [];
-  const subLines = hasSub ? wrapText(sub.text, maxW, sub.size) : [];
+  const titleBox = fitTextBox(title.w, title.size);
+  const subBox = fitTextBox(sub.w, sub.size);
+  const titleLines = hasTitle ? wrapText(title.text, titleBox.w, title.size) : [];
+  const subLines = hasSub ? wrapText(sub.text, subBox.w, sub.size) : [];
   const titleLineH = (title.size || 0) * 1.1;
   const subLineH = (sub.size || 0) * 1.1;
   const gap = (titleLines.length && subLines.length) ? Math.round((title.size || 0) * 0.2) + (banner.spacing || 0) : 0;
   const total = titleLines.length * titleLineH + subLines.length * subLineH + gap;
-  return { title, sub, titleLines, subLines, titleLineH, subLineH, gap, total };
+  return { title, sub, titleLines, subLines, titleLineH, subLineH, gap, total, titleBox, subBox };
+}
+
+// Vertical breathing room reserved above/below the title+sub text block —
+// shared by bannerEffectiveHeight (total padding) and renderBanner (per-side,
+// for top/bottom valign) so they always agree on how much space is set aside.
+function bannerTextVPad(tb) {
+  return Math.round(Math.max(tb.title.size || 0, tb.sub.size || 0) * 0.45);
+}
+
+// Top-of-title / top-of-sub y positions (sign coords) for a banner whose
+// title is present, honoring banner.valign — same math as renderBanner uses
+// to draw the actual SVG text, so click-to-edit zones/resize handles (and the
+// "+ Add subtitle" affordance) land exactly where the text really is instead
+// of a naive half-the-box split.
+// `forceSub`: when the sub is empty but is about to be edited (the user just
+// clicked "+ Add subtitle"), reserve a nominal one-line height/gap for it so
+// the forced click-to-edit region has somewhere real to sit — mirrors the
+// oneLine() placeholder sizing used for empty top/bottom text.
+export function bannerTitleSubSplit(banner, rect, forceSub = false) {
+  const tb = bannerTextBlock(banner);
+  const valign = banner.valign || 'center';
+  const vpad = bannerTextVPad(tb);
+  const hasRealSub = tb.subLines.length > 0;
+  const subH = hasRealSub ? tb.subLines.length * tb.subLineH
+    : forceSub ? Math.round((banner.subText?.size || 140) * 1.1 + 40) : 0;
+  const gap = hasRealSub ? tb.gap
+    : (forceSub && subH) ? Math.round((tb.title.size || 0) * 0.2) : 0;
+  const total = tb.titleLines.length * tb.titleLineH + subH + gap;
+  const titleY = valign === 'top' ? rect.y + vpad
+    : valign === 'bottom' ? rect.y + rect.h - vpad - total
+    : rect.y + rect.h / 2 - total / 2;
+  const titleH = tb.titleLines.length * tb.titleLineH;
+  return { titleY, titleH, subY: titleY + titleH + gap, subH };
 }
 
 // Banner height actually used for layout + render: never shorter than the
@@ -117,8 +150,7 @@ function bannerEffectiveHeight(banner) {
   if (!banner || !banner.enabled) return 0;
   const tb = bannerTextBlock(banner);
   if (tb.total <= 0) return Math.max(0, banner.height || 0);
-  const pad = Math.round(Math.max(tb.title.size || 0, tb.sub.size || 0) * 0.45) * 2;
-  return Math.max(banner.height || 0, tb.total + pad);
+  return Math.max(banner.height || 0, tb.total + bannerTextVPad(tb) * 2);
 }
 
 function computeLayout(state, templateId) {
@@ -146,11 +178,12 @@ function computeLayout(state, templateId) {
   }
   const top = state.topText;
   const bot = state.bottomText;
-  const innerW = HS_W - 2 * HS_MARGIN;
+  const topBox = fitTextBox(top.w, top.size);
+  const botBox = fitTextBox(bot.w, bot.size);
 
   // Template logos are free-positioned; text bands are independent of logo placement.
-  const topWrappedLines = (top.text && top.text.trim()) ? wrapText(top.text, innerW, top.size) : [];
-  const botWrappedLines = (bot.text && bot.text.trim()) ? wrapText(bot.text, innerW, bot.size) : [];
+  const topWrappedLines = (top.text && top.text.trim()) ? wrapText(top.text, topBox.w, top.size) : [];
+  const botWrappedLines = (bot.text && bot.text.trim()) ? wrapText(bot.text, botBox.w, bot.size) : [];
   const topLines = topWrappedLines.length;
   const botLines = botWrappedLines.length;
   const topTextH = topLines ? Math.round(topLines * top.size * 1.1 + 80) : 0;
@@ -176,8 +209,8 @@ function computeLayout(state, templateId) {
   }
 
   return { topH: topBandH, botH: botBandH, logoY, logoH, stripY, stripH, bannerTopH, bannerBotH,
-           topTextX: HS_W / 2, topTextAnchor: 'middle', topTextMaxW: innerW, topWrappedLines,
-           botTextX: HS_W / 2, botTextAnchor: 'middle', botTextMaxW: innerW, botWrappedLines };
+           topTextX: HS_W / 2, topTextAnchor: 'middle', topTextMaxW: topBox.w, topTextBoxX: topBox.x, topWrappedLines,
+           botTextX: HS_W / 2, botTextAnchor: 'middle', botTextMaxW: botBox.w, botTextBoxX: botBox.x, botWrappedLines };
 }
 
 // Full-width banner band rect (sign coords), or null when that banner is off.
@@ -196,37 +229,51 @@ export function getBannerRect(state, which) {
 export function getTextRegions(state, templateId, forceText = []) {
   const tid = templateId || state.templateStyle || 'hole-sign-1';
   const L = computeLayout(state, tid);
-  const innerW = HS_W - 2 * HS_MARGIN;
   const regions = {};
   if (tid !== 'hole-sign-logo-only') {
     // While a band is being edited, keep a single-line region even if the text
     // is momentarily empty, so clearing the text doesn't dismiss the editor.
     const oneLine = size => Math.round((size || 200) * 1.1 + 80);
-    if (L.topH > 0) regions.top = { x: HS_MARGIN, y: L.bannerTopH + HS_MARGIN, w: innerW, h: L.topH };
-    else if (forceText.includes('top')) regions.top = { x: HS_MARGIN, y: L.bannerTopH + HS_MARGIN, w: innerW, h: oneLine(state.topText.size) };
-    if (L.botH > 0) regions.bottom = { x: HS_MARGIN, y: HS_H - L.bannerBotH - HS_MARGIN - L.botH, w: innerW, h: L.botH };
-    else if (forceText.includes('bottom')) { const h = oneLine(state.bottomText.size); regions.bottom = { x: HS_MARGIN, y: HS_H - L.bannerBotH - HS_MARGIN - h, w: innerW, h }; }
+    const topBox = fitTextBox(state.topText.w, state.topText.size);
+    const botBox = fitTextBox(state.bottomText.w, state.bottomText.size);
+    if (L.topH > 0) regions.top = { x: topBox.x, y: L.bannerTopH + HS_MARGIN, w: topBox.w, h: L.topH };
+    else if (forceText.includes('top')) regions.top = { x: topBox.x, y: L.bannerTopH + HS_MARGIN, w: topBox.w, h: oneLine(state.topText.size) };
+    if (L.botH > 0) regions.bottom = { x: botBox.x, y: HS_H - L.bannerBotH - HS_MARGIN - L.botH, w: botBox.w, h: L.botH };
+    else if (forceText.includes('bottom')) { const h = oneLine(state.bottomText.size); regions.bottom = { x: botBox.x, y: HS_H - L.bannerBotH - HS_MARGIN - h, w: botBox.w, h }; }
   }
   const brTop = getBannerRect(state, 'top');
   if (brTop) {
-    const hasTitle = !!(state.bannerTop?.topText?.text || '').trim();
-    const hasSub   = !!(state.bannerTop?.subText?.text  || '').trim();
-    if (hasTitle && hasSub) {
-      regions.bannerTopTitle = { x: HS_MARGIN, y: brTop.y, w: HS_W - 2 * HS_MARGIN, h: brTop.h / 2 };
-      regions.bannerTopSub   = { x: HS_MARGIN, y: brTop.y + brTop.h / 2, w: HS_W - 2 * HS_MARGIN, h: brTop.h / 2 };
+    const banner = state.bannerTop || {};
+    const hasSub   = !!(banner.subText?.text  || '').trim();
+    const titleBox = fitTextBox(banner.topText?.w, banner.topText?.size);
+    const subBox   = fitTextBox(banner.subText?.w, banner.subText?.size);
+    const forceSub = forceText.includes('bannerTopSub');
+    // The subtitle's own region/handle must not depend on the title still
+    // having text — otherwise momentarily clearing the title (e.g. to retype
+    // it) makes the subtitle's edit zone and spacing handle vanish even
+    // though the subtitle itself keeps rendering (bannerTextBlock doesn't
+    // require a title either).
+    if (hasSub || forceSub) {
+      const { titleY, titleH, subY, subH } = bannerTitleSubSplit(banner, brTop, forceSub);
+      regions.bannerTopTitle = { x: titleBox.x, y: titleY, w: titleBox.w, h: titleH };
+      regions.bannerTopSub   = { x: subBox.x,   y: subY,   w: subBox.w,   h: subH };
     } else {
-      regions.bannerTopTitle = { x: HS_MARGIN, y: brTop.y, w: HS_W - 2 * HS_MARGIN, h: brTop.h };
+      regions.bannerTopTitle = { x: titleBox.x, y: brTop.y, w: titleBox.w, h: brTop.h };
     }
   }
   const brBot = getBannerRect(state, 'bottom');
   if (brBot) {
-    const hasTitle = !!(state.bannerBottom?.topText?.text || '').trim();
-    const hasSub   = !!(state.bannerBottom?.subText?.text  || '').trim();
-    if (hasTitle && hasSub) {
-      regions.bannerBotTitle = { x: HS_MARGIN, y: brBot.y, w: HS_W - 2 * HS_MARGIN, h: brBot.h / 2 };
-      regions.bannerBotSub   = { x: HS_MARGIN, y: brBot.y + brBot.h / 2, w: HS_W - 2 * HS_MARGIN, h: brBot.h / 2 };
+    const banner = state.bannerBottom || {};
+    const hasSub   = !!(banner.subText?.text  || '').trim();
+    const titleBox = fitTextBox(banner.topText?.w, banner.topText?.size);
+    const subBox   = fitTextBox(banner.subText?.w, banner.subText?.size);
+    const forceSub = forceText.includes('bannerBotSub');
+    if (hasSub || forceSub) {
+      const { titleY, titleH, subY, subH } = bannerTitleSubSplit(banner, brBot, forceSub);
+      regions.bannerBotTitle = { x: titleBox.x, y: titleY, w: titleBox.w, h: titleH };
+      regions.bannerBotSub   = { x: subBox.x,   y: subY,   w: subBox.w,   h: subH };
     } else {
-      regions.bannerBotTitle = { x: HS_MARGIN, y: brBot.y, w: HS_W - 2 * HS_MARGIN, h: brBot.h };
+      regions.bannerBotTitle = { x: titleBox.x, y: brBot.y, w: titleBox.w, h: brBot.h };
     }
   }
   return regions;
@@ -260,33 +307,6 @@ export function getLogoZone(state, templateId) {
   }
 }
 
-
-// Word-wrap text into lines that fit within `maxW`. Width estimated from
-// font size — close enough for layout intent, the SVG renderer handles the
-// actual glyph metrics.
-export function wrapText(text, maxW, fontSize) {
-  const charW = fontSize * 0.5;
-  const maxChars = Math.max(1, Math.floor(maxW / charW));
-  const results = [];
-  // Split on explicit newlines first so Shift+Enter hard-breaks are honoured,
-  // then word-wrap each paragraph independently.
-  for (const para of String(text || '').split('\n')) {
-    const words = [];
-    para.split(/\s+/).filter(Boolean).forEach(w => {
-      while (w.length > maxChars) { words.push(w.slice(0, maxChars)); w = w.slice(maxChars); }
-      words.push(w);
-    });
-    if (!words.length) { results.push(''); continue; }
-    let cur = words[0];
-    for (let i = 1; i < words.length; i++) {
-      const candidate = cur + ' ' + words[i];
-      if (candidate.length <= maxChars) cur = candidate;
-      else { results.push(cur); cur = words[i]; }
-    }
-    results.push(cur);
-  }
-  return results;
-}
 
 // Resolved absolute rects for each template-logo slot. Returns [] when off.
 // Slots with freeX/freeY/freeW/freeH use those instead of the computed position.
@@ -388,26 +408,30 @@ function renderBanner(banner, getFamily, hide = [], position = 'top') {
     const cy = y + (bg.imageY ?? 50) / 100 * h;
     parts.push(`<image href="${escXml(bg.imageUrl)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"/>`);
   }
-  const alignAttrs = (t) => {
+  const alignAttrs = (t, box) => {
     const a = t.align || 'center';
     const anchor = a === 'left' ? 'start' : a === 'right' ? 'end' : 'middle';
-    const x = a === 'left' ? HS_MARGIN : a === 'right' ? HS_W - HS_MARGIN : HS_W / 2;
+    const x = a === 'left' ? box.x : a === 'right' ? box.x + box.w : HS_W / 2;
     return { x, anchor };
   };
   const tb = bannerTextBlock(banner);
   if (tb.total > 0) {
-    const { title, sub, titleLines, subLines, titleLineH, subLineH, gap } = tb;
-    let topY = y + h / 2 - tb.total / 2;
+    const { title, sub, titleLines, subLines, titleLineH, subLineH, gap, titleBox, subBox } = tb;
+    const valign = banner.valign || 'center';
+    const vpad = bannerTextVPad(tb);
+    let topY = valign === 'top' ? y + vpad
+      : valign === 'bottom' ? y + h - vpad - tb.total
+      : y + h / 2 - tb.total / 2;
     if (titleLines.length) {
       if (!hide.includes(titleKey)) {
-        const { x: tx, anchor: ta } = alignAttrs(title);
+        const { x: tx, anchor: ta } = alignAttrs(title, titleBox);
         const tspans = titleLines.map((line, i) => `<tspan x="${tx}"${i === 0 ? '' : ` dy="${titleLineH}"`}>${escXml(line)}</tspan>`).join('');
         parts.push(`<text x="${tx}" y="${Math.round(topY + title.size * 0.82)}" text-anchor="${ta}" font-family="${escXml(getFamily(title.font))}" font-size="${title.size}" fill="${escXml(title.color || '#111110')}">${tspans}</text>`);
       }
       topY += titleLines.length * titleLineH + gap;
     }
     if (subLines.length && !hide.includes(subKey)) {
-      const { x: sx, anchor: sa } = alignAttrs(sub);
+      const { x: sx, anchor: sa } = alignAttrs(sub, subBox);
       const tspans = subLines.map((line, i) => `<tspan x="${sx}"${i === 0 ? '' : ` dy="${subLineH}"`}>${escXml(line)}</tspan>`).join('');
       parts.push(`<text x="${sx}" y="${Math.round(topY + sub.size * 0.82)}" text-anchor="${sa}" font-family="${escXml(getFamily(sub.font))}" font-size="${sub.size}" fill="${escXml(sub.color || '#111110')}">${tspans}</text>`);
     }
@@ -420,27 +444,24 @@ export function makeHoleSignSvg(state, variation) {
   // per-variation overrides. Prefer it over variation.templateId which can be a
   // stale value set when the variation was first created.
   const templateId = state.templateStyle || variation?.templateId || 'hole-sign-1';
-  let { topH, botH, logoY, logoH, bannerTopH, bannerBotH, topTextX, topTextAnchor, topTextMaxW, botTextX, botTextAnchor, botTextMaxW, topWrappedLines, botWrappedLines } = computeLayout(state, templateId);
+  let { topH, botH, logoY, logoH, bannerTopH, bannerBotH, topTextX, topTextAnchor, topTextMaxW, topTextBoxX, botTextX, botTextAnchor, botTextMaxW, botTextBoxX, topWrappedLines, botWrappedLines } = computeLayout(state, templateId);
   const viewBox = `0 0 ${HS_W} ${HS_H}`;
   const bg = state.background;
   const topText = state.topText;
   const bottomText = state.bottomText;
   // Apply explicit text alignment only when the user has deliberately set it
-  // (non-center forces the x position; 'center' overrides anchor but keeps the
-  // logo-constrained max-width so text doesn't bleed into a logo strip).
-  const innerW = HS_W - 2 * HS_MARGIN;
+  // (non-center forces the x position to the text box's own edge — which may
+  // be narrower than the full margin span if the box has been resized).
   if (topText.align === 'left' || topText.align === 'right') {
     topTextAnchor = topText.align === 'left' ? 'start' : 'end';
-    topTextX      = topText.align === 'left' ? HS_MARGIN : HS_W - HS_MARGIN;
-    topTextMaxW   = innerW;
+    topTextX      = topText.align === 'left' ? topTextBoxX : topTextBoxX + topTextMaxW;
   } else if (topText.align === 'center') {
     topTextAnchor = 'middle';
     topTextX      = HS_W / 2;
   }
   if (bottomText.align === 'left' || bottomText.align === 'right') {
     botTextAnchor = bottomText.align === 'left' ? 'start' : 'end';
-    botTextX      = bottomText.align === 'left' ? HS_MARGIN : HS_W - HS_MARGIN;
-    botTextMaxW   = innerW;
+    botTextX      = bottomText.align === 'left' ? botTextBoxX : botTextBoxX + botTextMaxW;
   } else if (bottomText.align === 'center') {
     botTextAnchor = 'middle';
     botTextX      = HS_W / 2;
@@ -521,8 +542,12 @@ export function makeHoleSignSvg(state, variation) {
     }
   } else if (variation && variation.logoSrc) {
     const src = variation.logoSrcTight || variation.logoSrc;
-    // Use getLogoZone so the clip rect and positioning match the DOM dzone exactly,
-    // including the carve-out for any template logo strip.
+    // Use getLogoZone so positioning matches the DOM dzone exactly, including
+    // the carve-out for any template logo strip. The zone rect is only a
+    // placement suggestion though (not a hard boundary — the editor lets a
+    // logo be dragged/scaled past it, clipped only by the sign canvas itself),
+    // so don't clip the image to it here either or an oversized/repositioned
+    // logo gets cropped that the editor shows in full.
     const lz = getLogoZone(state, templateId);
     if (isDisplayableImage(src)) {
       const ld = variation.logoData || { x: 50, y: 50, w: 90 };
@@ -531,8 +556,7 @@ export function makeHoleSignSvg(state, variation) {
       const logoImgH = logoW * aspect;
       const cx = lz.x + (ld.x / 100) * lz.w;
       const cy = lz.y + (ld.y / 100) * lz.h;
-      parts.push(`<clipPath id="lzc"><rect x="${lz.x}" y="${lz.y}" width="${lz.w}" height="${lz.h}"/></clipPath>`);
-      parts.push(`<image href="${escXml(src)}" x="${Math.round(cx - logoW / 2)}" y="${Math.round(cy - logoImgH / 2)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}" preserveAspectRatio="xMidYMid meet" clip-path="url(#lzc)"/>`);
+      parts.push(`<image href="${escXml(src)}" x="${Math.round(cx - logoW / 2)}" y="${Math.round(cy - logoImgH / 2)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}" preserveAspectRatio="xMidYMid meet"/>`);
     } else {
       parts.push(filePlaceholderSvg(lz.x, lz.y, lz.w, lz.h, fileTypeLabel(src)));
     }
@@ -562,7 +586,7 @@ export function makeHoleSignSvg(state, variation) {
   textLayers.forEach(layer => {
     if (!layer.text || !layer.text.trim()) return;
     if (hideTL.includes(layer.id)) return;
-    const lines = String(layer.text || '').split('\n');
+    const lines = wrapText(layer.text, layer.w, layer.size);
     const lineH = layer.size * 1.1;
     const anchor = layer.align === 'left' ? 'start' : layer.align === 'right' ? 'end' : 'middle';
     const tx = layer.align === 'left' ? layer.x : layer.align === 'right' ? layer.x + layer.w : layer.x + layer.w / 2;

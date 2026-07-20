@@ -7,6 +7,26 @@ import { logoThumbHtml } from '../media-utils.js';
 
 // ── Zone toolbar ───────────────────────────────────────────
 
+function removeActiveHsLogo() {
+  if (!UI.hsActiveZone) return;
+  const v = UI.hsActiveZone.variation;
+  v.logoId = null; v.logoSrc = null;
+  delete v.sponsorText; delete v.artboardSrc;
+  hideHsToolbar();
+  renderVarList();
+  renderVariationPreview();
+}
+
+// Delete/Backspace removes the selected logo, unless the user is typing in a
+// text field or editing a text layer (which has its own keydown handling).
+document.addEventListener('keydown', e => {
+  if (!UI.hsActiveZone) return;
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (document.activeElement?.closest?.('input, textarea, select, [contenteditable]')) return;
+  e.preventDefault();
+  removeActiveHsLogo();
+});
+
 export function ensureHsToolbar() {
   if (document.getElementById('hsZoneToolbar')) return;
   const t = document.createElement('div');
@@ -33,8 +53,8 @@ export function ensureHsToolbar() {
     const v = UI.hsActiveZone?.variation;
     if (!v?.logoSrc) return;
     const btn = document.getElementById('hsTbRemoveBg');
-    const origText = btn.textContent;
-    btn.textContent = '…';
+    const origHTML = btn.innerHTML;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Removing…';
     btn.disabled = true;
     // Spinner overlay on the placed logo (not the whole zone) while processing
     const dz = UI.hsActiveZone?.dzone;
@@ -45,7 +65,7 @@ export function ensureHsToolbar() {
     try {
       const oldId = v.logoId;
       const logo = HS.library.find(l => l.id === oldId) || { src: v.logoSrc, name: 'logo.png' };
-      const newLogo = await removeBgFromLogo(logo, s => { btn.textContent = s === 'uploading' ? '↑' : '…'; });
+      const newLogo = await removeBgFromLogo(logo, s => { btn.innerHTML = s === 'uploading' ? '<i class="fa-solid fa-arrow-up-from-bracket"></i> Uploading…' : '<i class="fa-solid fa-spinner fa-spin"></i> Removing…'; });
       // Replace in-place — no new library entry
       const origIdx = HS.library.findIndex(l => l.id === oldId);
       if (origIdx >= 0) HS.library.splice(origIdx, 1, newLogo);
@@ -73,20 +93,12 @@ export function ensureHsToolbar() {
       renderVariationPreview();
     } catch (err) { console.error('BG removal failed', err); }
     spinner.remove();
-    btn.textContent = origText;
+    btn.innerHTML = origHTML;
     btn.disabled = false;
     hideHsToolbar();
   });
 
-  document.getElementById('hsTbRemove').addEventListener('click', () => {
-    if (!UI.hsActiveZone) return;
-    const v = UI.hsActiveZone.variation;
-    v.logoId = null; v.logoSrc = null;
-    delete v.sponsorText; delete v.artboardSrc;
-    hideHsToolbar();
-    renderVarList();
-    renderVariationPreview();
-  });
+  document.getElementById('hsTbRemove').addEventListener('click', removeActiveHsLogo);
 
   document.getElementById('hsTbReplace').addEventListener('click', e => {
     e.stopPropagation();

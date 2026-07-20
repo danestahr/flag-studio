@@ -1,27 +1,25 @@
 import '../style.css';
+import '../icons.js';
 import { requireAuth } from '../auth.js';
-import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
+import { pngBlobToPdfBlob as pngToPdfPt } from '../pdf-utils.js';
 
 await requireAuth();
 
 import { S } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
-import { getFlag, renderInto, makeSvg, showGsTagVariant, resolveColors } from '../render.js';
+import { getFlag, renderInto, makeSvg, showGsTagVariant, resolveColors, preloadLogoAspects } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
 import {
   loadProject, loadFlagConfig, loadLogosForProject,
   generateShareToken, getFeedback, supabase,
-  loadOrderIntake, sendProofReady, sendPrestigeOrder,
+  loadOrderIntake, loadEventName, sendProofReady, sendPrestigeOrder,
 } from '../supabase.js';
 import { buildOrderSummaryPdf } from '../orderSummaryPdf.js';
+import { esc, dl, slug, sanitizeFilename } from '../dom-utils.js';
+import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 
 let feedbackChannel = null;
-
-function esc(s) {
-  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-function slug(s) { return s.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); }
 
 function getVarFlag(v) {
   if (!v) return getFlag();
@@ -29,15 +27,18 @@ function getVarFlag(v) {
   return FLAGS.find(f => f.id === id) || getFlag();
 }
 function getVarColors(v) { return (v && v.colors) ? v.colors : S.colors; }
+function getVarColorEntries(v) {
+  const flag = getVarFlag(v);
+  const colors = getVarColors(v);
+  return Object.entries(colors || {}).map(([zoneId, hex]) => {
+    const zoneDef = flag?.colorZones?.find(z => z.id === zoneId);
+    const colorDef = COLORS.find(c => c.hex.toLowerCase() === hex?.toLowerCase());
+    return { zone: zoneId, label: zoneDef?.label || zoneId, hex: hex || '#000000', name: colorDef?.name || 'Custom' };
+  });
+}
 function getVarGsTagOpts(v) {
   if (!v || (v.gsTag === undefined && v.gsTagMode === undefined)) return null;
   return { enabled: v.gsTag ?? S.gsTag, mode: v.gsTagMode ?? S.gsTagMode };
-}
-function dl(url, name) {
-  const a = document.createElement('a');
-  a.href = url; a.download = name;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 // ── Gallery ────────────────────────────────────────────────
@@ -55,8 +56,8 @@ function renderVarList() {
   el.innerHTML = '';
   const p = new URLSearchParams(window.location.search).get('project');
   const editBase = `flags-variations.html${p ? '?project=' + encodeURIComponent(p) : ''}`;
-  const editIcon = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 1.5L12.5 4.5L4.5 12.5H1.5V9.5L9.5 1.5Z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.5 3.5L10.5 6.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`;
-  const pdfIcon = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const editIcon = `<i class="fa-solid fa-pen" aria-hidden="true"></i>`;
+  const pdfIcon = `<i class="fa-solid fa-file-pdf" aria-hidden="true"></i>`;
 
   S.variations.forEach((v, i) => {
     const card = document.createElement('div');
@@ -66,18 +67,19 @@ function renderVarList() {
     const frontLogos = v.logos || v.assignment || [];
     const backLogos = S.sameLogoOnBothSides ? frontLogos : (v.backLogos || v.backAssignment || []);
     const backMirror = S.sameLogoOnBothSides;
+    const backTextLayers = S.sameLogoOnBothSides ? (v.textLayers || []) : (v.backTextLayers || []);
     const editHref = `${editBase}#var-${encodeURIComponent(v.id)}`;
     const status = reviewStatusOf(v);
     card.innerHTML = `
       <div class="var-card-header">
         <span class="var-card-name">${esc(v.name)}</span>
-        <span class="var-status-tile ${status.cls}">${status.label}</span>
       </div>
       <div class="var-card-flags">
         <div><div class="var-card-face-label">Front</div><div class="var-card-flag" id="vcf-f-${i}"></div></div>
         <div><div class="var-card-face-label">Back</div><div class="var-card-flag" id="vcf-b-${i}"></div></div>
       </div>
       <div class="var-card-actions">
+        <span class="var-status-tile ${status.cls}">${status.label}</span>
         <a href="${editHref}" class="btn sm var-card-edit" title="Edit variation">${editIcon}</a>
         <button class="btn sm var-card-pdf" title="Download PDF" onclick="event.stopPropagation();downloadVariationPdf(${i})">${pdfIcon}</button>
       </div>`;
@@ -86,7 +88,7 @@ function renderVarList() {
     const frontEl = document.getElementById(`vcf-f-${i}`);
     if (frontEl) renderInto(frontEl, frontLogos, 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
     const backEl = document.getElementById(`vcf-b-${i}`);
-    if (backEl) renderInto(backEl, backLogos, 'back', backMirror, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
+    if (backEl) renderInto(backEl, backLogos, 'back', backMirror, getVarFlag(v), getVarColors(v), backTextLayers, getVarGsTagOpts(v));
   });
 }
 
@@ -289,21 +291,15 @@ async function rasterizeForPrint(logos, face, mirrorX = false, textLayers = [], 
   });
 }
 
-async function pngBlobToPdfBlob(pngBlob, vbW, vbH) {
-  const ptW = (vbW / FLAG_DPI) * 72;
-  const ptH = (vbH / FLAG_DPI) * 72;
-  const pdfDoc = await PDFDocument.create();
-  const page = pdfDoc.addPage([ptW, ptH]);
-  const png = await pdfDoc.embedPng(await pngBlob.arrayBuffer());
-  page.drawImage(png, { x: 0, y: 0, width: ptW, height: ptH });
-  return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
+function pngBlobToPdfBlob(pngBlob, vbW, vbH) {
+  return pngToPdfPt(pngBlob, (vbW / FLAG_DPI) * 72, (vbH / FLAG_DPI) * 72);
 }
 
 window.sendToPrestige = async function () {
   if (!S.variations.length) { alert('No variations to export.'); return; }
   if (!S.projectId) { alert('Save your project first.'); return; }
   const btn = document.querySelector('[onclick="sendToPrestige()"]');
-  const origLabel = btn?.textContent;
+  const origLabel = btn?.innerHTML;
   if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
   const status = document.getElementById('expPrintStatus');
   const setStatus = msg => { if (status) status.textContent = msg; };
@@ -317,7 +313,7 @@ window.sendToPrestige = async function () {
     console.error('sendToPrestige failed', err);
     setStatus('Failed: ' + (err.message || err));
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+    if (btn) { btn.disabled = false; btn.innerHTML = origLabel; }
   }
 };
 
@@ -348,7 +344,7 @@ window.expAllPDF = async function () {
       dl(URL.createObjectURL(await pngBlobToPdfBlob(blob, vbW, vbH)), slug(v.name) + '.pdf');
       await new Promise(r => setTimeout(r, 400));
       if (!S.sameLogoOnBothSides) {
-        const { blob: blobB, vbW: bW, vbH: bH } = await rasterizeSvg(v.backLogos || v.backAssignment || [], 'back', true, v.textLayers || [], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v));
+        const { blob: blobB, vbW: bW, vbH: bH } = await rasterizeSvg(v.backLogos || v.backAssignment || [], 'back', false, v.backTextLayers || [], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v));
         dl(URL.createObjectURL(await pngBlobToPdfBlob(blobB, bW, bH)), slug(v.name) + '-back.pdf');
         await new Promise(r => setTimeout(r, 400));
       }
@@ -364,8 +360,9 @@ async function buildPrintZip(setStatus = () => {}) {
     setStatus(`Rendering ${i + 1} of ${S.variations.length}: ${v.name}…`);
     const frontLogos = v.logos || v.assignment || [];
     const backLogos  = S.sameLogoOnBothSides ? frontLogos : (v.backLogos || v.backAssignment || []);
+    const backTextLayers = S.sameLogoOnBothSides ? (v.textLayers || []) : (v.backTextLayers || []);
     const { blob: frontPng, vbW: fW, vbH: fH } = await rasterizeForPrint(frontLogos, 'front', false, v.textLayers || [], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v));
-    const { blob: backPng,  vbW: bW, vbH: bH } = await rasterizeForPrint(backLogos,  'back', S.sameLogoOnBothSides, v.textLayers || [], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v));
+    const { blob: backPng,  vbW: bW, vbH: bH } = await rasterizeForPrint(backLogos,  'back', S.sameLogoOnBothSides, backTextLayers, getVarFlag(v), getVarColors(v), getVarGsTagOpts(v));
     const safe = slug(v.name) || 'variation-' + (i + 1);
     zip.file(`${safe}/${safe}-front.pdf`, await pngBlobToPdfBlob(frontPng, fW, fH));
     zip.file(`${safe}/${safe}-back.pdf`,  await pngBlobToPdfBlob(backPng,  bW, bH));
@@ -380,21 +377,22 @@ async function buildPrintZip(setStatus = () => {}) {
     } catch { /* skip on error */ }
   }
   setStatus('Building order summary…');
-  const colorEntries = Object.entries(S.colors || {}).map(([zoneId, hex]) => {
-    const zoneDef = flag?.colorZones?.find(z => z.id === zoneId);
-    const colorDef = COLORS.find(c => c.hex.toLowerCase() === hex?.toLowerCase());
-    return { zone: zoneId, label: zoneDef?.label || zoneId, hex: hex || '#000000', name: colorDef?.name || 'Custom' };
-  });
+  const colorEntries = getVarColorEntries(null);
   setStatus('Rendering variation thumbnails…');
   const variationImages = [];
   for (const v of S.variations) {
     const frontLogos = v.logos || v.assignment || [];
     const backLogos  = S.sameLogoOnBothSides ? frontLogos : (v.backLogos || v.backAssignment || []);
+    const backTextLayers = S.sameLogoOnBothSides ? (v.textLayers || []) : (v.backTextLayers || []);
     const [frontPng, backPng] = await Promise.all([
       rasterizeThumbnail(frontLogos, 'front', false, v.textLayers || [], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v)).catch(() => null),
-      rasterizeThumbnail(backLogos, 'back', S.sameLogoOnBothSides, v.textLayers || [], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v)).catch(() => null),
+      rasterizeThumbnail(backLogos, 'back', S.sameLogoOnBothSides, backTextLayers, getVarFlag(v), getVarColors(v), getVarGsTagOpts(v)).catch(() => null),
     ]);
-    variationImages.push({ name: v.name, frontPng, backPng });
+    variationImages.push({
+      name: v.name, frontPng, backPng,
+      flagName: getVarFlag(v)?.name || v.flagId || S.flagId || '',
+      colorEntries: getVarColorEntries(v),
+    });
   }
   const summaryPdf = await buildOrderSummaryPdf({
     projectId: S.projectId, productType: 'flags', colorEntries,
@@ -409,19 +407,20 @@ window.downloadForPrint = async function () {
   if (!S.variations.length) { alert('No variations to export.'); return; }
   const btn = document.getElementById('expPrintPdfBtn');
   const status = document.getElementById('expPrintStatus');
-  const originalLabel = btn?.textContent;
+  const originalLabel = btn?.innerHTML;
   if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
   const setStatus = msg => { if (status) status.textContent = msg; };
   try {
-    const { zipBlob, flag } = await buildPrintZip(setStatus);
-    dl(URL.createObjectURL(zipBlob), `flags-${slug(flag?.name || S.flagId || 'export')}-pdf.zip`);
+    const { zipBlob } = await buildPrintZip(setStatus);
+    const eventName = await loadEventName(S.projectId).catch(() => null);
+    dl(URL.createObjectURL(zipBlob), `Flags_${sanitizeFilename(eventName || S.projectName || 'Export')}.zip`);
     setStatus(`Done — ${S.variations.length} variation${S.variations.length === 1 ? '' : 's'} exported.`);
   } catch (err) {
     console.error('Print export failed', err);
     setStatus('Export failed: ' + (err.message || err));
     alert('Print export failed. See console for details.');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = originalLabel; }
+    if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
   }
 };
 
@@ -495,6 +494,30 @@ window.notifyCustomer = async function () {
 
 // ── Init ──────────────────────────────────────────────────
 
+renderSidebar(document.getElementById('sidebar'), {
+  projectType: 'Tournament Flags',
+  activeStep: 3,
+  customerSection: true,
+  projectId: new URLSearchParams(window.location.search).get('project'),
+  steps: [
+    {
+      id: 'navDesign', label: 'Design', desc: 'Style, colors & logos',
+      onClick: () => {
+        const p = new URLSearchParams(window.location.search).get('project');
+        window.location.href = 'flags.html' + (p ? '?project=' + p : '');
+      },
+    },
+    {
+      id: 'navVariations', label: 'Variations', desc: 'Build combinations',
+      onClick: () => {
+        const p = new URLSearchParams(window.location.search).get('project');
+        if (p) window.location.href = 'flags-variations.html?project=' + p;
+      },
+    },
+    { id: 'navGallery', label: 'Gallery', desc: 'Review & export' },
+  ],
+});
+
 const _urlProject = new URLSearchParams(window.location.search).get('project');
 if (!_urlProject) { window.location.href = '/'; }
 
@@ -510,6 +533,7 @@ try {
   S.projectName = project.name || '';
   S.shareToken  = project.share_token || null;
   S.library = logos;
+  await preloadLogoAspects(S.library);
   if (flagCfg) {
     S.flagId = flagCfg.flag_id;
     S.colors = flagCfg.colors || {};
@@ -528,8 +552,7 @@ try {
       flag.logoZones = flag.logoZoneSets[S.logoLayout] || flag.logoZones;
     }
   }
-  const nameDisplay = document.getElementById('projectNameDisplay');
-  if (nameDisplay) nameDisplay.textContent = S.projectName || '—';
+  setSidebarProjectName(S.projectName, S.projectId);
 
   setupGallery();
 } catch (err) {

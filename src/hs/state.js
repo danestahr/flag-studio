@@ -1,5 +1,5 @@
 import { HS_FONTS, emptyBanner, emptyTemplateLogos } from '../hole-sign-data.js';
-import { escXml } from '../hole-sign-render.js';
+import { eyedropperBtn as sharedEyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
 
 // ── State ──────────────────────────────────────────────────
 export const HS = {
@@ -48,24 +48,19 @@ export const UI = {
 };
 
 
-// Browser eyedropper (Chrome/Edge ≥ 95). Picks a screen color and dispatches an
-// `input` event on the target <input type=color>, so the existing oninput
-// handler fires the normal color-change path.
-const SUPPORTS_EYEDROPPER = typeof window !== 'undefined' && 'EyeDropper' in window;
-const EYEDROPPER_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 7l6 6"/><path d="M14 4l3 3a2.121 2.121 0 0 1 0 3l-1.5 1.5-6-6L11 4a2.121 2.121 0 0 1 3 0z"/><path d="M9.5 8.5L3 15v3h3l6.5-6.5"/></svg>`;
+// Picks a screen color and dispatches an `input` event on the target
+// <input type=color>, so the existing oninput handler fires the normal
+// color-change path.
 export function eyedropperBtn(inputId) {
-  if (!SUPPORTS_EYEDROPPER) return '';
-  return `<button type="button" class="eyedropper-btn" onclick="runEyedropper('${inputId}')" title="Pick color from screen">${EYEDROPPER_SVG}</button>`;
+  return sharedEyedropperBtn(`runEyedropper('${inputId}')`);
 }
 window.runEyedropper = async function (inputId) {
-  if (!('EyeDropper' in window)) return;
-  try {
-    const r = await new window.EyeDropper().open();
-    const inp = document.getElementById(inputId);
-    if (!inp) return;
-    inp.value = r.sRGBHex;
-    inp.dispatchEvent(new Event('input', { bubbles: true }));
-  } catch { /* user canceled */ }
+  const hex = await pickEyedropperColor();
+  if (!hex) return;
+  const inp = document.getElementById(inputId);
+  if (!inp) return;
+  inp.value = hex;
+  inp.dispatchEvent(new Event('input', { bubbles: true }));
 };
 
 // Deep-merge a stored banner config onto the empty-banner defaults so older
@@ -132,9 +127,9 @@ export function fontSelect(onchange, current) {
   </select>`;
 }
 
-const ALIGN_LEFT_ICON   = `<svg viewBox="0 0 16 12" width="15" height="12" fill="currentColor" style="display:block;pointer-events:none"><rect x="0" y="0" width="16" height="2" rx="1"/><rect x="0" y="5" width="10" height="2" rx="1"/><rect x="0" y="10" width="13" height="2" rx="1"/></svg>`;
-const ALIGN_CENTER_ICON = `<svg viewBox="0 0 16 12" width="15" height="12" fill="currentColor" style="display:block;pointer-events:none"><rect x="0" y="0" width="16" height="2" rx="1"/><rect x="3" y="5" width="10" height="2" rx="1"/><rect x="1.5" y="10" width="13" height="2" rx="1"/></svg>`;
-const ALIGN_RIGHT_ICON  = `<svg viewBox="0 0 16 12" width="15" height="12" fill="currentColor" style="display:block;pointer-events:none"><rect x="0" y="0" width="16" height="2" rx="1"/><rect x="6" y="5" width="10" height="2" rx="1"/><rect x="3" y="10" width="13" height="2" rx="1"/></svg>`;
+const ALIGN_LEFT_ICON   = `<i class="fa-solid fa-align-left" aria-hidden="true"></i>`;
+const ALIGN_CENTER_ICON = `<i class="fa-solid fa-align-center" aria-hidden="true"></i>`;
+const ALIGN_RIGHT_ICON  = `<i class="fa-solid fa-align-right" aria-hidden="true"></i>`;
 
 // After clicking an alignment button, directly toggle the active class on all
 // visible alignment toggle buttons. Alignment buttons are identified by having
@@ -160,28 +155,3 @@ export function alignBtns(align, setter) {
     </div>`;
 }
 
-// ── Step 1: Design ─────────────────────────────────────────
-export function renderTextControls(which, textState) {
-  const cap = which.charAt(0).toUpperCase() + which.slice(1);
-  return `
-    <div class="hs-section">
-      <div class="hs-section-title">${cap === 'Top' ? 'Text' : 'Bottom text'} <span class="hs-optional">(optional)</span></div>
-      <input class="hexin" style="width:100%" placeholder="${which === 'top' ? 'Sponsored by…' : 'Club name, tagline…'}" value="${escXml(textState.text)}"
-        oninput="setHsTextProp('${which}','text',this.value)">
-      ${fontSelect(`setHsTextProp('${which}','font',this.value)`, textState.font)}
-      ${alignBtns(textState.align, `setHsTextProp('${which}','align'`)}
-      <div style="display:flex;align-items:center;gap:8px">
-        <input type="range" min="80" max="1000" value="${textState.size}"
-          oninput="setHsTextProp('${which}','size',this.value)"
-          style="flex:1">
-        <span id="hs${cap}SizeLabel" style="font-size:12px;color:var(--gray-600);min-width:50px">${textState.size}pt</span>
-      </div>
-      <div class="color-row">
-        <input type="color" class="hs-color-swatch" id="hsText${which}Swatch" value="${textState.color}"
-          oninput="setHsTextProp('${which}','color',this.value)">
-        <input type="text" class="hexin" style="flex:1" maxlength="7" value="${textState.color}"
-          oninput="setHsTextColorHex('${which}',this.value)">
-        ${eyedropperBtn('hsText' + which + 'Swatch')}
-      </div>
-    </div>`;
-}
