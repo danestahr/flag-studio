@@ -1,3 +1,4 @@
+import './icons.js';
 import { signIn, getSession } from './supabase.js';
 
 // Already signed in → skip to dashboard

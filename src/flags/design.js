@@ -1,4 +1,5 @@
 import '../style.css';
+import '../icons.js';
 import { requireAuth } from '../auth.js';
 
 await requireAuth();
@@ -14,16 +15,29 @@ import {
   loadOrderIntake,
 } from '../supabase.js';
 import { initDropZones, renderDropZones, hideZoneToolbar } from './drop-zones.js';
+import { eyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
+import { esc } from '../dom-utils.js';
+import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
+import { renderCanvasPanel } from '../canvas-panel.js';
 
 let isDirty = false;
-
-const _SUPPORTS_EYEDROPPER = typeof window !== 'undefined' && 'EyeDropper' in window;
-const _EYEDROPPER_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 7l6 6"/><path d="M14 4l3 3a2.121 2.121 0 0 1 0 3l-1.5 1.5-6-6L11 4a2.121 2.121 0 0 1 3 0z"/><path d="M9.5 8.5L3 15v3h3l6.5-6.5"/></svg>`;
-
-function esc(s) {
-  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+let _baseZoom = 100;
+let _flagExpZoom = 100;
 function safeHex(h) { return /^#[0-9A-Fa-f]{3,6}$/.test(h) ? h : '#cccccc'; }
+
+renderCanvasPanel(document.getElementById('flagExpCanvasPanel'), {
+  panelId: 'flagExpCanvasPanel',
+  scrollId: 'flagExpScroll',
+  wrapId: 'flagExpZoomWrap',
+  zoomValueId: 'flagExpZoomValue',
+  zoomResetId: 'flagExpZoomReset',
+  aspect: 7519 / 4669,
+  getZoom: () => _flagExpZoom,
+  setZoom: v => { _flagExpZoom = v; },
+  headerName: '—',
+  headerNameId: 'flagExpName',
+  canvasContentHtml: '<div class="flag-exp-preview" id="flagExpPreview"><div class="flag-exp-placeholder">Select a style →</div></div>',
+});
 
 async function ensureProject() {
   if (S.projectId) return;
@@ -103,21 +117,10 @@ function refreshFlagExpanded() {
 }
 
 window.pickFlag = function (id) {
-  if (S.flagId === id) { clearFlagSelection(); return; }
+  if (S.flagId === id) return;
   S.flagId = id;
   S.logoLayout = 'single';
   showFlagExpanded(id);
-  renderP1Colors();
-  checkStep1();
-  syncSidebar();
-  markDirty();
-};
-
-window.clearFlagSelection = function () {
-  S.flagId = null;
-  document.getElementById('flagExpName').textContent = '';
-  document.querySelectorAll('.flag-card').forEach(c => c.classList.remove('selected'));
-  refreshFlagExpanded();
   renderP1Colors();
   checkStep1();
   syncSidebar();
@@ -130,14 +133,13 @@ window.clearFlagSelection = function () {
 // decorative rainbow/plus circle that opens a hidden color input.
 function p1ZonePickerHtml(zid, hex) {
   const swatch = hex
-    ? `<input type="color" id="p1cn-${zid}" value="${hex}" oninput="p1CSync('${zid}',this.value)">`
+    ? `<input type="color" id="p1cn-${zid}" value="${hex}" oninput="p1CSync('${zid}',this.value)" onchange="p1CApply('${zid}')">`
     : `<div class="csw" onclick="document.getElementById('p1cn-${zid}').click()"></div>
-       <input type="color" id="p1cn-${zid}" value="#1A4A2E" oninput="p1CSync('${zid}',this.value)" style="position:absolute;opacity:0;width:0;height:0">`;
+       <input type="color" id="p1cn-${zid}" value="#1A4A2E" oninput="p1CSync('${zid}',this.value)" onchange="p1CApply('${zid}')" style="position:absolute;opacity:0;width:0;height:0">`;
   return `<div class="ve-custom-row">
       ${swatch}
-      <input type="text" class="hexin" id="p1ch-${zid}" value="${hex || ''}" maxlength="7" placeholder="#000000" oninput="p1CSyncN('${zid}',this.value)">
-      ${_SUPPORTS_EYEDROPPER ? `<button type="button" class="eyedropper-btn" onclick="p1Eyedrop('${zid}')" title="Pick color from screen">${_EYEDROPPER_SVG}</button>` : ''}
-      <button class="cpop-apply" onclick="p1CApply('${zid}')">Apply</button>
+      <input type="text" class="hexin" id="p1ch-${zid}" value="${hex || ''}" maxlength="7" placeholder="#000000" oninput="p1CSyncN('${zid}',this.value)" onkeydown="if(event.key==='Enter')p1CApply('${zid}')">
+      ${eyedropperBtn(`p1Eyedrop('${zid}')`)}
     </div>
     <div class="swatch-grid" id="p1sg-${zid}">
       ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${hex === c.hex ? 'sel' : ''}"
@@ -249,11 +251,8 @@ window.p1CApply = function (zid) {
   pickColor(zid, c);
 };
 window.p1Eyedrop = async function (zid) {
-  if (!('EyeDropper' in window)) return;
-  try {
-    const r = await new window.EyeDropper().open();
-    pickColor(zid, r.sRGBHex);
-  } catch { /* user canceled */ }
+  const hex = await pickEyedropperColor();
+  if (hex) pickColor(zid, hex);
 };
 
 // ── Step 2: Colors ─────────────────────────────────────────
@@ -261,14 +260,13 @@ window.p1Eyedrop = async function (zid) {
 function s2ZonePickerHtml(zid) {
   const hex = S.colors[zid];
   const swatch = hex
-    ? `<input type="color" id="cn-${zid}" value="${hex}" oninput="cSync('${zid}',this.value)">`
+    ? `<input type="color" id="cn-${zid}" value="${hex}" oninput="cSync('${zid}',this.value)" onchange="cApply('${zid}')">`
     : `<div class="csw" onclick="document.getElementById('cn-${zid}').click()"></div>
-       <input type="color" id="cn-${zid}" value="#1A4A2E" oninput="cSync('${zid}',this.value)" style="position:absolute;opacity:0;width:0;height:0">`;
+       <input type="color" id="cn-${zid}" value="#1A4A2E" oninput="cSync('${zid}',this.value)" onchange="cApply('${zid}')" style="position:absolute;opacity:0;width:0;height:0">`;
   return `<div class="ve-custom-row">
       ${swatch}
-      <input type="text" class="hexin" id="ch-${zid}" value="${hex || ''}" maxlength="7" placeholder="#000000" oninput="cSyncN('${zid}',this.value)">
-      ${_SUPPORTS_EYEDROPPER ? `<button type="button" class="eyedropper-btn" onclick="cEyedrop('${zid}')" title="Pick color from screen">${_EYEDROPPER_SVG}</button>` : ''}
-      <button class="cpop-apply" onclick="cApply('${zid}')">Apply</button>
+      <input type="text" class="hexin" id="ch-${zid}" value="${hex || ''}" maxlength="7" placeholder="#000000" oninput="cSyncN('${zid}',this.value)" onkeydown="if(event.key==='Enter')cApply('${zid}')">
+      ${eyedropperBtn(`cEyedrop('${zid}')`)}
     </div>
     <div class="swatch-grid" id="sg-${zid}">
       ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${hex === c.hex ? 'sel' : ''}"
@@ -360,12 +358,28 @@ window.cApply = function (z) {
   pickColor(z, c);
 };
 window.cEyedrop = async function (z) {
-  if (!('EyeDropper' in window)) return;
-  try {
-    const r = await new window.EyeDropper().open();
-    pickColor(z, r.sRGBHex);
-  } catch { /* user canceled */ }
+  const hex = await pickEyedropperColor();
+  if (hex) pickColor(z, hex);
 };
+
+// Native <input type=color> pickers only reliably fire `change` once their
+// own popover fully closes, and that's browser-dependent — so as a backstop,
+// commit any hex text field that's been edited (via oninput while dragging
+// in the picker) but hasn't been applied yet the moment the user clicks
+// anywhere outside that zone's own picker block. Keeps the swatch/chip from
+// ever silently lagging behind what's actually in the text field.
+document.addEventListener('click', e => {
+  document.querySelectorAll('.p1zone .hexin').forEach(input => {
+    const zoneEl = input.closest('.p1zone');
+    if (zoneEl?.contains(e.target)) return;
+    const zid = input.id.replace(/^p1ch-|^ch-/, '');
+    const h = input.value;
+    const c = h.startsWith('#') ? h : '#' + h;
+    if (!/^#[0-9A-Fa-f]{6}$/.test(c)) return;
+    if (c.toLowerCase() === (S.colors[zid] || '').toLowerCase()) return;
+    if (input.id.startsWith('p1ch-')) window.p1CApply(zid); else window.cApply(zid);
+  });
+}, true);
 
 // ── Step 3: Logo library ───────────────────────────────────
 
@@ -404,8 +418,8 @@ function renderLib() {
     <div class="lib-item ${l.uploading ? 'uploading' : ''}" id="li-${l.id}" draggable="${!l.uploading}"
       ondragstart="dragStart(event,'${l.id}')" ondragend="dragEnd('${l.id}')">
       <img src="${l.src}" alt="${l.name}">
-      <div class="lib-item-name">${l.uploading ? '↑ uploading…' : l.name}</div>
-      ${l.uploading ? '' : `<button class="lib-del" onclick="delLogo('${l.id}')">×</button>`}
+      <div class="lib-item-name">${l.uploading ? '<i class="fa-solid fa-upload" aria-hidden="true"></i> uploading…' : l.name}</div>
+      ${l.uploading ? '' : `<button class="lib-del" onclick="delLogo('${l.id}')"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>`}
     </div>`).join('');
 }
 
@@ -436,6 +450,19 @@ window.dragEnd = function (id) { document.getElementById('li-' + id)?.classList.
 function setupLibrary() {
   const flag = getFlag();
   if (!flag) return;
+  renderCanvasPanel(document.getElementById('baseCanvasPanel'), {
+    panelId: 'baseCanvasPanel',
+    scrollId: 'baseCanvasScroll',
+    wrapId: 'baseZoomWrap',
+    zoomValueId: 'baseZoomValue',
+    zoomResetId: 'baseZoomReset',
+    aspect: 7519 / 4669,
+    getZoom: () => _baseZoom,
+    setZoom: v => { _baseZoom = v; },
+    headerName: 'Base assignment',
+    canvasContentHtml: '<div class="flag-wrap" id="baseWrap"><svg class="bsvg" id="baseSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg></div>',
+    description: "Drag from library into a zone. Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.",
+  });
   const svg = document.getElementById('baseSvg');
   if (!svg) return;
   svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
@@ -497,7 +524,7 @@ window.saveDraft = async function () {
     await saveFlagConfig(S.projectId, S);
     markClean();
     if (btn) {
-      btn.innerHTML = '<span class="save-check">✓</span>';
+      btn.innerHTML = '<span class="save-check"><i class="fa-solid fa-check" aria-hidden="true"></i></span>';
       setTimeout(() => { btn.innerHTML = 'Save draft'; btn.disabled = false; }, 1500);
     }
   } catch (err) {
@@ -512,6 +539,34 @@ window.goToVariations = async function () {
 };
 
 // ── Init ──────────────────────────────────────────────────
+
+renderSidebar(document.getElementById('sidebar'), {
+  projectType: 'Tournament Flags',
+  activeStep: 1,
+  customerSection: true,
+  projectId: new URLSearchParams(window.location.search).get('project'),
+  steps: [
+    { id: 'navDesign', label: 'Design', desc: 'Style, colors & logos' },
+    {
+      id: 'navVariations', label: 'Variations', desc: 'Build combinations',
+      onClick: async () => {
+        const p = new URLSearchParams(window.location.search).get('project');
+        if (!p) return;
+        await window.saveDraft?.();
+        window.location.href = 'flags-variations.html?project=' + p;
+      },
+    },
+    {
+      id: 'navGallery', label: 'Gallery', desc: 'Review & export',
+      onClick: async () => {
+        const p = new URLSearchParams(window.location.search).get('project');
+        if (!p) return;
+        await window.saveDraft?.();
+        window.location.href = 'flags-gallery.html?project=' + p;
+      },
+    },
+  ],
+});
 
 await loadAllFlags(FLAGS);
 renderFlagGrid();
@@ -551,8 +606,7 @@ if (_urlProject) {
       if (colors[0]?.hex) S.colors['zone-primary'] = colors[0].hex;
       if (colors[1]?.hex) S.colors['zone-secondary'] = colors[1].hex;
     }
-    const nameDisplay = document.getElementById('projectNameDisplay');
-    if (nameDisplay) nameDisplay.textContent = S.projectName || '—';
+    setSidebarProjectName(S.projectName, S.projectId);
     if (!S.flagId) S.flagId = 'plain';
     showFlagExpanded(S.flagId);
     renderP1Colors();

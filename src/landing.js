@@ -1,4 +1,5 @@
 import './landing.css';
+import './icons.js';
 import { requireAuth } from './auth.js';
 import { listProjects, createProject } from './supabase.js';
 
@@ -23,8 +24,8 @@ async function renderProjects() {
         </div>
         <div class="draft-card-meta">${date}</div>
         <div class="draft-card-tools">
-          <a class="draft-card-tool${hasFlags ? ' configured' : ''}" href="/flags.html?project=${p.id}" onclick="event.stopPropagation()">🚩 Flags</a>
-          <a class="draft-card-tool${hasHoleSigns ? ' configured' : ''}" href="/hole-signs.html?project=${p.id}" onclick="event.stopPropagation()">⛳ Hole Signs</a>
+          <a class="draft-card-tool${hasFlags ? ' configured' : ''}" href="/flags.html?project=${p.id}" onclick="event.stopPropagation()"><i class="fa-solid fa-flag" aria-hidden="true"></i> Flags</a>
+          <a class="draft-card-tool${hasHoleSigns ? ' configured' : ''}" href="/hole-signs.html?project=${p.id}" onclick="event.stopPropagation()"><i class="fa-solid fa-signs-post" aria-hidden="true"></i> Hole Signs</a>
         </div>
       </div>`;
     }).join('')}</div>`;

@@ -5,26 +5,13 @@ import { getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-s
 import { hideHsToolbar, prepareLogo, applyFillToVariation } from './logo-utils.js';
 import { isDisplayableImage, fileTypeLabel } from '../media-utils.js';
 import { stripSlotImages, paintTplSlotOverlays, paintTextLayerOverlays } from './design.js';
-import { wireCanvasTextEditing, wireElementDrag, wireQuickAddHover } from './banner.js';
+import { wireBannerHeightHandles, wireBannerSpacingHandles, wireCanvasTextEditing, wireElementDrag, wireQuickAddHover } from './banner.js';
 import { showHsToolbar } from './var-toolbar.js';
-import { renderVarList } from './variations.js';
+import { renderVarList, buildLibStrip } from './variations.js';
+import { uploadLogo } from '../supabase.js';
+import { renderCanvasPanel } from '../canvas-panel.js';
 
 // ── Canvas sizing & zoom ───────────────────────────────────
-
-function fitWrap(scroll, wrap, pct) {
-  if (!scroll || !wrap) return;
-  const top = scroll.getBoundingClientRect().top;
-  const availH = Math.max(240, Math.round(window.innerHeight - top - 24));
-  scroll.style.height = availH + 'px';
-  const cw = scroll.clientWidth, ch = scroll.clientHeight;
-  if (!cw || !ch) return;
-  const ar = HS_W / HS_H;
-  let w = cw, h = cw / ar;
-  if (h > ch) { h = ch; w = ch * ar; }
-  const k = (pct || 100) / 100;
-  wrap.style.width  = Math.round(w * k) + 'px';
-  wrap.style.height = Math.round(h * k) + 'px';
-}
 
 // When zoom changes during inline text editing, rescale the input's font size so
 // the cursor/selection highlight stays aligned with the visible SVG text.
@@ -49,72 +36,56 @@ function rescaleEditorInput(previewId) {
   });
 }
 
-export function applyHsZoom(pct) {
-  UI.hsZoom = pct;
-  fitWrap(document.getElementById('hsCanvasScroll'), document.getElementById('hsZoomWrap'), pct);
-  const label = document.getElementById('hsZoomValue');
-  const reset = document.getElementById('hsZoomReset');
-  if (label) label.textContent = pct + '%';
-  if (reset) reset.style.display = pct === 100 ? 'none' : '';
-  if (UI.canvasEdit) rescaleEditorInput('hsSignPreview');
-}
+// The Variations-step canvas panel — constructed fresh each time
+// renderStep2() rebuilds panel-2's markup (mirrors the old per-render
+// wireCanvasZoom() call below); renderCanvasPanel()'s own wiring is
+// idempotent per element/id, so re-constructing on every render is safe.
+// The Front/Back face toggle it can render is left hidden: hole signs are
+// always printed identically front and back, so there's nothing to switch.
+let hsVarCanvas = null;
 
-window.setHsZoom = function (val) {
-  applyHsZoom(Math.max(40, Math.min(400, parseInt(val, 10) || 100)));
-};
-
-export function applyHsStep1Zoom(pct) {
-  UI.hsStep1Zoom = pct;
-  fitWrap(document.getElementById('hsStep1Scroll'), document.getElementById('hsStep1ZoomWrap'), pct);
-  const label = document.getElementById('hsStep1ZoomValue');
-  const reset = document.getElementById('hsStep1ZoomReset');
-  if (label) label.textContent = pct + '%';
-  if (reset) reset.style.display = pct === 100 ? 'none' : '';
-  if (UI.canvasEdit) rescaleEditorInput('hsStep1Preview');
-}
-
-window.setHsStep1Zoom = function (val) {
-  applyHsStep1Zoom(Math.max(40, Math.min(400, parseInt(val, 10) || 100)));
-};
-
-let _hsResizeWired = false;
-function wireCanvasResize() {
-  if (_hsResizeWired) return;
-  _hsResizeWired = true;
-  let raf = null;
-  window.addEventListener('resize', () => {
-    if (raf) cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => {
-      fitWrap(document.getElementById('hsCanvasScroll'),  document.getElementById('hsZoomWrap'),      UI.hsZoom);
-      fitWrap(document.getElementById('hsStep1Scroll'),   document.getElementById('hsStep1ZoomWrap'), UI.hsStep1Zoom);
-    });
+export function initHsVarCanvas(container) {
+  hsVarCanvas = renderCanvasPanel(container, {
+    panelId: 'hsCanvasPanel',
+    scrollId: 'hsCanvasScroll',
+    wrapId: 'hsZoomWrap',
+    zoomValueId: 'hsZoomValue',
+    zoomResetId: 'hsZoomReset',
+    aspect: HS_W / HS_H,
+    getZoom: () => UI.hsZoom,
+    setZoom: v => { UI.hsZoom = v; },
+    onApply: () => { if (UI.canvasEdit) rescaleEditorInput('hsSignPreview'); },
+    headerName: '—',
+    headerNameId: 'hsActiveVarName',
+    canvasContentHtml: '<div class="hs-sign-preview" id="hsSignPreview"></div>',
+    description: 'Drag logos into zones',
   });
 }
 
-export function wireCanvasZoom(scrollId, wrapId, getZoom, applyZoom) {
-  wireCanvasResize();
-  const scroll = document.getElementById(scrollId);
-  if (!scroll || scroll.__zoomWired) return;
-  scroll.__zoomWired = true;
-  scroll.addEventListener('wheel', e => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    e.preventDefault();
-    const wrap = document.getElementById(wrapId);
-    if (!wrap) return;
-    const before = wrap.getBoundingClientRect();
-    if (!before.width || !before.height) return;
-    const fracX = (e.clientX - before.left) / before.width;
-    const fracY = (e.clientY - before.top)  / before.height;
-    const oldZoom = getZoom();
-    const factor = 1 + Math.max(-0.25, Math.min(0.25, -e.deltaY * 0.005));
-    const newZoom = Math.max(40, Math.min(400, Math.round(oldZoom * factor)));
-    if (newZoom === oldZoom) return;
-    applyZoom(newZoom);
-    const after = wrap.getBoundingClientRect();
-    scroll.scrollLeft += (after.left + fracX * after.width)  - e.clientX;
-    scroll.scrollTop  += (after.top  + fracY * after.height) - e.clientY;
-  }, { passive: false });
+export function applyHsZoom(pct) { hsVarCanvas?.apply(pct); }
+
+// Design step-1's canvas panel — same shared component as the Variations
+// step above, just with no header/face-toggle (a single master template,
+// not a variation) and its own zoom-% state.
+let hsStep1Canvas = null;
+
+export function initHsStep1Canvas(container) {
+  hsStep1Canvas = renderCanvasPanel(container, {
+    panelId: 'hsStep1CanvasPanel',
+    scrollId: 'hsStep1Scroll',
+    wrapId: 'hsStep1ZoomWrap',
+    zoomValueId: 'hsStep1ZoomValue',
+    zoomResetId: 'hsStep1ZoomReset',
+    aspect: HS_W / HS_H,
+    getZoom: () => UI.hsStep1Zoom,
+    setZoom: v => { UI.hsStep1Zoom = v; },
+    onApply: () => { if (UI.canvasEdit) rescaleEditorInput('hsStep1Preview'); },
+    canvasContentHtml: '<div class="hs-sign-thumb" id="hsStep1Preview"></div>',
+    description: "Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed sign.",
+  });
 }
+
+export function applyHsStep1Zoom(pct) { hsStep1Canvas?.apply(pct); }
 
 // ── Logo position helper ───────────────────────────────────
 
@@ -234,6 +205,14 @@ export function renderVariationPreview() {
   if (!preview) return;
   preview.innerHTML = '';
 
+  const nameEl = document.getElementById('hsActiveVarName');
+  if (nameEl) {
+    const activeName = UI.activeDefaultId
+      ? HS.defaults.find(d => d.id === UI.activeDefaultId)?.name
+      : HS.variations.find(v => v.id === HS.activeVarId)?.name;
+    nameEl.textContent = activeName || '—';
+  }
+
   // Default hole sign selected — render it full-canvas, read-only
   if (UI.activeDefaultId) {
     const def = HS.defaults.find(d => d.id === UI.activeDefaultId);
@@ -284,10 +263,12 @@ export function renderVariationPreview() {
   const bgVarForRender = isFullGraphic
     ? getEffectiveVariation(activeVar)
     : (activeVar && !activeVar.logoSrc ? getEffectiveVariation(activeVar) : null);
-  // Only hide text layers from the SVG when editing (they become interactive DOM overlays).
-  // When just viewing, let them render in the SVG directly.
+  // Only hide text layers (and top/bottom band text) from the SVG when editing
+  // (they become interactive DOM overlays). When just viewing, let them render
+  // in the SVG directly.
   const hideTextLayers = isEditingActive ? (effState.textLayers || []).map(l => l.id) : [];
-  const bgState = { ...(isEditingActive ? stripSlotImages(effState) : effState), hideTextLayers };
+  const hideText = isEditingActive ? ['top', 'bottom'] : [];
+  const bgState = { ...(isEditingActive ? stripSlotImages(effState) : effState), hideTextLayers, hideText };
   renderHoleSignInto(bgSvgDiv, bgState, bgVarForRender);
   const bgSvgEl = bgSvgDiv.querySelector('svg');
   if (bgSvgEl) {
@@ -325,6 +306,8 @@ export function renderVariationPreview() {
       paintTplSlotOverlays(preview, effState);
       paintTextLayerOverlays(preview, effState);
       wireCanvasTextEditing(preview);
+      wireBannerHeightHandles(preview);
+      wireBannerSpacingHandles(preview);
       wireQuickAddHover(preview);
     }
     return;
@@ -409,15 +392,7 @@ export function renderVariationPreview() {
     }
   }
 
-  dzone.addEventListener('dragover',  e => { e.preventDefault(); dzone.classList.add('drag-over'); });
-  dzone.addEventListener('dragleave', e => { if (!dzone.contains(e.relatedTarget)) dzone.classList.remove('drag-over'); });
-  dzone.addEventListener('drop', e => {
-    e.preventDefault();
-    dzone.classList.remove('drag-over');
-    if (!UI.hsDragLogoId) return;
-    const logo = HS.library.find(l => l.id === UI.hsDragLogoId);
-    if (!logo) return;
-    UI.hsDragLogoId = null;
+  const placeLogo = logo => {
     variation.logoId  = logo.id;
     variation.logoSrc = logo.src;
     delete variation.logoSrcTight; delete variation.sponsorText;
@@ -429,6 +404,30 @@ export function renderVariationPreview() {
       if (thumb) renderHoleSignInto(thumb, getEffectiveState(activeVar), getEffectiveVariation(activeVar));
       renderVariationPreview();
     }).catch(() => {});
+  };
+
+  dzone.addEventListener('dragover',  e => { e.preventDefault(); dzone.classList.add('drag-over'); });
+  dzone.addEventListener('dragleave', e => { if (!dzone.contains(e.relatedTarget)) dzone.classList.remove('drag-over'); });
+  dzone.addEventListener('drop', async e => {
+    e.preventDefault();
+    dzone.classList.remove('drag-over');
+
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      try {
+        const logo = await uploadLogo(HS.projectId, file);
+        HS.library.push(logo);
+        buildLibStrip();
+        placeLogo(logo);
+      } catch (err) { console.error('Logo upload failed', err); }
+      return;
+    }
+
+    if (!UI.hsDragLogoId) return;
+    const logo = HS.library.find(l => l.id === UI.hsDragLogoId);
+    if (!logo) return;
+    UI.hsDragLogoId = null;
+    placeLogo(logo);
   });
 
   preview.appendChild(dzone);
@@ -438,6 +437,8 @@ export function renderVariationPreview() {
     paintTplSlotOverlays(preview, effState);
     paintTextLayerOverlays(preview, effState);
     wireCanvasTextEditing(preview);
+    wireBannerHeightHandles(preview);
+    wireBannerSpacingHandles(preview);
     wireQuickAddHover(preview);
   }
 }

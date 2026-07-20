@@ -1,9 +1,11 @@
 import { HS, UI, getEffectiveState, getEffectiveVariation } from './state.js';
 import { HS_H, HS_W, emptyTemplateLogos } from '../hole-sign-data.js';
 import { escXml, makeHoleSignSvg, renderHoleSignInto } from '../hole-sign-render.js';
-import { generateShareToken, saveHoleSignConfig, updateProject } from '../supabase.js';
+import { generateShareToken, loadEventName, saveHoleSignConfig, updateProject } from '../supabase.js';
 import { PDFDocument, PDFName, PDFOperator, PDFString, rgb } from 'pdf-lib';
 import JSZip from 'jszip';
+import { dl, slug, sanitizeFilename } from '../dom-utils.js';
+import { pngBlobToPdfBlob } from '../pdf-utils.js';
 
 // ── Step 3: Gallery ─────────────────────────────────────────
 export function renderGallery() {
@@ -15,7 +17,7 @@ export function renderGallery() {
         <div class="psub">Review all variations and export or share.</div>
       </div>
       <div class="p1-header-actions">
-        <button class="btn sm" onclick="tryGoStep(2)">← Variations</button>
+        <button class="btn sm" onclick="tryGoStep(2)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Variations</button>
         <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
       </div>
     </div>
@@ -29,16 +31,16 @@ export function renderGallery() {
         <div id="hsGallerySelectedName" style="font-size:13px;font-weight:500;text-align:center;margin-bottom:.5rem;color:var(--gray-600)"></div>
         <div class="exp-row">
           <button class="btn sm" id="hsExpPdf" onclick="exportHsPDF()">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PDF
+            <i class="fa-solid fa-file-pdf" aria-hidden="true"></i>PDF
           </button>
           <button class="btn sm" id="hsExpPng" onclick="exportHsPNG()">
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG
+            <i class="fa-solid fa-download" aria-hidden="true"></i>PNG
           </button>
         </div>
         <button class="btn sm" style="width:100%;justify-content:center" onclick="exportHsAllPNG()">Export all PNG</button>
         <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)">
           <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-400);font-weight:500;margin-bottom:6px">Print files</div>
-          <button class="btn sm primary" id="hsExpPrintBtn" style="width:100%;justify-content:center" onclick="downloadHsPrint()">↓ Download print sheets (zip)</button>
+          <button class="btn sm primary" id="hsExpPrintBtn" style="width:100%;justify-content:center" onclick="downloadHsPrint()"><i class="fa-solid fa-download" aria-hidden="true"></i> Download print sheets (zip)</button>
           <div id="hsExpPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px;margin-top:6px"></div>
         </div>
         <div class="share-section">
@@ -93,13 +95,7 @@ window.selectHsGallery = function (id) {
 };
 
 // ── Export ─────────────────────────────────────────────────
-export function hsSlug(s) { return (s || 'hole-sign').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''); }
-export function dl(url, name) {
-  const a = document.createElement('a');
-  a.href = url; a.download = name;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
-}
+export function hsSlug(s) { return slug(s, 'hole-sign'); }
 
 window.exportHsSVG = async function () {
   const id = window._hsGallerySelectedId;
@@ -115,7 +111,7 @@ window.exportHsSVG = async function () {
     alert('SVG export failed.');
   } finally {
     if (btn) {
-      btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>SVG';
+      btn.innerHTML = '<i class="fa-solid fa-download" aria-hidden="true"></i>SVG';
       btn.disabled = false;
     }
   }
@@ -135,7 +131,7 @@ window.exportHsPNG = async function () {
     alert('PNG export failed.');
   } finally {
     if (btn) {
-      btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG';
+      btn.innerHTML = '<i class="fa-solid fa-download" aria-hidden="true"></i>PNG';
       btn.disabled = false;
     }
   }
@@ -149,21 +145,16 @@ window.exportHsPDF = async function () {
   if (btn) { btn.textContent = '…'; btn.disabled = true; }
   try {
     const blob = await hsRasterize(v);
-    const pngBytes = await blob.arrayBuffer();
     const ptW = 21.25 * 72;
     const ptH = Math.round(ptW * HS_H / HS_W);
-    const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([ptW, ptH]);
-    const pngImage = await pdfDoc.embedPng(pngBytes);
-    page.drawImage(pngImage, { x: 0, y: 0, width: ptW, height: ptH });
-    const pdfBytes = await pdfDoc.save();
-    dl(URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' })), hsSlug(v.name) + '.pdf');
+    const pdfBlob = await pngBlobToPdfBlob(blob, ptW, ptH);
+    dl(URL.createObjectURL(pdfBlob), hsSlug(v.name) + '.pdf');
   } catch (err) {
     console.error('Hole sign PDF export failed', err);
     alert('PDF export failed.');
   } finally {
     if (btn) {
-      btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PDF';
+      btn.innerHTML = '<i class="fa-solid fa-file-pdf" aria-hidden="true"></i>PDF';
       btn.disabled = false;
     }
   }
@@ -313,7 +304,7 @@ window.downloadHsPrint = async function () {
 
   const btn = document.getElementById('hsExpPrintBtn');
   const status = document.getElementById('hsExpPrintStatus');
-  const origLabel = btn?.textContent;
+  const origLabel = btn?.innerHTML;
   if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
   const setStatus = msg => { if (status) status.textContent = msg; };
 
@@ -452,15 +443,15 @@ window.downloadHsPrint = async function () {
 
     setStatus('Zipping…');
     const zipBlob = await zip.generateAsync({ type: 'blob' });
-    const projName = HS.projectName ? hsSlug(HS.projectName) : 'hole-signs';
-    dl(URL.createObjectURL(zipBlob), `${projName}-print-sheets.zip`);
+    const eventName = await loadEventName(HS.projectId).catch(() => null);
+    dl(URL.createObjectURL(zipBlob), `HoleSigns_${sanitizeFilename(eventName || HS.projectName || 'Export')}.zip`);
     setStatus(`Done — ${total} signs on ${sheets} sheet${sheets === 1 ? '' : 's'} (${sheets * 2} files).`);
   } catch (err) {
     console.error('Hole sign print export failed', err);
     setStatus('Export failed: ' + (err.message || err));
     alert('Print export failed. See console for details.');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = origLabel || '↓ Download print sheets (zip)'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = origLabel || '<i class="fa-solid fa-download" aria-hidden="true"></i> Download print sheets (zip)'; }
   }
 };
 

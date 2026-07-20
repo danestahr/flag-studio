@@ -1,4 +1,5 @@
 import './style.css';
+import './icons.js';
 import { requireAuth } from './auth.js';
 
 await requireAuth();

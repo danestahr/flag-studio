@@ -90,25 +90,23 @@ window.openTextLayerToolbar = function (id, anchorEl) {
     <select class="hs-tl-tb-select" id="hsTlFont">${fontOpts}</select>
     <div class="hs-tl-tb-sep"></div>
     <div class="hs-tl-tb-size-row">
-      <input type="range" class="hs-tl-tb-slider" id="hsTlSizeSlider" min="60" max="1200" step="10" value="${layer.size}">
+      <input type="range" class="hs-tl-tb-slider" id="hsTlSizeSlider" min="60" max="2000" step="10" value="${layer.size}">
       <span class="hs-tl-tb-size-val" id="hsTlSizeVal">${layer.size}</span>
     </div>
     <div class="hs-tl-tb-sep"></div>
     <input type="color" class="hs-tl-tb-color" id="hsTlColor" value="${layer.color}" title="Color">
     <div class="hs-tl-tb-sep"></div>
     <button class="hs-tl-tb-btn${layer.align === 'left'   ? ' active' : ''}" data-align="left"   title="Left">
-      <svg width="14" height="12" viewBox="0 0 14 12" fill="currentColor"><rect x="0" y="0" width="14" height="2" rx="1"/><rect x="0" y="5" width="8" height="2" rx="1"/><rect x="0" y="10" width="11" height="2" rx="1"/></svg>
+      <i class="fa-solid fa-align-left" aria-hidden="true"></i>
     </button>
     <button class="hs-tl-tb-btn${layer.align === 'center' ? ' active' : ''}" data-align="center" title="Center">
-      <svg width="14" height="12" viewBox="0 0 14 12" fill="currentColor"><rect x="0" y="0" width="14" height="2" rx="1"/><rect x="3" y="5" width="8" height="2" rx="1"/><rect x="1.5" y="10" width="11" height="2" rx="1"/></svg>
+      <i class="fa-solid fa-align-center" aria-hidden="true"></i>
     </button>
     <button class="hs-tl-tb-btn${layer.align === 'right'  ? ' active' : ''}" data-align="right"  title="Right">
-      <svg width="14" height="12" viewBox="0 0 14 12" fill="currentColor"><rect x="0" y="0" width="14" height="2" rx="1"/><rect x="6" y="5" width="8" height="2" rx="1"/><rect x="3" y="10" width="11" height="2" rx="1"/></svg>
+      <i class="fa-solid fa-align-right" aria-hidden="true"></i>
     </button>
     <div class="hs-tl-tb-sep"></div>
-    <button class="hs-tl-tb-btn hs-tl-tb-delete" data-del="${id}" title="Delete">
-      <svg width="12" height="14" viewBox="0 0 12 14" fill="currentColor"><path d="M0.75 3.25h10.5M3.75 3.25V1.75h4.5v1.5M1.5 3.25l.75 8a1 1 0 001 .9h5.5a1 1 0 001-.9l.75-8"/></svg>
-    </button>`;
+    <button class="hs-tl-tb-btn hs-tl-tb-delete" data-del="${id}" title="Remove">Remove</button>`;
 
   document.body.appendChild(tb);
 

@@ -1,10 +1,28 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
+  color-scheme: light dark;
   --black: #111110; --white: #FAFAF8;
-  --gray-50: #F5F5F2; --gray-100: #E8E8E4; --gray-200: #D0D0CA;
-  --gray-400: #9A9A92; --gray-600: #5A5A54;
-  --green: #1A4A2E; --green-light: #2D7A4A; --gold: #C8972A;
+  --gray-50: #F5F5F2; --gray-100: #E8E8E4; --gray-200: #D0D0CA; --gray-300: #B8B8B1;
+  --gray-400: #9A9A92; --gray-500: #7A7A72; --gray-600: #5A5A54; --gray-700: #46463F;
+  --gray-800: #2E2E29; --gray-900: #1B1B18;
+  --gold: #C8972A;
+
+  --accent: #232323; --accent-hover: #3E3E3E; --accent-contrast: #FFFFFF;
+  --accent-tint: rgba(35,35,35,.06);
+
   --r: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --black: #F2F2EE; --white: #1E1E1B;
+    --gray-50: #171714; --gray-100: #2A2A26; --gray-200: #3B3B36; --gray-300: #4D4D46;
+    --gray-400: #8C8C81; --gray-500: #A3A397; --gray-600: #B8B8AB; --gray-700: #CBCBBE;
+    --gray-800: #DEDED0; --gray-900: #EDEDE0;
+
+    --accent: #EDEDEA; --accent-hover: #FFFFFF; --accent-contrast: #171714;
+    --accent-tint: rgba(255,255,255,.08);
+  }
 }
 
 body {
@@ -40,24 +58,14 @@ body {
   gap: 10px;
   font-family: 'DM Serif Display', serif;
   font-size: 20px;
-  color: var(--green);
+  color: var(--accent);
 }
 
 .logo-mark {
-  width: 28px;
-  height: 21px;
-  background: var(--gold);
-  border-radius: 2px;
-  position: relative;
+  width: 48px;
+  height: 48px;
+  display: block;
   flex-shrink: 0;
-}
-.logo-mark::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 5px;
-  background: var(--green-light);
-  border-radius: 2px 2px 0 0;
 }
 
 .login-heading {
@@ -99,7 +107,7 @@ body {
 }
 
 .field input:focus {
-  border-color: var(--green);
+  border-color: var(--accent);
 }
 
 .login-error {
@@ -114,8 +122,8 @@ body {
 .login-btn {
   width: 100%;
   height: 42px;
-  background: var(--green);
-  color: white;
+  background: var(--accent);
+  color: var(--accent-contrast);
   border: none;
   border-radius: var(--r);
   font-family: 'DM Sans', sans-serif;
@@ -126,5 +134,5 @@ body {
   margin-top: .25rem;
 }
 
-.login-btn:hover { background: var(--green-light); }
+.login-btn:hover { background: var(--accent-hover); }
 .login-btn:disabled { opacity: .55; cursor: default; }

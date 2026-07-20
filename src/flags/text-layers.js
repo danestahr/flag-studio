@@ -50,18 +50,16 @@ function openFlagTlToolbar(id, anchorEl, textLayers, onChange) {
     <input type="color" class="hs-tl-tb-color" id="flagTlColor" value="${layer.color}" title="Color">
     <div class="hs-tl-tb-sep"></div>
     <button class="hs-tl-tb-btn${layer.align === 'left'   ? ' active' : ''}" data-align="left"   title="Left">
-      <svg width="14" height="12" viewBox="0 0 14 12" fill="currentColor"><rect x="0" y="0" width="14" height="2" rx="1"/><rect x="0" y="5" width="8" height="2" rx="1"/><rect x="0" y="10" width="11" height="2" rx="1"/></svg>
+      <i class="fa-solid fa-align-left" aria-hidden="true"></i>
     </button>
     <button class="hs-tl-tb-btn${!layer.align || layer.align === 'center' ? ' active' : ''}" data-align="center" title="Center">
-      <svg width="14" height="12" viewBox="0 0 14 12" fill="currentColor"><rect x="0" y="0" width="14" height="2" rx="1"/><rect x="3" y="5" width="8" height="2" rx="1"/><rect x="1.5" y="10" width="11" height="2" rx="1"/></svg>
+      <i class="fa-solid fa-align-center" aria-hidden="true"></i>
     </button>
     <button class="hs-tl-tb-btn${layer.align === 'right'  ? ' active' : ''}" data-align="right"  title="Right">
-      <svg width="14" height="12" viewBox="0 0 14 12" fill="currentColor"><rect x="0" y="0" width="14" height="2" rx="1"/><rect x="6" y="5" width="8" height="2" rx="1"/><rect x="3" y="10" width="11" height="2" rx="1"/></svg>
+      <i class="fa-solid fa-align-right" aria-hidden="true"></i>
     </button>
     <div class="hs-tl-tb-sep"></div>
-    <button class="hs-tl-tb-btn hs-tl-tb-delete" title="Delete">
-      <svg width="12" height="14" viewBox="0 0 12 14" fill="currentColor"><path d="M0.75 3.25h10.5M3.75 3.25V1.75h4.5v1.5M1.5 3.25l.75 8a1 1 0 001 .9h5.5a1 1 0 001-.9l.75-8"/></svg>
-    </button>`;
+    <button class="hs-tl-tb-btn hs-tl-tb-delete" title="Remove">Remove</button>`;
 
   document.body.appendChild(tb);
   tb.style.position = 'fixed';
@@ -229,6 +227,77 @@ function syncFlagTlFontSizes(wrap, textLayers) {
   });
 }
 
+// Removes the interactive front-face text overlays (and their guides/resize
+// observer) from a canvas. Call this before rendering a non-interactive view
+// of the same wrap (e.g. the back mirror preview, which bakes text directly
+// into its SVG) — otherwise the front's overlay DOM lingers on top of it,
+// showing the text twice.
+export function clearFlagTextOverlays(wrapId) {
+  closeFlagTlToolbar();
+  _activeFlagTlId = null;
+  _editingFlagTlId = null;
+  const wrap = document.getElementById(wrapId);
+  if (!wrap) return;
+  wrap.querySelectorAll('.flag-tl-overlay').forEach(el => el.remove());
+  wrap.querySelectorAll('.flag-tl-guide-h, .flag-tl-guide-v').forEach(el => el.remove());
+  if (wrap._flagTlRO) { wrap._flagTlRO.disconnect(); wrap._flagTlRO = null; }
+}
+
+// Renders text as plain, non-interactive positioned boxes using the exact
+// same markup/CSS as the interactive overlay below — used for the back's
+// read-only mirror preview so text lines up pixel-for-pixel with how it'll
+// look the instant it becomes editable (toggling "Same Front & Back Design"
+// off). Baking this same text into the mirror's SVG instead (via makeSvg)
+// would render it with SVG <text> baseline metrics, which sit slightly off
+// from this HTML overlay's line-height metrics — enough to visibly shift/
+// resize on every toggle.
+export function renderFlagTextOverlaysStatic(wrapId, textLayers, mirror = false) {
+  const wrap = document.getElementById(wrapId);
+  if (!wrap) return;
+  wrap.querySelectorAll('.flag-tl-overlay').forEach(el => el.remove());
+  if (wrap._flagTlRO) { wrap._flagTlRO.disconnect(); wrap._flagTlRO = null; }
+  if (!Array.isArray(textLayers) || !textLayers.length) return;
+
+  const sync = () => {
+    const sc = wrap.offsetHeight;
+    wrap.querySelectorAll('.flag-tl-overlay').forEach(overlay => {
+      const layer = textLayers.find(l => l.id === overlay.dataset.tlId);
+      const div = overlay.querySelector('.hs-tl-content');
+      if (layer && div) div.style.fontSize = Math.max(8, (layer.fontSize / 100) * sc) + 'px';
+    });
+  };
+
+  textLayers.forEach(layer => {
+    const fontFamily = HS_FONTS.find(f => f.id === layer.font)?.family || "'DM Serif Display', serif";
+    // Mirror the box (left edge + width) and flip alignment — matches
+    // makeSvg's mirrored text-anchor math for the `mirror` (baked-export)
+    // case, so this static preview shows text exactly where export would.
+    const x = mirror ? 100 - layer.x - layer.w : layer.x;
+    const align = mirror ? (layer.align === 'left' ? 'right' : layer.align === 'right' ? 'left' : layer.align) : layer.align;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'hs-tl-overlay flag-tl-overlay';
+    overlay.dataset.tlId = layer.id;
+    overlay.style.cssText = `position:absolute;left:${x}%;top:${layer.y}%;width:${layer.w}%;pointer-events:none;`;
+
+    const textDiv = document.createElement('div');
+    textDiv.className = 'hs-tl-content';
+    textDiv.style.cssText = [
+      'width:100%;pointer-events:none;overflow:visible;',
+      `font-family:${fontFamily};`,
+      `color:${layer.color};text-align:${align || 'center'};`,
+      'line-height:1.1;white-space:pre-wrap;word-break:break-word;',
+    ].join('');
+    textDiv.textContent = layer.text || 'Text';
+    overlay.appendChild(textDiv);
+    wrap.appendChild(overlay);
+  });
+
+  sync();
+  wrap._flagTlRO = new ResizeObserver(sync);
+  wrap._flagTlRO.observe(wrap);
+}
+
 export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
   const wrap = document.getElementById(wrapId);
   if (!wrap) return;
@@ -321,15 +390,18 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
     rh.addEventListener('pointerup', () => { document.body.style.cursor = ''; onChange(); });
     overlay.appendChild(rh);
 
-    // Corner handles — drag to scale font size
+    // Corner handles — drag to scale font size *and* the box it sits in
+    // together (same ratio), scaling outward from the box's center — so the
+    // box doesn't lag behind and need a separate edge-drag to catch up.
     const makeCorner = (cls, xSign, ySign) => {
       const ch = document.createElement('div');
       ch.className = `hs-tl-resize-corner ${cls}`;
-      let chStartX, chStartY, chStartSize;
+      let chStartX, chStartY, chStartSize, chStartW, chStartLayerX;
       ch.addEventListener('pointerdown', e => {
         e.stopPropagation();
         ch.setPointerCapture(e.pointerId);
         chStartX = e.clientX; chStartY = e.clientY; chStartSize = layer.fontSize;
+        chStartW = layer.w; chStartLayerX = layer.x;
         document.body.style.cursor = getComputedStyle(ch).cursor || 'nwse-resize';
         e.preventDefault();
       });
@@ -341,6 +413,14 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
         const newSize = Math.max(0.5, Math.min(40, parseFloat((chStartSize + outward * 0.05).toFixed(1))));
         layer.fontSize = newSize;
         textDiv.style.fontSize = Math.max(8, (newSize / 100) * wrap.offsetHeight) + 'px';
+
+        const ratio = newSize / chStartSize;
+        const newW = Math.max(5, chStartW * ratio);
+        layer.w = newW;
+        layer.x = chStartLayerX + (chStartW - newW) / 2;
+        overlay.style.width = newW + '%';
+        overlay.style.left = layer.x + '%';
+
         const slider = document.getElementById('flagTlSizeSlider');
         const val = document.getElementById('flagTlSizeVal');
         if (slider) slider.value = newSize;

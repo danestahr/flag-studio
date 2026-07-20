@@ -13,35 +13,14 @@
 
 <header>
   <div style="display:flex;align-items:center;gap:1.5rem">
-    <a href="/" class="back-link">← Projects</a>
-    <div class="logo"><div class="logo-mark"></div>GolfStatus Design Studio</div><span class="beta-tag">Beta</span>
+    <a href="/" class="back-link"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Projects</a>
+    <div class="logo"><svg class="logo-mark" viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="GolfStatus"><path d="M41.71 49.73H8.02C3.6 49.73 0 46.13 0 41.71V8.02C0 3.6 3.6 0 8.02 0H41.71C46.13 0 49.73 3.6 49.73 8.02V41.71C49.73 46.13 46.13 49.73 41.71 49.73ZM8.02 0.93C4.11 0.93 0.93 4.11 0.93 8.02V41.71C0.93 45.62 4.11 48.8 8.03 48.8H41.72C45.63 48.8 48.82 45.62 48.82 41.71V8.02C48.82 4.11 45.64 0.93 41.72 0.93H8.02Z" fill="currentColor"/><path d="M24.87 6.61999C16.97 6.61999 10.55 13.09 10.55 21.05C10.55 23.87 11.36 26.6 12.89 28.95L12.93 29.01C13.1 29.27 13.29 29.54 13.48 29.79L23.23 42.44C23.23 42.44 23.23 42.44 23.23 42.45L23.72 43.12V42.43C23.72 37.55 22.25 35.63 21.73 34.83C21.63 34.67 21.66 34.4 21.65 34.17C21.65 34.05 21.75 33.96 21.86 33.97C22.84 34.23 23.85 34.36 24.88 34.36C25.91 34.36 26.93 34.23 27.91 33.97C28.01 33.97 28.09 34.06 28.09 34.17C28.09 34.39 28.12 34.67 28.01 34.83C27.49 35.63 26.02 37.55 26.02 42.43V43.07L26.71 42.17L36.17 29.88C38.14 27.33 39.18 24.27 39.18 21.04C39.18 13.09 32.76 6.60999 24.86 6.60999L24.87 6.61999ZM31.91 30.43C29.85 31.95 27.42 32.75 24.88 32.75C21.08 32.75 17.47 30.9 15.23 27.81C11.35 22.46 12.52 14.92 17.83 11.01C19.89 9.48999 22.32 8.68998 24.86 8.68998C28.66 8.68998 32.27 10.54 34.51 13.63C38.39 18.98 37.22 26.52 31.91 30.43Z" fill="currentColor"/></svg>GolfStatus Design Studio</div><span class="beta-tag">Beta</span>
   </div>
   <span class="header-sub">Tournament flag configurator</span>
 </header>
 
 <div class="layout">
-  <aside class="sidebar">
-    <div style="padding:1.25rem 1.5rem 0">
-      <div id="projectNameDisplay" style="font-size:15px;font-weight:500;color:var(--black);line-height:1.3">—</div>
-      <div style="font-size:11px;color:var(--gray-400);margin-top:3px">Tournament Flags</div>
-    </div>
-    <div class="sdivider" style="margin:.75rem 1.5rem"></div>
-    <div class="steps-nav">
-      <div class="step-item active" id="navDesign">
-        <div class="step-num"><span>1</span></div>
-        <div><div class="step-label">Design</div><div class="step-desc">Style, colors &amp; logos</div></div>
-      </div>
-      <div class="step-item" id="navVariations">
-        <div class="step-num"><span>2</span></div>
-        <div><div class="step-label">Variations</div><div class="step-desc">Build combinations</div></div>
-      </div>
-      <div class="step-item" id="navGallery">
-        <div class="step-num"><span>3</span></div>
-        <div><div class="step-label">Gallery</div><div class="step-desc">Review &amp; export</div></div>
-      </div>
-    </div>
-    <div id="customerSection" style="display:none"></div>
-  </aside>
+  <aside class="sidebar" id="sidebar"></aside>
 
   <main class="main">
 
@@ -54,17 +33,14 @@
         </div>
         <div class="p1-header-actions">
           <span class="s1hint-text" id="s1hint">Pick colors and select a style</span>
-          <button class="btn primary" id="s1next" disabled onclick="goToVariations()">Next: Variations →</button>
+          <button class="btn primary" id="s1next" disabled onclick="goToVariations()">Next: Variations <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
           <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" title="Save draft" style="display:none">Save draft</button>
         </div>
       </div>
       <div class="p1-split">
         <!-- Left: always-visible preview -->
         <div class="p1-preview-col">
-          <div class="flag-exp-name" id="flagExpName"></div>
-          <div class="flag-exp-preview" id="flagExpPreview">
-            <div class="flag-exp-placeholder">Select a style →</div>
-          </div>
+          <div class="var-canvas-panel" id="flagExpCanvasPanel"></div>
         </div>
         <!-- Right: controls -->
         <div class="p1-controls-col">
@@ -100,8 +76,8 @@
           <div class="psub">These colors apply to all variations.</div>
         </div>
         <div class="p1-header-actions">
-          <button class="btn sm" onclick="goStep(1)">← Back</button>
-          <button class="btn primary" id="s2next" disabled onclick="goToVariations()">Next: Variations →</button>
+          <button class="btn sm" onclick="goStep(1)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
+          <button class="btn primary" id="s2next" disabled onclick="goToVariations()">Next: Variations <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
           <button class="btn sm save-draft-btn" onclick="saveDraft()" style="display:none">Save draft</button>
         </div>
       </div>
@@ -123,8 +99,8 @@
           <div class="psub">Upload all logos you'll use across variations. Drag them into the zones on the flag to set a base assignment.</div>
         </div>
         <div class="p1-header-actions">
-          <button class="btn sm" onclick="goStep(2)">← Back</button>
-          <button class="btn primary" onclick="goToVariations()">Next: Variations →</button>
+          <button class="btn sm" onclick="goStep(2)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
+          <button class="btn primary" onclick="goToVariations()">Next: Variations <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
           <button class="btn sm save-draft-btn" onclick="saveDraft()" style="display:none">Save draft</button>
         </div>
       </div>
@@ -132,7 +108,7 @@
         <div class="lib-panel">
           <div class="lib-title">Uploaded logos</div>
           <div class="upload-zone" onclick="document.getElementById('libFile').click()">
-            <div class="uicon">↑</div>
+            <div class="uicon"><i class="fa-solid fa-upload" aria-hidden="true"></i></div>
             <div class="utitle">Upload logos</div>
             <div class="usub">PNG, JPG, SVG or PDF<br>Transparent bg recommended</div>
           </div>
@@ -141,16 +117,7 @@
             <div class="lib-empty">No logos yet</div>
           </div>
         </div>
-        <div class="canvas-panel">
-          <div class="canvas-top">
-            <span class="canvas-label">Base assignment</span>
-            <span class="canvas-hint">Drag from library into a zone</span>
-          </div>
-          <div class="canvas-bleed-hint">Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.</div>
-          <div class="flag-wrap" id="baseWrap">
-            <svg class="bsvg" id="baseSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
-          </div>
-        </div>
+        <div class="var-canvas-panel" id="baseCanvasPanel"></div>
       </div>
     </div>
 
@@ -209,7 +176,7 @@
           <div class="canvas-bleed-hint">Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.</div>
           <div class="canvas-scroll" id="flagCanvasScroll">
             <div id="varCanvasEmpty" class="var-canvas-empty" style="display:none">
-              <span style="font-size:32px;line-height:1;opacity:.3">⚑</span>
+              <span style="font-size:32px;line-height:1;opacity:.3"><i class="fa-solid fa-flag" aria-hidden="true"></i></span>
               <span>No variations — add one to get started</span>
             </div>
             <div class="canvas-zoom-wrap" id="flagZoomWrap">
@@ -241,9 +208,9 @@
           <div class="var-list-header">
             <div class="var-list-title">All variations</div>
             <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn sm" onclick="goStep(2)">← Design</button>
-              <button class="btn sm" onclick="addVariation()">+ Add variation</button>
-              <button class="btn sm primary" onclick="goStep(5)">Gallery →</button>
+              <button class="btn sm" onclick="goStep(2)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Design</button>
+              <button class="btn sm" onclick="addVariation()"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add variation</button>
+              <button class="btn sm primary" onclick="goStep(5)">Gallery <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
             </div>
           </div>
           <div class="var-list" id="varList"></div>
@@ -259,7 +226,7 @@
           <div class="psub">Review all variations and export.</div>
         </div>
         <div class="p1-header-actions">
-          <button class="btn sm" onclick="goStep(4)">← Back</button>
+          <button class="btn sm" onclick="goStep(4)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
           <button class="btn sm save-draft-btn" onclick="saveDraft()">Save draft</button>
         </div>
       </div>
@@ -274,8 +241,8 @@
             <div class="gallery-stage">
               <div class="gflag" id="gFlag"></div>
               <div class="gnav">
-                <button class="garrow" id="gPrev" onclick="gNav(-1)">←</button>
-                <button class="garrow" id="gNext" onclick="gNav(1)">→</button>
+                <button class="garrow" id="gPrev" onclick="gNav(-1)" aria-label="Previous image"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i></button>
+                <button class="garrow" id="gNext" onclick="gNav(1)" aria-label="Next image"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
               </div>
               <div class="gcaption">
                 <span class="gname" id="gName"></span>
@@ -297,12 +264,12 @@
                 </div>
               </div>
               <div class="gnav" style="position:relative;justify-content:center;margin-top:1rem">
-                <button class="garrow" id="gPrevD" onclick="gNav(-1)">←</button>
+                <button class="garrow" id="gPrevD" onclick="gNav(-1)" aria-label="Previous image"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i></button>
                 <div class="gcaption" style="position:relative;transform:none;bottom:auto">
                   <span class="gname" id="gNameD"></span>
                   <span class="gcounter" id="gCountD"></span>
                 </div>
-                <button class="garrow" id="gNextD" onclick="gNav(1)">→</button>
+                <button class="garrow" id="gNextD" onclick="gNav(1)" aria-label="Next image"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
               </div>
             </div>
           </div>
@@ -313,25 +280,25 @@
           <div id="gDetails"></div>
           <div class="exp-row">
             <button class="btn sm" id="expPdf" onclick="expPDF()">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PDF
+              <i class="fa-solid fa-file-pdf" aria-hidden="true"></i>PDF
             </button>
             <button class="btn sm" id="expPng" onclick="expPNG()">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>PNG
+              <i class="fa-solid fa-download" aria-hidden="true"></i>PNG
             </button>
           </div>
           <button class="btn sm" style="width:100%;justify-content:center" onclick="expAllPNG()">Export all as PNG</button>
           <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)">
             <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-400);font-weight:500;margin-bottom:6px">Print files</div>
             <div class="exp-row">
-              <button class="btn sm primary" id="expPrintPdfBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('pdf')">↓ PDF zip</button>
-              <button class="btn sm primary" id="expPrintPngBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('png')">↓ PNG zip</button>
+              <button class="btn sm primary" id="expPrintPdfBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('pdf')"><i class="fa-solid fa-download" aria-hidden="true"></i> PDF zip</button>
+              <button class="btn sm primary" id="expPrintPngBtn" style="flex:1;justify-content:center" onclick="downloadForPrint('png')"><i class="fa-solid fa-download" aria-hidden="true"></i> PNG zip</button>
             </div>
             <div id="expPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px;margin-top:6px"></div>
           </div>
           <div class="share-section" id="shareSection">
             <div class="rc-title">Share for review</div>
             <div id="shareStatus" style="font-size:13px;color:var(--gray-400);min-height:16px"></div>
-            <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openShareModal()">Share for review →</button>
+            <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openShareModal()">Share for review <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
           </div>
         </div>
       </div>
@@ -365,19 +332,5 @@
 
 
 <script type="module" src="/src/flags/design.js"></script>
-<script>
-  document.getElementById('navVariations').addEventListener('click', async () => {
-    const p = new URLSearchParams(window.location.search).get('project');
-    if (!p) return;
-    await window.saveDraft?.();
-    window.location.href = 'flags-variations.html?project=' + p;
-  });
-  document.getElementById('navGallery').addEventListener('click', async () => {
-    const p = new URLSearchParams(window.location.search).get('project');
-    if (!p) return;
-    await window.saveDraft?.();
-    window.location.href = 'flags-gallery.html?project=' + p;
-  });
-</script>
 </body>
 </html>

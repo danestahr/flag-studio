@@ -5,9 +5,11 @@ import { saveDraftInternal } from './export.js';
 import { applyFillToVariation, hideHsToolbar, prepareLogo, removeBgFromLogo } from './logo-utils.js';
 import { HS_TEMPLATES } from '../hole-sign-data.js';
 import { logoThumbHtml } from '../media-utils.js';
+import { renderLogoTray } from '../logo-tray.js';
+import { renderVariationList } from '../variation-list.js';
 import { escXml, renderHoleSignInto } from '../hole-sign-render.js';
 import { deleteLogo, uploadLogo, saveHsOneOffs } from '../supabase.js';
-import { applyHsZoom, renderVariationPreview, wireCanvasZoom } from './var-canvas.js';
+import { applyHsZoom, initHsVarCanvas, renderVariationPreview } from './var-canvas.js';
 import { renderEditor } from './var-editor.js';
 import { openDefaultsPanel } from './defaults.js';
 
@@ -22,34 +24,17 @@ export function renderStep2() {
         <div class="psub">Upload sponsor logos and build one variation per sponsor. <strong>Each sign is printed front and back</strong> with the same design.</div>
       </div>
       <div class="p1-header-actions">
-        <button class="btn sm" onclick="tryGoStep(1)">← Design</button>
-        <button class="btn primary" onclick="goStep(3)">Gallery & export →</button>
+        <button class="btn sm" onclick="tryGoStep(1)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Design</button>
+        <button class="btn primary" onclick="goStep(3)">Gallery & export <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
         <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
       </div>
     </div>
     <div class="var-strip-wrap">
       <div class="var-strip-label">Logo library</div>
-      <div class="var-strip" id="hsLibStrip">
-        <button class="var-upload-btn" title="Upload logo" onclick="document.getElementById('hsLogoFile').click()">+</button>
-        <input type="file" id="hsLogoFile" accept="image/*,.pdf,.ai,.eps" multiple style="display:none">
-      </div>
+      <div class="var-strip" id="hsLibStrip"></div>
     </div>
     <div class="s4layout">
-      <div class="var-canvas-panel">
-        <div class="canvas-zoom-row">
-          <span class="canvas-zoom-value" id="hsZoomValue">100%</span>
-          <button class="canvas-zoom-reset" id="hsZoomReset" onclick="setHsZoom(100)" style="display:none">Reset</button>
-          <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
-        </div>
-        <div class="canvas-bleed-hint">Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed sign.</div>
-        <div class="canvas-scroll" id="hsCanvasScroll">
-          <div class="canvas-scroll-inner">
-            <div class="canvas-zoom-wrap" id="hsZoomWrap">
-              <div class="hs-sign-preview" id="hsSignPreview"></div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <div class="var-canvas-panel" id="hsCanvasPanel"></div>
       <div class="var-list-panel">
         <div class="var-list-header">
           <div class="var-list-title">Variations</div>
@@ -67,9 +52,8 @@ export function renderStep2() {
       </div>
     </div>`;
 
-  document.getElementById('hsLogoFile').addEventListener('change', handleHsLogoUpload);
   document.getElementById('hsCustomArtboardFile').addEventListener('change', handleHsArtboardUpload);
-  wireCanvasZoom('hsCanvasScroll', 'hsZoomWrap', () => UI.hsZoom, applyHsZoom);
+  initHsVarCanvas(document.getElementById('hsCanvasPanel'));
   applyHsZoom(UI.hsZoom);
 
   buildLibStrip();
@@ -140,53 +124,31 @@ async function handleHsArtboardUpload(e) {
 }
 
 export function buildLibStrip() {
-  const strip = document.getElementById('hsLibStrip');
-  if (!strip) return;
-  while (strip.children.length > 2) strip.removeChild(strip.lastChild);
-  HS.library.forEach(logo => {
-    const el = document.createElement('div');
-    el.className = 'var-lib-item';
-    el.title = logo.name;
-    el.draggable = true;
-    el.innerHTML = `${logoThumbHtml(logo.src, logo.name)}<button class="var-lib-del" title="Delete">×</button><button class="var-lib-bgrem" title="Remove background">✦</button>`;
-    el.addEventListener('click', e => {
-      if (e.target.classList.contains('var-lib-del') || e.target.classList.contains('var-lib-bgrem')) return;
-      addVariationForLogo(logo);
-    });
-    el.querySelector('.var-lib-del').addEventListener('click', e => {
-      e.stopPropagation();
-      deleteHsLibLogo(logo);
-    });
-    el.querySelector('.var-lib-bgrem').addEventListener('click', async e => {
-      e.stopPropagation();
-      const btn = e.currentTarget;
-      btn.textContent = '…';
-      btn.disabled = true;
-      try {
-        const newLogo = await removeBgFromLogo(logo, s => { btn.textContent = s === 'uploading' ? '↑' : '…'; });
-        // Replace in-place so no new library entry is created
-        const origIdx = HS.library.indexOf(logo);
-        if (origIdx >= 0) HS.library.splice(origIdx, 1, newLogo);
-        else HS.library.push(newLogo);
-        HS.variations.forEach(vv => {
-          if (vv.logoId === logo.id) {
-            vv.logoId = newLogo.id;
-            vv.logoSrc = newLogo.src;
-            delete vv.logoSrcTight; delete vv.logoAspect; delete vv.logoArtworkBounds;
-          }
-        });
-        buildLibStrip();
-        renderVarList();
-      } catch (err) {
-        console.error('Background removal failed', err);
-      } finally {
-        btn.textContent = '✦';
-        btn.disabled = false;
-      }
-    });
-    el.addEventListener('dragstart', () => { UI.hsDragLogoId = logo.id; el.classList.add('dragging'); });
-    el.addEventListener('dragend',   () => { UI.hsDragLogoId = null;    el.classList.remove('dragging'); });
-    strip.appendChild(el);
+  renderLogoTray(document.getElementById('hsLibStrip'), {
+    library: HS.library,
+    fileInputId: 'hsLogoFile',
+    accept: 'image/*,.pdf,.ai,.eps',
+    onUpload: handleHsLogoUpload,
+    onItemClick: logo => addVariationForLogo(logo),
+    onDragStart: logo => { UI.hsDragLogoId = logo.id; },
+    onDragEnd: () => { UI.hsDragLogoId = null; },
+    onDelete: logo => deleteHsLibLogo(logo),
+    onRemoveBg: async (logo, onProgress) => {
+      const newLogo = await removeBgFromLogo(logo, onProgress);
+      // Replace in-place so no new library entry is created
+      const origIdx = HS.library.indexOf(logo);
+      if (origIdx >= 0) HS.library.splice(origIdx, 1, newLogo);
+      else HS.library.push(newLogo);
+      HS.variations.forEach(vv => {
+        if (vv.logoId === logo.id) {
+          vv.logoId = newLogo.id;
+          vv.logoSrc = newLogo.src;
+          delete vv.logoSrcTight; delete vv.logoAspect; delete vv.logoArtworkBounds;
+        }
+      });
+      buildLibStrip();
+      renderVarList();
+    },
   });
 }
 
@@ -212,9 +174,7 @@ export async function deleteHsLibLogo(logo) {
   }
 }
 
-window.handleHsLogoUpload = async function (e) {
-  const files = Array.from(e.target.files || []);
-  if (e.target) e.target.value = '';
+async function handleHsLogoUpload(files) {
   for (const file of files) {
     try {
       const logo = await uploadLogo(HS.projectId, file);
@@ -226,7 +186,7 @@ window.handleHsLogoUpload = async function (e) {
       console.error('Logo upload failed', err);
     }
   }
-};
+}
 
 export function addVariationForLogo(logo) {
   const variation = {
@@ -254,8 +214,6 @@ export function selectVariation(id) {
   renderVariationPreview();
   renderVarTmplRow();
 }
-
-window.selectHsVariation = function (id) { selectVariation(id); };
 
 window.selectHsDefault = function (id) {
   UI.activeDefaultId = id;
@@ -288,7 +246,7 @@ export function renderVarTmplRow() {
     <div class="hs-var-tmpl-opt${!activeCustomId && activeLayoutId === t.id ? ' active' : ''}"
       onclick="setVarTemplate('${t.id}')">
       <span>${escXml(t.name)}</span>
-      ${!activeCustomId && activeLayoutId === t.id ? '<span>✓</span>' : ''}
+      ${!activeCustomId && activeLayoutId === t.id ? '<span><i class="fa-solid fa-check" aria-hidden="true"></i></span>' : ''}
     </div>`).join('');
 
   const customItems = customs.length
@@ -296,7 +254,7 @@ export function renderVarTmplRow() {
         <div class="hs-var-tmpl-opt${activeCustomId === t.id ? ' active' : ''}"
           onclick="setVarTemplate('custom:${t.id}')">
           <span>${escXml(t.name)}</span>
-          ${activeCustomId === t.id ? '<span>✓</span>' : ''}
+          ${activeCustomId === t.id ? '<span><i class="fa-solid fa-check" aria-hidden="true"></i></span>' : ''}
         </div>`).join('')
     : '<div class="hs-var-tmpl-opt-empty">No saved templates yet</div>';
 
@@ -369,6 +327,36 @@ window.setVarTemplate = function (key) {
   saveDraftInternal().catch(() => {});
 };
 
+function renderHsVarThumb(el, v) {
+  el.style.position = 'relative';
+  // While uploading, show a spinner
+  if (v.loading) {
+    el.innerHTML = '<div class="hs-vthumb-uploading"><div class="hs-upload-spinner"></div></div>';
+    return;
+  }
+  // Artboard variations: skip SVG render entirely — paint the image directly
+  // so there's no flash of the template behind the image.
+  if (v.artboardSrc) {
+    el.innerHTML = '';
+    const ab = document.createElement('img');
+    ab.className = 'hs-vthumb-artboard';
+    ab.src = v.artboardSrc;
+    ab.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;';
+    el.appendChild(ab);
+    return;
+  }
+  renderHoleSignInto(el, getEffectiveState(v), getEffectiveVariation(v));
+  const imgEl = el.querySelector('image[href]');
+  const src = imgEl?.getAttribute('href');
+  if (src) {
+    const img = new Image();
+    img.onload = img.onerror = () => el.classList.remove('loading');
+    img.src = src;
+  } else {
+    el.classList.remove('loading');
+  }
+}
+
 export function renderVarList() {
   const list = document.getElementById('hsVarList');
   if (!list) return;
@@ -377,39 +365,65 @@ export function renderVarList() {
     return;
   }
 
-  const varHtml = HS.variations.map(v => {
-    const isCustomized = !!(v.template || v.sponsorText || (v.templateId && v.templateId !== HS.templateStyle));
-    const fb = HS.feedback?.find(f => f.variation_id === v.id);
-    const fbClass = fb?.status === 'needs_edits' && !fb?.resolved ? ' needs-edits'
-      : fb?.status === 'approved' ? ' approved' : '';
-    const statusTile = fb?.status === 'approved'
-      ? '<span class="var-status-tile approved">✓ Approved</span>'
-      : (fb?.status === 'needs_edits' && !fb?.resolved)
-        ? '<span class="var-status-tile needs-edits">Needs edits</span>'
-        : '<span class="var-status-tile not-reviewed">Not reviewed</span>';
-    const qty = v.qty ?? 1;
-    return `
-    <div class="var-card${v.id === HS.activeVarId ? ' active' : ''}${fbClass}" data-varid="${v.id}" onclick="selectHsVariation('${v.id}')">
-      <div class="var-card-left">
-        <div class="hs-vthumb" id="hsvt-${v.id}"></div>
-        <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
-          <input class="vname" value="${escXml(v.name)}" onclick="event.stopPropagation()"
-            onchange="renameHsVar('${v.id}',this.value)">
-          ${statusTile}
-          ${isCustomized ? '<span class="var-custom-badge">Customized</span>' : ''}
-          <div class="var-qty-row" onclick="event.stopPropagation()">
-            <label class="var-qty-label">Qty</label>
-            <input class="var-qty-input" type="number" min="1" step="1" value="${qty}"
-              onchange="setHsVarQty('${v.id}', this.value)">
-          </div>
-        </div>
-      </div>
-      <div class="var-btns">
-        <button class="vbtn" title="Edit" onclick="event.stopPropagation();startEditVar('${v.id}')">✎</button>
-        <button class="vbtn" title="Delete" onclick="event.stopPropagation();deleteHsVar('${v.id}')">✕</button>
-      </div>
-    </div>`;
-  }).join('');
+  if (!HS.variations.length && !HS.defaults.length) {
+    list.innerHTML = '<div style="font-size:13px;color:var(--gray-400);text-align:center;padding:1rem 0">No variations yet. Upload a logo to add one.</div>';
+    return;
+  }
+
+  // renderEditor() replaces #hsVarList's own innerHTML while editing, so
+  // these sub-containers are rebuilt fresh on every call rather than reused.
+  list.innerHTML = '<div class="var-list" id="hsVarCards"></div><div class="var-list" id="hsDefaultCards"></div>';
+  const varsEl = document.getElementById('hsVarCards');
+  const defsEl = document.getElementById('hsDefaultCards');
+
+  renderVariationList(varsEl, HS.variations, {
+    activeId: HS.activeVarId,
+    thumbId: v => 'hsvt-' + v.id,
+    thumbClass: 'hs-vthumb',
+    renderThumb: renderHsVarThumb,
+    feedbackFor: v => HS.feedback?.find(f => f.variation_id === v.id),
+    badgeFor: v => (v.template || v.sponsorText || (v.templateId && v.templateId !== HS.templateStyle))
+      ? '<span class="var-custom-badge">Customized</span>' : '',
+    onSelect: v => selectVariation(v.id),
+    onRename: (v, name) => { v.name = name; },
+    onEdit: v => window.startEditVar(v.id),
+    onDuplicate: v => dupHsVar(v.id),
+    onDelete: v => deleteHsVar(v.id),
+    onQtyChange: (v, qty) => { v.qty = qty; },
+  });
+
+  // Dropping a dragged library logo directly onto a variation card assigns
+  // it to that variation — extra behavior beyond the shared card template,
+  // wired separately since it doesn't exist for the flags list.
+  HS.variations.forEach(v => {
+    const card = varsEl.querySelector(`.var-card[data-varid="${v.id}"]`);
+    if (!card) return;
+    card.addEventListener('dragover', e => { e.preventDefault(); card.classList.add('drag-over'); });
+    card.addEventListener('dragleave', e => { if (!card.contains(e.relatedTarget)) card.classList.remove('drag-over'); });
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      card.classList.remove('drag-over');
+      const logo = UI.hsDragLogoId ? HS.library.find(l => l.id === UI.hsDragLogoId) : null;
+      if (!logo) return;
+      UI.hsDragLogoId = null;
+      v.logoId = logo.id;
+      v.logoSrc = logo.src;
+      delete v.logoSrcTight; delete v.sponsorText;
+      if (!v.logoData) v.logoData = { x: 50, y: 50, w: 90 };
+      // Update only this card's thumbnail — avoids tearing down all event listeners
+      const refreshThumb = () => {
+        const thumb = document.getElementById('hsvt-' + v.id);
+        if (thumb) renderHsVarThumb(thumb, v);
+      };
+      refreshThumb();
+      if (HS.activeVarId === v.id) renderVariationPreview();
+      prepareLogo(v, logo.src).then(() => {
+        applyFillToVariation(v);
+        refreshThumb();
+        if (HS.activeVarId === v.id) renderVariationPreview();
+      }).catch(() => {});
+    });
+  });
 
   const defaultHtml = HS.defaults.map(d => {
     const qty = d.qty ?? 1;
@@ -430,100 +444,44 @@ export function renderVarList() {
         </div>
       </div>
       <div class="var-btns">
-        <button class="vbtn" title="Remove" onclick="event.stopPropagation();removeHsDefault('${d.id}')">✕</button>
+        <button class="vbtn" title="Remove" aria-label="Remove" onclick="event.stopPropagation();removeHsDefault('${d.id}')"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
       </div>
     </div>`;
   }).join('');
-
-  if (!varHtml && !defaultHtml) {
-    list.innerHTML = '<div style="font-size:13px;color:var(--gray-400);text-align:center;padding:1rem 0">No variations yet. Upload a logo to add one.</div>';
-    return;
-  }
-  list.innerHTML = varHtml + defaultHtml;
-
-  HS.variations.forEach(v => {
-    const card = list.querySelector(`.var-card[data-varid="${v.id}"]`);
-    if (card) {
-      card.addEventListener('dragover', e => { e.preventDefault(); card.classList.add('drag-over'); });
-      card.addEventListener('dragleave', e => { if (!card.contains(e.relatedTarget)) card.classList.remove('drag-over'); });
-      card.addEventListener('drop', e => {
-        e.preventDefault();
-        card.classList.remove('drag-over');
-        const logo = UI.hsDragLogoId ? HS.library.find(l => l.id === UI.hsDragLogoId) : null;
-        if (!logo) return;
-        UI.hsDragLogoId = null;
-        v.logoId = logo.id;
-        v.logoSrc = logo.src;
-        delete v.logoSrcTight; delete v.sponsorText;
-        if (!v.logoData) v.logoData = { x: 50, y: 50, w: 90 };
-        // Update only this card's thumbnail — avoids tearing down all event listeners
-        const refreshThumb = () => {
-          const thumb = document.getElementById('hsvt-' + v.id);
-          if (thumb) renderHoleSignInto(thumb, getEffectiveState(v), getEffectiveVariation(v));
-        };
-        refreshThumb();
-        if (HS.activeVarId === v.id) renderVariationPreview();
-        prepareLogo(v, logo.src).then(() => {
-          applyFillToVariation(v);
-          refreshThumb();
-          if (HS.activeVarId === v.id) renderVariationPreview();
-        }).catch(() => {});
-      });
-    }
-
-    const el = document.getElementById('hsvt-' + v.id);
-    if (!el) return;
-    el.style.position = 'relative';
-    // While uploading, show a spinner
-    if (v.loading) {
-      el.innerHTML = '<div class="hs-vthumb-uploading"><div class="hs-upload-spinner"></div></div>';
-      return;
-    }
-    // Artboard variations: skip SVG render entirely — paint the image directly
-    // so there's no flash of the template behind the image.
-    if (v.artboardSrc) {
-      el.innerHTML = '';
-      const ab = document.createElement('img');
-      ab.className = 'hs-vthumb-artboard';
-      ab.src = v.artboardSrc;
-      ab.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;';
-      el.appendChild(ab);
-      return;
-    }
-    renderHoleSignInto(el, getEffectiveState(v), getEffectiveVariation(v));
-    const imgEl = el.querySelector('image[href]');
-    const src = imgEl?.getAttribute('href');
-    if (src) {
-      const img = new Image();
-      img.onload = img.onerror = () => el.classList.remove('loading');
-      img.src = src;
-    } else {
-      el.classList.remove('loading');
-    }
-  });
+  defsEl.innerHTML = defaultHtml;
 }
 
-window.renameHsVar = function (id, name) {
-  const v = HS.variations.find(v => v.id === id);
-  if (v) v.name = name;
-  const nameEl = document.getElementById('hsActiveVarName');
-  if (nameEl && HS.activeVarId === id) nameEl.textContent = name;
-};
+// Clone a variation's full state (template override, sponsor text, logo
+// placement) under a new id — matches flags' dupVar. Templates/logo data are
+// deep-copied so editing the copy never mutates the source.
+function dupHsVar(id) {
+  const src = HS.variations.find(v => v.id === id);
+  if (!src) return;
+  const nv = { ...src, id: crypto.randomUUID(), name: src.name + ' copy' };
+  if (src.logoData) nv.logoData = { ...src.logoData };
+  if (src.template) {
+    nv.template = {
+      ...src.template,
+      background: { ...src.template.background },
+      topText: { ...src.template.topText },
+      bottomText: { ...src.template.bottomText },
+      templateLogos: cloneTemplateLogos(src.template.templateLogos),
+    };
+  }
+  if (src.sponsorText) nv.sponsorText = { ...src.sponsorText };
+  HS.variations.push(nv);
+  updateSidebar();
+  selectVariation(nv.id);
+}
 
-window.setHsVarQty = function (id, val) {
-  const v = HS.variations.find(v => v.id === id);
-  if (!v) return;
-  v.qty = Math.max(1, parseInt(val, 10) || 1);
-};
-
-window.deleteHsVar = function (id) {
+function deleteHsVar(id) {
   HS.variations = HS.variations.filter(v => v.id !== id);
   if (HS.activeVarId === id) HS.activeVarId = HS.variations[0]?.id || null;
   if (HS.editingVarId === id) { HS.editingVarId = null; HS.editingDraft = null; }
   updateSidebar();
   renderVarList();
   renderVariationPreview();
-};
+}
 
 window.removeHsDefault = function (id) {
   HS.defaults = HS.defaults.filter(d => d.id !== id);

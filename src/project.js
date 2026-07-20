@@ -1,8 +1,10 @@
 import './landing.css';
+import './icons.js';
 import { requireAuth } from './auth.js';
 import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake,
          updateProject, deleteProject, upsertCustomerInfo } from './supabase.js';
 import { FLAGS } from './data.js';
+import { esc } from './dom-utils.js';
 
 await requireAuth();
 
@@ -13,10 +15,6 @@ const flagCard  = document.getElementById('flagCard');
 const holeCard  = document.getElementById('holeCard');
 flagCard.href  = `/flags.html?project=${pid}`;
 holeCard.href  = `/hole-signs.html?project=${pid}`;
-
-function esc(s) {
-  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 let _project = null;
 let _intake = null;

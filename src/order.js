@@ -1,4 +1,5 @@
 import './order.css';
+import './icons.js';
 import { COLORS, FLAGS } from './data.js';
 import { createProject, uploadLogo, supabase, sendOrderConfirmation } from './supabase.js';
 
@@ -167,7 +168,7 @@ function render() {
     const active = n === O.step;
     const cls = done ? 'op-step done' : active ? 'op-step active' : 'op-step';
     const lineCls = done ? 'op-line done' : 'op-line';
-    const dot = done ? '✓' : String(n);
+    const dot = done ? '<i class="fa-solid fa-check" aria-hidden="true"></i>' : String(n);
     const line = n < stepLabels.length ? `<div class="${lineCls}"></div>` : '';
     const click = done ? ` onclick="window.editStep(${n})" style="cursor:pointer"` : '';
     return `<div class="${cls}"${click}><div class="op-dot">${dot}</div><div class="op-label">${label}</div></div>${line}`;
@@ -193,7 +194,7 @@ function render() {
 }
 
 function renderNav() {
-  const backLabel = O.step === 1 ? 'Back' : '← Back';
+  const backLabel = O.step === 1 ? 'Back' : '<i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back';
   let nextBtn;
   if (O.step === 5) {
     nextBtn = O.submitting
@@ -202,10 +203,10 @@ function renderNav() {
   } else if (O.returnToReview) {
     nextBtn = `<button class="btn primary" onclick="window.orderNext()" style="flex:1;justify-content:center">Save</button>`;
   } else {
-    nextBtn = `<button class="btn primary" onclick="window.orderNext()">Next →</button>`;
+    nextBtn = `<button class="btn primary" onclick="window.orderNext()">Next <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>`;
   }
   return `<div class="order-nav">
-    ${O.step > 1 ? `<button class="btn" onclick="window.orderBack()">← Back</button>` : ''}
+    ${O.step > 1 ? `<button class="btn" onclick="window.orderBack()"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>` : ''}
     ${nextBtn}
   </div>`;
 }
@@ -342,14 +343,14 @@ function renderStep4() {
   const previews = O.logoFiles.map((lf, i) => `
     <div class="logo-preview-item">
       <img src="${lf.previewUrl}" alt="Logo ${i + 1}">
-      <button class="logo-preview-remove" onclick="window.removeLogoFile(${i})" title="Remove">✕</button>
+      <button class="logo-preview-remove" onclick="window.removeLogoFile(${i})" title="Remove"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
     </div>`).join('');
 
   return `
     <div class="order-title">Upload your logos</div>
     <div class="order-sub">At least one logo is required. Accepted formats: SVG, PNG, PDF, AI, EPS.</div>
     <div class="logo-dropzone" id="logoDropzone">
-      <div class="logo-dropzone-icon">↑</div>
+      <div class="logo-dropzone-icon"><i class="fa-solid fa-upload" aria-hidden="true"></i></div>
       <div class="logo-dropzone-text">Drop logos here or click to upload</div>
       <div class="logo-dropzone-sub">SVG, PNG, PDF, AI, EPS</div>
     </div>
@@ -515,7 +516,7 @@ function renderCollapsibleFlagPicker() {
       <div class="picker-flag-thumb">${inner ? `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%" fill="none">${inner}</svg>` : ''}</div>
       <span class="picker-collapsed-name">${esc(label)}</span>
       <span style="flex:1"></span>
-      <button class="picker-clear-btn" onclick="event.stopPropagation();window.clearPicker('flagStyle')" title="Clear">×</button>
+      <button class="picker-clear-btn" onclick="event.stopPropagation();window.clearPicker('flagStyle')" title="Clear"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
     </div>`;
   }
 
@@ -545,7 +546,7 @@ function renderCollapsibleColorPicker(which) {
       <span class="picker-color-dot" style="background:${selected.hex};${isWhite ? 'border:1px solid var(--gray-200)' : ''}"></span>
       <span class="picker-collapsed-name">${esc(selected.name)}</span>
       <span style="flex:1"></span>
-      <button class="picker-clear-btn" onclick="event.stopPropagation();window.clearPicker('${pickerKey}')" title="Clear">×</button>
+      <button class="picker-clear-btn" onclick="event.stopPropagation();window.clearPicker('${pickerKey}')" title="Clear"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
     </div>`;
   }
 
@@ -564,7 +565,7 @@ function renderCollapsibleColorPicker(which) {
     ${swatches}
     <label class="color-swatch color-custom-swatch${isCustom ? ' selected' : ''}" title="Custom color">
       <input type="color" id="${customId}" class="color-custom-input" value="${customValue}">
-      <span class="color-custom-icon">+</span>
+      <span class="color-custom-icon"><i class="fa-solid fa-plus" aria-hidden="true"></i></span>
     </label>
   </div>`;
 }

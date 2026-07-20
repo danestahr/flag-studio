@@ -13,34 +13,14 @@
 
 <header>
   <div style="display:flex;align-items:center;gap:1.5rem">
-    <a href="/" class="back-link">← Projects</a>
-    <div class="logo"><div class="logo-mark"></div>GolfStatus Design Studio</div><span class="beta-tag">Beta</span>
+    <a href="/" class="back-link"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Projects</a>
+    <div class="logo"><svg class="logo-mark" viewBox="0 0 50 50" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="GolfStatus"><path d="M41.71 49.73H8.02C3.6 49.73 0 46.13 0 41.71V8.02C0 3.6 3.6 0 8.02 0H41.71C46.13 0 49.73 3.6 49.73 8.02V41.71C49.73 46.13 46.13 49.73 41.71 49.73ZM8.02 0.93C4.11 0.93 0.93 4.11 0.93 8.02V41.71C0.93 45.62 4.11 48.8 8.03 48.8H41.72C45.63 48.8 48.82 45.62 48.82 41.71V8.02C48.82 4.11 45.64 0.93 41.72 0.93H8.02Z" fill="currentColor"/><path d="M24.87 6.61999C16.97 6.61999 10.55 13.09 10.55 21.05C10.55 23.87 11.36 26.6 12.89 28.95L12.93 29.01C13.1 29.27 13.29 29.54 13.48 29.79L23.23 42.44C23.23 42.44 23.23 42.44 23.23 42.45L23.72 43.12V42.43C23.72 37.55 22.25 35.63 21.73 34.83C21.63 34.67 21.66 34.4 21.65 34.17C21.65 34.05 21.75 33.96 21.86 33.97C22.84 34.23 23.85 34.36 24.88 34.36C25.91 34.36 26.93 34.23 27.91 33.97C28.01 33.97 28.09 34.06 28.09 34.17C28.09 34.39 28.12 34.67 28.01 34.83C27.49 35.63 26.02 37.55 26.02 42.43V43.07L26.71 42.17L36.17 29.88C38.14 27.33 39.18 24.27 39.18 21.04C39.18 13.09 32.76 6.60999 24.86 6.60999L24.87 6.61999ZM31.91 30.43C29.85 31.95 27.42 32.75 24.88 32.75C21.08 32.75 17.47 30.9 15.23 27.81C11.35 22.46 12.52 14.92 17.83 11.01C19.89 9.48999 22.32 8.68998 24.86 8.68998C28.66 8.68998 32.27 10.54 34.51 13.63C38.39 18.98 37.22 26.52 31.91 30.43Z" fill="currentColor"/></svg>GolfStatus Design Studio</div><span class="beta-tag">Beta</span>
   </div>
   <span class="header-sub">Tournament flag configurator</span>
 </header>
 
 <div class="layout">
-  <aside class="sidebar">
-    <div style="padding:1.25rem 1.5rem 0">
-      <div id="projectNameDisplay" style="font-size:15px;font-weight:500;color:var(--black);line-height:1.3">—</div>
-      <div style="font-size:11px;color:var(--gray-400);margin-top:3px">Tournament Flags</div>
-    </div>
-    <div class="sdivider" style="margin:.75rem 1.5rem"></div>
-    <div class="steps-nav">
-      <div class="step-item done" id="navDesign">
-        <div class="step-num"><span>1</span></div>
-        <div><div class="step-label">Design</div><div class="step-desc">Style, colors &amp; logos</div></div>
-      </div>
-      <div class="step-item active" id="navVariations">
-        <div class="step-num"><span>2</span></div>
-        <div><div class="step-label">Variations</div><div class="step-desc">Build combinations</div></div>
-      </div>
-      <div class="step-item" id="navGallery">
-        <div class="step-num"><span>3</span></div>
-        <div><div class="step-label">Gallery</div><div class="step-desc">Review &amp; export</div></div>
-      </div>
-    </div>
-  </aside>
+  <aside class="sidebar" id="sidebar"></aside>
 
   <main class="main">
     <div class="panel visible" id="panel-4">
@@ -56,77 +36,29 @@
               <button class="face-tab" id="layoutBtnMulti" onclick="setLogoLayout('multi')">Multi</button>
             </div>
           </div>
-          <button class="btn sm" id="backToDesignBtn" style="display:none">← Design</button>
+          <button class="btn sm" id="backToDesignBtn" style="display:none"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Design</button>
           <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
             <button class="btn sm" id="saveDesignsBtn" onclick="saveDraft()" style="display:none">Save draft</button>
             <div id="saveStatus" style="font-size:11px;color:var(--gray-400);text-align:center;min-height:14px"></div>
           </div>
-          <button class="btn primary" onclick="goToGallery()">Gallery →</button>
+          <button class="btn primary" onclick="goToGallery()">Gallery <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
         </div>
       </div>
       <div class="var-strip-wrap">
         <div class="var-strip-label">Logos</div>
-        <div class="var-strip" id="varStrip">
-          <div class="var-upload-btn" onclick="document.getElementById('varFile').click()" title="Upload logos">
-            <span>+</span>
-          </div>
-          <input type="file" id="varFile" accept="image/*" multiple onchange="handleUpload(event)">
-        </div>
+        <div class="var-strip" id="varStrip"></div>
       </div>
       <div class="s4layout">
-        <div class="var-canvas-panel">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
-            <span style="font-size:13px;font-weight:500" id="activeVarName">Variation 1</span>
-            <button class="btn sm" id="varAddBtn" onclick="openVarAddMenu(event)" title="Add text or logo">+</button>
-          </div>
-          <div id="varEditNote" class="var-edit-note" style="display:none">
-            <div class="var-edit-note-body">
-              <span class="var-edit-note-label">Edit requested:</span>
-              <span id="varEditNoteText"></span>
-            </div>
-            <button class="var-edit-resolve-btn" id="varEditResolveBtn" onclick="resolveEdit()">Mark as resolved</button>
-            <span class="var-edit-resolved-tag" id="varEditResolvedTag" style="display:none">Resolved</span>
-          </div>
-          <div class="canvas-preview-box">
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:.5rem">
-              <div class="face-toggle-row">
-                <button class="face-tab active" id="faceTabFront" onclick="setActiveFace('front')">Front</button>
-                <button class="face-tab" id="faceTabBack" onclick="setActiveFace('back')">Back</button>
-              </div>
-              <div class="sides-row" id="sameSidesRow" style="display:none">
-                <label class="gs-tag-label">
-                  <input type="checkbox" id="sameSidesCheck" class="gs-toggle-input" onchange="toggleSameSides(this.checked)">
-                  <span class="gs-toggle-text">Same Front &amp; Back Design</span>
-                  <span class="gs-toggle-switch"></span>
-                </label>
-              </div>
-            </div>
-            <div class="canvas-scroll" id="flagCanvasScroll" style="display:flex;align-items:flex-start;">
-              <div class="canvas-zoom-wrap" id="flagZoomWrap">
-                <div class="flag-wrap" id="varWrap">
-                  <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-top:.5rem">
-            <div class="canvas-bleed-hint" style="margin:0;text-align:left">Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.</div>
-            <div class="canvas-zoom-row" style="margin:0">
-              <span class="canvas-zoom-value" id="flagZoomValue">100%</span>
-              <button class="canvas-zoom-reset" id="flagZoomReset" onclick="setFlagZoom(100)" style="display:none">Reset</button>
-              <span class="canvas-zoom-hint">⌘ + scroll to zoom</span>
-            </div>
-          </div>
-        </div>
+        <div class="var-canvas-panel" id="flagCanvasPanel"></div>
         <div class="var-list-panel">
           <div id="varListView">
             <div class="var-list-title">All variations</div>
             <div class="var-list" id="varList"></div>
-            <button class="add-var" onclick="addVariation()">+ Add variation</button>
+            <button class="add-var" onclick="addVariation()"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add variation</button>
           </div>
           <div id="varEditPanel" style="display:none">
             <div class="var-edit-panel-hdr">
-              <button class="btn sm" onclick="closeVarEdit()">← Back</button>
+              <button class="btn sm" onclick="closeVarEdit()"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
               <span class="var-edit-panel-title" id="varEditPanelTitle">Edit Variation</span>
             </div>
             <div id="varEditPanelBody"></div>
@@ -143,17 +75,6 @@
     const p = new URLSearchParams(window.location.search).get('project');
     await window.saveDraft?.();
     window.location.href = 'flags.html' + (p ? '?project=' + p : '');
-  });
-  document.getElementById('navDesign').addEventListener('click', async () => {
-    const p = new URLSearchParams(window.location.search).get('project');
-    await window.saveDraft?.();
-    window.location.href = 'flags.html' + (p ? '?project=' + p : '');
-  });
-  document.getElementById('navGallery').addEventListener('click', async () => {
-    const p = new URLSearchParams(window.location.search).get('project');
-    if (!p) return;
-    await window.saveDraft?.();
-    window.location.href = 'flags-gallery.html?project=' + p;
   });
 </script>
 </body>

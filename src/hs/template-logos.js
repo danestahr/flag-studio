@@ -10,12 +10,12 @@ import { uploadLogo } from '../supabase.js';
 // ── Template logo controls ────────────────────────────────
 
 const IC = {
-  top:    `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="1" width="12" height="2.5" rx="0.5"/><rect x="3" y="5" width="8" height="6.5" rx="0.5" opacity="0.45"/></svg>`,
-  bottom: `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="3" y="2.5" width="8" height="6.5" rx="0.5" opacity="0.45"/><rect x="1" y="10.5" width="12" height="2.5" rx="0.5"/></svg>`,
-  left:   `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="2" width="7.5" height="4" rx="0.5"/><rect x="1" y="8" width="5.5" height="4" rx="0.5"/></svg>`,
-  center: `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="2.5" y="4" width="4" height="6" rx="0.5"/><rect x="7.5" y="4" width="4" height="6" rx="0.5"/></svg>`,
-  spread: `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="0.5" y="4" width="4" height="6" rx="0.5"/><rect x="9.5" y="4" width="4" height="6" rx="0.5"/></svg>`,
-  right:  `<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="5.5" y="2" width="7.5" height="4" rx="0.5"/><rect x="7.5" y="8" width="5.5" height="4" rx="0.5"/></svg>`,
+  top:    `<i class="fa-solid fa-arrow-up"></i>`,
+  bottom: `<i class="fa-solid fa-arrow-down"></i>`,
+  left:   `<i class="fa-solid fa-arrow-left"></i>`,
+  center: `<i class="fa-solid fa-compress"></i>`,
+  spread: `<i class="fa-solid fa-arrows-left-right"></i>`,
+  right:  `<i class="fa-solid fa-arrow-right"></i>`,
 };
 
 function slotAssignRow(tl, i) {
@@ -28,7 +28,7 @@ function slotAssignRow(tl, i) {
         ? `<img src="${escXml(src)}" class="tl-assign-thumb" alt="">`
         : `<span class="tl-assign-empty">–</span>`}
       <button class="btn sm tl-assign-btn" data-slot="${i}" onclick="openTlSlotPicker(${i})">${src ? 'Replace' : '+ Add logo'}</button>
-      ${src ? `<button class="btn sm tl-assign-rm" onclick="removeTlSlot(${i})" title="Remove">✕</button>` : ''}
+      ${src ? `<button class="btn sm tl-assign-rm" onclick="removeTlSlot(${i})" title="Remove"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>` : ''}
     </div>`;
 }
 
@@ -66,10 +66,10 @@ export function renderTemplateLogoControls() {
       <div class="tl-row">
         <div class="tl-row-label">Alignment</div>
         <div class="hs-bg-toggle">
-          <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'left' && tl.stack !== 'horizontal' ? ' active' : ''}" onclick="setTplHAlign('left')" title="Left">${IC.left}</button>
-          <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'center' && tl.stack === 'horizontal' ? ' active' : ''}" onclick="setTplHAlign('center')" title="Center">${IC.center}</button>
+          <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'left' ? ' active' : ''}" onclick="setTplHAlign('left')" title="Left">${IC.left}</button>
+          <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'center' ? ' active' : ''}" onclick="setTplHAlign('center')" title="Center">${IC.center}</button>
           <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'spread' ? ' active' : ''}" onclick="setTplHAlign('spread')" title="Spread">${IC.spread}</button>
-          <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'right' && tl.stack !== 'horizontal' ? ' active' : ''}" onclick="setTplHAlign('right')" title="Right">${IC.right}</button>
+          <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'right' ? ' active' : ''}" onclick="setTplHAlign('right')" title="Right">${IC.right}</button>
         </div>
       </div>
       <div class="tl-assign-rows">${slotRows}</div>
@@ -186,8 +186,6 @@ window.setTplHAlign = function (k) {
   const tl = tlSource();
   tl.hAlign = k;
   delete tl.customPositions;
-  if (k === 'spread' || k === 'center') tl.stack = 'horizontal';
-  else delete tl.stack;
   const defaults = getDefaultSlotRects(tl);
   (tl.slots || []).forEach((s, i) => {
     if (!s) return;
@@ -623,7 +621,7 @@ export function openTlSidePanel(idx) {
   panel.innerHTML = `
     <div class="tl-sp-header">
       <div class="tl-sp-title">Slot ${idx + 1}</div>
-      <button class="tl-sp-close" onclick="closeTlSidePanel()">✕</button>
+      <button class="tl-sp-close" onclick="closeTlSidePanel()" aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
     </div>
     <div class="tl-sp-body">${renderTplSlotBody(idx)}</div>`;
   document.body.appendChild(panel);

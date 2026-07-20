@@ -2,6 +2,7 @@ import { S, DEFAULT_COLORS } from './state.js';
 import { FLAGS } from './data.js';
 import { isLightColor } from './gsTag.js';
 import { HS_FONTS } from './hole-sign-data.js';
+import { wrapText } from './text-utils.js';
 
 export const getFlag = () => FLAGS.find(f => f.id === S.flagId);
 
@@ -109,6 +110,52 @@ export function normaliseLogos(logosOrAssignment) {
   });
 }
 
+// Cache of each logo's natural width/height ratio, populated lazily as its
+// image loads. makeSvg's logo box used to be sized purely off the zone's own
+// aspect ratio (zone.w/zone.h) regardless of the logo's actual shape, then
+// letterboxed to fit via preserveAspectRatio — which rarely matches the
+// interactive drop-zone box (a plain <img> sized by width only, height auto,
+// i.e. the logo's real aspect ratio), making baked/exported logos visibly
+// shrink or stretch versus the editor. Falls back to a square box (today's
+// old behavior) until the real ratio is known.
+const _logoAspectCache = new Map();
+const _logoAspectLoading = new Map();
+
+function loadLogoAspect(logo) {
+  if (!logo?.src) return Promise.resolve(1);
+  if (_logoAspectCache.has(logo.src)) return Promise.resolve(_logoAspectCache.get(logo.src));
+  if (_logoAspectLoading.has(logo.src)) return _logoAspectLoading.get(logo.src);
+  const promise = new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const ratio = (img.naturalWidth && img.naturalHeight) ? img.naturalWidth / img.naturalHeight : 1;
+      _logoAspectCache.set(logo.src, ratio);
+      resolve(ratio);
+    };
+    img.onerror = () => { _logoAspectCache.set(logo.src, 1); resolve(1); };
+    img.src = logo.src;
+  });
+  _logoAspectLoading.set(logo.src, promise);
+  return promise;
+}
+
+// Synchronous read used inside makeSvg — returns the cached ratio, or kicks
+// off a load (for next time) and falls back to a square box until it lands.
+function getLogoAspect(logo) {
+  if (!logo?.src) return 1;
+  if (_logoAspectCache.has(logo.src)) return _logoAspectCache.get(logo.src);
+  loadLogoAspect(logo);
+  return 1;
+}
+
+// Warms getLogoAspect's cache for a batch of logos (e.g. right after a
+// project's library loads) — await this so the first canvas render already
+// has accurate aspect ratios instead of the square fallback, rather than
+// racing the image loads.
+export function preloadLogoAspects(logos) {
+  return Promise.all((logos || []).map(loadLogoAspect));
+}
+
 export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null) {
   const flag = flagOverride || getFlag();
   if (!flag) return null;
@@ -136,11 +183,17 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
   const list = normaliseLogos(logos);
   if (zone && list.length) {
     const zoneX = face === 'back' ? vbW - zone.x - zone.w : zone.x;
+    // The zone rect is just a placement suggestion, not a hard boundary — the
+    // editor lets a logo be dragged/scaled past it, clipped only by the flag
+    // canvas itself (`.flag-wrap { overflow:hidden }`), which the SVG root's
+    // own viewBox clipping already reproduces here. Don't also clip to the
+    // zone rect, or an oversized/repositioned logo gets cropped that the
+    // editor shows in full.
     list.forEach(layer => {
       const logo = S.library.find(l => l.id === layer.logoId);
       if (!logo) return;
       const logoW = zone.w * (layer.w / 100);
-      const logoH = zone.h * (layer.w / 100);
+      const logoH = logoW / getLogoAspect(logo);
       const xFrac = (face === 'back' && mirrorX) ? (1 - layer.x / 100) : (layer.x / 100);
       const cx = zoneX + xFrac * zone.w;
       const cy = zone.y + (layer.y / 100) * zone.h;
@@ -198,14 +251,25 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
         }
       }
 
+      // Wrap to the box width (same as the live editor's `width:100%` overlay
+      // with word-break wrapping) so multi-line text doesn't overflow its box.
+      const boxWsvg = (layer.w / 100) * vbW;
+      const lines = wrapText(layer.text, boxWsvg, fsSvg);
+      const lineH = fsSvg * 1.1;
+
       const t = document.createElementNS(ns, 'text');
-      t.setAttribute('x', cx);
       t.setAttribute('y', cy);
       t.setAttribute('font-family', fontFamily);
       t.setAttribute('font-size', fsSvg);
       t.setAttribute('fill', layer.color || '#000000');
       t.setAttribute('text-anchor', textAnchor);
-      t.textContent = layer.text;
+      lines.forEach((line, i) => {
+        const tspan = document.createElementNS(ns, 'tspan');
+        tspan.setAttribute('x', cx);
+        if (i > 0) tspan.setAttribute('dy', lineH);
+        tspan.textContent = line;
+        t.appendChild(tspan);
+      });
       svg.appendChild(t);
     });
   }

@@ -1,11 +1,12 @@
 import '../style.css';
+import '../icons.js';
 import { requireAuth } from '../auth.js';
 
 await requireAuth();
 
 import { S, setDragLogoId } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
-import { getFlag, applyColors, renderInto, showGsTagVariant, makeSvg, resolveColors } from '../render.js';
+import { getFlag, applyColors, renderInto, showGsTagVariant, makeSvg, resolveColors, preloadLogoAspects } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
 import {
   loadProject, saveFlagConfig, loadFlagConfig,
@@ -13,36 +14,23 @@ import {
   getFeedback, resolveFeedback, supabase,
 } from '../supabase.js';
 import { initDropZones, renderDropZones, hideZoneToolbar, triggerAdd } from './drop-zones.js';
-import { renderFlagTextOverlays, addFlagTextLayer } from './text-layers.js';
+import { renderFlagTextOverlays, addFlagTextLayer, clearFlagTextOverlays, renderFlagTextOverlaysStatic } from './text-layers.js';
+import { eyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
+import { esc } from '../dom-utils.js';
+import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
+import { renderLogoTray } from '../logo-tray.js';
+import { renderVariationList, refreshVariationThumbs } from '../variation-list.js';
+import { renderCanvasPanel } from '../canvas-panel.js';
 
 let isDirty = false;
 let activeFace = 'front';
 let editingVarId = null;
 let veExpandedZones = new Set();
 
-const _SUPPORTS_EYEDROPPER = typeof window !== 'undefined' && 'EyeDropper' in window;
-const _EYEDROPPER_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 7l6 6"/><path d="M14 4l3 3a2.121 2.121 0 0 1 0 3l-1.5 1.5-6-6L11 4a2.121 2.121 0 0 1 3 0z"/><path d="M9.5 8.5L3 15v3h3l6.5-6.5"/></svg>`;
-window.runEyedropper = async function (inputId) {
-  if (!('EyeDropper' in window)) return;
-  try {
-    const r = await new window.EyeDropper().open();
-    const inp = document.getElementById(inputId);
-    if (!inp) return;
-    inp.value = r.sRGBHex;
-    inp.dispatchEvent(new Event('input', { bubbles: true }));
-  } catch { /* user canceled */ }
-};
 window.veEyedropper = async function (zoneId) {
-  if (!('EyeDropper' in window)) return;
-  try {
-    const r = await new window.EyeDropper().open();
-    vePickColor(zoneId, r.sRGBHex);
-  } catch { /* user canceled */ }
+  const hex = await pickEyedropperColor();
+  if (hex) vePickColor(zoneId, hex);
 };
-
-function esc(s) {
-  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 function markDirty() {
   isDirty = true;
@@ -78,9 +66,7 @@ function getVarGsTagOpts(v) {
 
 // ── Logo library (strip) ───────────────────────────────────
 
-window.handleUpload = async function (e) {
-  const files = Array.from(e.target.files);
-  e.target.value = '';
+async function handleFlagLogoUpload(files) {
   for (const file of files) {
     const localSrc = await new Promise(res => {
       const r = new FileReader();
@@ -100,7 +86,7 @@ window.handleUpload = async function (e) {
     }
     renderVarStrip();
   }
-};
+}
 
 window.delLogo = async function (id) {
   const logo = S.library.find(l => l.id === id);
@@ -119,13 +105,6 @@ window.delLogo = async function (id) {
   }
 };
 
-window.dragStart = function (e, id) {
-  setDragLogoId(id);
-  e.dataTransfer.effectAllowed = 'copy';
-  document.getElementById('li-' + id)?.classList.add('dragging');
-};
-window.dragEnd = function (id) { document.getElementById('li-' + id)?.classList.remove('dragging'); };
-
 async function removeBgFromFlagLogo(logo, onProgress) {
   onProgress?.('loading');
   const { removeBackground } = await import('@imgly/background-removal');
@@ -136,63 +115,26 @@ async function removeBgFromFlagLogo(logo, onProgress) {
 }
 
 function renderVarStrip() {
-  const strip = document.getElementById('varStrip');
-  if (!strip) return;
-  const uploadBtn = strip.querySelector('.var-upload-btn');
-  const fileInput = strip.querySelector('#varFile');
-  strip.innerHTML = '';
-  if (uploadBtn) strip.appendChild(uploadBtn);
-  if (fileInput) strip.appendChild(fileInput);
-  S.library.forEach(l => {
-    const el = document.createElement('div');
-    el.className = `var-lib-item${l.uploading ? ' uploading' : ''}`;
-    el.draggable = !l.uploading;
-    el.id = 'li-' + l.id;
-    el.title = l.name;
-    el.addEventListener('dragstart', e => { setDragLogoId(l.id); e.dataTransfer.effectAllowed = 'copy'; el.classList.add('dragging'); });
-    el.addEventListener('dragend', () => { el.classList.remove('dragging'); });
-    const img = document.createElement('img');
-    img.src = l.src;
-    img.alt = l.name;
-    el.appendChild(img);
-    if (!l.uploading) {
-      const delBtn = document.createElement('button');
-      delBtn.className = 'var-lib-del';
-      delBtn.title = 'Delete';
-      delBtn.textContent = '×';
-      delBtn.addEventListener('click', e => { e.stopPropagation(); delLogo(l.id); });
-      el.appendChild(delBtn);
-
-      const bgremBtn = document.createElement('button');
-      bgremBtn.className = 'var-lib-bgrem';
-      bgremBtn.title = 'Remove background';
-      bgremBtn.textContent = '✦';
-      bgremBtn.addEventListener('click', async e => {
-        e.stopPropagation();
-        bgremBtn.textContent = '…';
-        bgremBtn.disabled = true;
-        try {
-          const newLogo = await removeBgFromFlagLogo(l, s => { bgremBtn.textContent = s === 'uploading' ? '↑' : '…'; });
-          const origIdx = S.library.indexOf(l);
-          if (origIdx >= 0) S.library.splice(origIdx, 1, newLogo);
-          else S.library.push(newLogo);
-          S.variations.forEach(v => {
-            if (Array.isArray(v.logos)) v.logos.forEach(pl => { if (pl.logoId === l.id) pl.logoId = newLogo.id; });
-            if (Array.isArray(v.backLogos)) v.backLogos.forEach(pl => { if (pl.logoId === l.id) pl.logoId = newLogo.id; });
-          });
-          renderVarStrip();
-          renderVarCanvas();
-          refreshVarThumbs();
-          markDirty();
-        } catch (err) {
-          console.error('Background removal failed', err);
-          bgremBtn.textContent = '✦';
-          bgremBtn.disabled = false;
-        }
+  renderLogoTray(document.getElementById('varStrip'), {
+    library: S.library,
+    fileInputId: 'varFile',
+    onUpload: handleFlagLogoUpload,
+    onDragStart: l => setDragLogoId(l.id),
+    onDelete: l => delLogo(l.id),
+    onRemoveBg: async (l, onProgress) => {
+      const newLogo = await removeBgFromFlagLogo(l, onProgress);
+      const origIdx = S.library.indexOf(l);
+      if (origIdx >= 0) S.library.splice(origIdx, 1, newLogo);
+      else S.library.push(newLogo);
+      S.variations.forEach(v => {
+        if (Array.isArray(v.logos)) v.logos.forEach(pl => { if (pl.logoId === l.id) pl.logoId = newLogo.id; });
+        if (Array.isArray(v.backLogos)) v.backLogos.forEach(pl => { if (pl.logoId === l.id) pl.logoId = newLogo.id; });
       });
-      el.appendChild(bgremBtn);
-    }
-    strip.appendChild(el);
+      renderVarStrip();
+      renderVarCanvas();
+      refreshVarThumbs();
+      markDirty();
+    },
   });
 }
 
@@ -232,8 +174,71 @@ window.resolveEdit = async function () {
   } catch (err) { console.error('Could not resolve feedback:', err); }
 };
 
+// Mirror a front logo's center-fraction x into the back's independent copy —
+// matches makeSvg's mirrorX math (`1 - layer.x/100`) so the logo doesn't jump
+// when the toggle flips it from a baked mirror to an editable copy. `srcId`
+// ties this back copy to the front layer it was seeded from, so syncBackLogos
+// can tell "already has an independent copy" from "front added this since".
+function mirrorLogoLayer(l) {
+  return { ...l, x: 100 - l.x, id: 'pl-' + Date.now() + '-' + Math.random().toString(36).slice(2), srcId: l.id };
+}
+
+// Mirror a front text layer's box (left edge `x` + width `w`) and flip its
+// alignment — matches makeSvg's mirrored text-anchor math, so the seeded back
+// copy renders at the exact spot the read-only mirror preview showed it at.
+function mirrorTextLayer(l) {
+  const align = l.align === 'left' ? 'right' : l.align === 'right' ? 'left' : l.align;
+  return { ...l, x: 100 - l.x - l.w, align, id: 'ftl-' + Date.now() + '-' + Math.random().toString(36).slice(2), srcId: l.id };
+}
+
+// Keeps the independent back's item *set* in lockstep with the front — every
+// front logo/text layer gets a mirrored back counterpart the moment it
+// exists, and counterparts for since-removed front items are dropped. Each
+// counterpart's position stays wherever it was independently dragged to;
+// only the set of items (not their placement) tracks the front. Called on
+// every render while independent, so logos/text added to the front *after*
+// the toggle was switched off still show up on the back, instead of only
+// whatever existed at the moment of the toggle.
+//
+// Back items with no `srcId` are either genuinely back-only (added directly
+// on the independent canvas's own "+" menu) or pre-date this front/back
+// linkage — for those, adopt one into the first still-unlinked front logo
+// using the same underlying image instead of creating a duplicate, so
+// whatever position it already had (mirrored or manually placed) survives
+// the upgrade instead of getting a second, redundant copy.
+function syncBackLogos(v) {
+  if (!Array.isArray(v.logos)) v.logos = [];
+  if (!Array.isArray(v.backLogos)) v.backLogos = [];
+  v.backLogos = v.backLogos.filter(bl => !bl.srcId || v.logos.some(l => l.id === bl.srcId));
+  const unlinked = v.backLogos.filter(bl => !bl.srcId);
+  v.logos.forEach(l => {
+    if (v.backLogos.some(bl => bl.srcId === l.id)) return;
+    const idx = unlinked.findIndex(bl => bl.logoId === l.logoId);
+    if (idx >= 0) { unlinked[idx].srcId = l.id; unlinked.splice(idx, 1); }
+    else v.backLogos.push(mirrorLogoLayer(l));
+  });
+}
 window.toggleSameSides = function (checked) {
+  const v = S.variations.find(v => v.id === S.activeVarId);
   S.sameLogoOnBothSides = checked;
+  if (v) {
+    if (checked) {
+      // Back goes back to being a derived mirror of the front — drop whatever
+      // was independently placed on the back so it doesn't reappear (stale)
+      // the next time this is toggled off. (Logos re-seed themselves via
+      // syncBackLogos on the next render; text is seeded explicitly below,
+      // once, the next time this is switched off.)
+      v.backLogos = [];
+      v.backTextLayers = [];
+    } else {
+      // Text is a one-time seed, not a running sync like logos — unlike
+      // logos (which usually should stay identical on both sides, just
+      // independently positioned), front/back text is often meant to read
+      // differently, so text typed on the front *after* this point should
+      // NOT keep pushing onto the back.
+      v.backTextLayers = (v.textLayers || []).map(mirrorTextLayer);
+    }
+  }
   renderVarCanvas();
   refreshVarThumbs();
   markDirty();
@@ -267,115 +272,62 @@ window.setLogoLayout = function (layout) {
 
 let _flagZoom = 100;
 
-// Fit canvas-scroll to remaining viewport height and, at 100% zoom, cap the
-// flag width so its height fills that space rather than the panel width.
-function resizeCanvasToViewport() {
-  const scroll = document.getElementById('flagCanvasScroll');
-  const wrap   = document.getElementById('flagZoomWrap');
-  if (!scroll || !wrap) return;
-  const top   = scroll.getBoundingClientRect().top;
-  const avail = Math.max(150, window.innerHeight - top - 24);
-  scroll.style.maxHeight = avail + 'px';
-  if (_flagZoom === 100) {
-    // Cap wrap width so flag height = avail (flag aspect ≈ 7519:4669 = 1.610)
-    wrap.style.maxWidth = Math.floor(avail * 7519 / 4669) + 'px';
-  }
-}
+const flagCanvas = renderCanvasPanel(document.getElementById('flagCanvasPanel'), {
+  panelId: 'flagCanvasPanel',
+  scrollId: 'flagCanvasScroll',
+  wrapId: 'flagZoomWrap',
+  zoomValueId: 'flagZoomValue',
+  zoomResetId: 'flagZoomReset',
+  aspect: 7519 / 4669,
+  getZoom: () => _flagZoom,
+  setZoom: v => { _flagZoom = v; },
+  headerName: 'Variation 1',
+  headerNameId: 'activeVarName',
+  onAdd: e => window.openVarAddMenu(e),
+  addBtnId: 'varAddBtn',
+  noteHtml: `
+    <div id="varEditNote" class="var-edit-note" style="display:none">
+      <div class="var-edit-note-body">
+        <span class="var-edit-note-label">Edit requested:</span>
+        <span id="varEditNoteText"></span>
+      </div>
+      <button class="var-edit-resolve-btn" id="varEditResolveBtn" onclick="resolveEdit()">Mark as resolved</button>
+      <span class="var-edit-resolved-tag" id="varEditResolvedTag" style="display:none">Resolved</span>
+    </div>`,
+  faceToggleHidden: false,
+  faceTabFrontId: 'faceTabFront',
+  faceTabBackId: 'faceTabBack',
+  onFaceChange: face => window.setActiveFace(face),
+  sameSidesRowId: 'sameSidesRow',
+  sameSidesCheckId: 'sameSidesCheck',
+  onToggleSameSides: checked => window.toggleSameSides(checked),
+  canvasContentHtml: `
+    <div class="flag-wrap" id="varWrap">
+      <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>`,
+  description: "Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.",
+});
 
-function applyFlagZoom(pct) {
-  _flagZoom = pct;
-  const wrap = document.getElementById('flagZoomWrap');
-  const label = document.getElementById('flagZoomValue');
-  const reset = document.getElementById('flagZoomReset');
-  if (wrap) {
-    wrap.style.width = pct + '%';
-    wrap.style.maxWidth = pct === 100 ? '' : 'none';
-  }
-  if (pct === 100) resizeCanvasToViewport();
-  if (label) label.textContent = pct + '%';
-  if (reset) reset.style.display = pct === 100 ? 'none' : '';
-}
-
-window.setFlagZoom = function (val) {
-  applyFlagZoom(Math.max(40, Math.min(400, parseInt(val, 10) || 100)));
-};
-
-(function wireFlagCanvasZoom() {
-  const setup = () => {
-    const scroll = document.getElementById('flagCanvasScroll');
-    if (!scroll || scroll.__zoomWired) return;
-    scroll.__zoomWired = true;
-    scroll.addEventListener('wheel', e => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
-      const wrap = document.getElementById('flagZoomWrap');
-      if (!wrap) return;
-      const before = wrap.getBoundingClientRect();
-      if (!before.width || !before.height) return;
-      const fracX = (e.clientX - before.left) / before.width;
-      const fracY = (e.clientY - before.top)  / before.height;
-      const oldZoom = _flagZoom;
-      const factor = 1 + Math.max(-0.25, Math.min(0.25, -e.deltaY * 0.005));
-      const newZoom = Math.max(40, Math.min(400, Math.round(oldZoom * factor)));
-      if (newZoom === oldZoom) return;
-      applyFlagZoom(newZoom);
-      const after = wrap.getBoundingClientRect();
-      scroll.scrollLeft += (after.left + fracX * after.width) - e.clientX;
-      scroll.scrollTop  += (after.top  + fracY * after.height) - e.clientY;
-    }, { passive: false });
-  };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup);
-  else setup();
-})();
+const varThumbId = v => 'vt-' + v.id;
+const paintVarThumb = (el, v) => renderInto(el, v.logos || [], 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
 
 function renderVarList() {
-  const el = document.getElementById('varList');
-  if (!el) return;
-  el.innerHTML = S.variations.map(v => {
-    const fb = S.feedback?.find(f => f.variation_id === v.id);
-    const fbClass = fb?.status === 'needs_edits' && !fb?.resolved ? ' needs-edits' : fb?.status === 'approved' ? ' approved' : '';
-    const statusTile = fb?.status === 'approved'
-      ? '<span class="var-status-tile approved">✓ Approved</span>'
-      : (fb?.status === 'needs_edits' && !fb?.resolved)
-        ? '<span class="var-status-tile needs-edits">Needs edits</span>'
-        : '<span class="var-status-tile not-reviewed">Not reviewed</span>';
-    const qty = v.qty ?? 1;
-    return `
-    <div class="var-card${v.id === S.activeVarId ? ' active' : ''}${fbClass}" onclick="selectVar('${v.id}')">
-      <div class="var-card-top">
-        <input class="vname" value="${esc(v.name)}" onclick="event.stopPropagation()"
-          onchange="renameVar('${v.id}',this.value)">
-        <div class="var-btns">
-          <button class="vbtn" title="Edit style &amp; colors" onclick="event.stopPropagation();openVarEdit('${v.id}')">✎</button>
-          <button class="vbtn" title="Duplicate" onclick="event.stopPropagation();dupVar('${v.id}')">⧉</button>
-          <button class="vbtn" title="Delete" onclick="event.stopPropagation();delVar('${v.id}')">✕</button>
-        </div>
-      </div>
-      <div class="var-card-bottom">
-        <div class="vthumb" id="vt-${v.id}"></div>
-        <div class="var-card-meta">
-          ${statusTile}
-          <div class="var-qty-row" onclick="event.stopPropagation()">
-            <div class="qty-stepper">
-              <button class="qty-btn" onclick="event.stopPropagation();adjustVarQty('${v.id}',-1)">−</button>
-              <input class="var-qty-input" id="vqty-${v.id}" type="number" min="1" step="1" value="${qty}"
-                onchange="setVarQty('${v.id}',this.value)">
-              <button class="qty-btn" onclick="event.stopPropagation();adjustVarQty('${v.id}',1)">+</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-  refreshVarThumbs();
+  renderVariationList(document.getElementById('varList'), S.variations, {
+    activeId: S.activeVarId,
+    thumbId: varThumbId,
+    renderThumb: paintVarThumb,
+    feedbackFor: v => S.feedback?.find(f => f.variation_id === v.id),
+    onSelect: v => selectVar(v.id),
+    onRename: (v, name) => renameVar(v.id, name),
+    onEdit: v => openVarEdit(v.id),
+    onDuplicate: v => dupVar(v.id),
+    onDelete: v => delVar(v.id),
+    onQtyChange: (v, qty) => { v.qty = qty; markDirty(); },
+  });
 }
 
 function refreshVarThumbs() {
-  S.variations.forEach(v => {
-    const el = document.getElementById('vt-' + v.id);
-    if (!el) return;
-    renderInto(el, v.logos || [], 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
-  });
+  refreshVariationThumbs(S.variations, varThumbId, paintVarThumb);
 }
 
 function renderVarFlagRow(v) {
@@ -395,9 +347,9 @@ function renderVarFlagRow(v) {
   // border zone's independent (toggle-off) state.
   function zonePickerFields(z, hex) {
     return `<div class="ve-custom-row">
-        <input type="color" id="veCN-${z.id}" value="${hex || '#1A4A2E'}" oninput="veCSync('${z.id}',this.value)">
+        <input type="color" id="veCN-${z.id}" value="${hex || '#1A4A2E'}" oninput="veCSync('${z.id}',this.value)" onchange="veCApply('${z.id}')">
         <input type="text" class="hexin" id="veCH-${z.id}" value="${hex || '#1A4A2E'}" maxlength="7" placeholder="#000000" oninput="veCSyncN('${z.id}',this.value)">
-        ${_SUPPORTS_EYEDROPPER ? `<button type="button" class="eyedropper-btn" onclick="veEyedropper('${z.id}')" title="Pick color from screen">${_EYEDROPPER_SVG}</button>` : ''}
+        ${eyedropperBtn(`veEyedropper('${z.id}')`)}
         <button class="cpop-apply" onclick="veCApply('${z.id}')">Apply</button>
       </div>
       <div class="swatch-grid" id="veSg-${z.id}">
@@ -513,7 +465,7 @@ function renderVarFlagRow(v) {
       </div>
 
       <div class="ve-section" style="border-top:none">
-        <button class="ve-reset-link" onclick="resetVarToDefaults()">↺ Reset all to project defaults</button>
+        <button class="ve-reset-link" onclick="resetVarToDefaults()"><i class="fa-solid fa-arrow-rotate-left" aria-hidden="true"></i> Reset all to project defaults</button>
       </div>
     </div>`;
 
@@ -695,7 +647,7 @@ function refreshEditPanel() {
   if (v) renderVarFlagRow(v);
 }
 
-window.openVarEdit = function (varId) {
+function openVarEdit(varId) {
   editingVarId = varId;
   S.activeVarId = varId;
   renderVarList();
@@ -706,7 +658,7 @@ window.openVarEdit = function (varId) {
   const titleEl = document.getElementById('varEditPanelTitle');
   if (titleEl) titleEl.textContent = v?.name || 'Edit Variation';
   renderVarFlagRow(v);
-};
+}
 
 window.closeVarEdit = function () {
   editingVarId = null;
@@ -728,6 +680,11 @@ function ensureVarSvg() {
 
 // Static, non-interactive mirror of the front — same math export uses
 // (makeSvg with mirrorX=true), so the preview always matches the print output.
+// Text is deliberately NOT baked into this SVG (unlike logos) — it's drawn as
+// an HTML overlay instead (via renderFlagTextOverlaysStatic), using the exact
+// same markup as the interactive editor, so it doesn't visibly shift/resize
+// the moment "Same Front & Back Design" gets toggled off and this same text
+// becomes the live, draggable overlay.
 function renderBackMirrorPreview(v, varFlag, varColors, gsTagOpts) {
   const wrap = document.getElementById('varWrap');
   if (!wrap) return;
@@ -737,13 +694,24 @@ function renderBackMirrorPreview(v, varFlag, varColors, gsTagOpts) {
   wrap.querySelectorAll('.dzone, .dz-badge').forEach(d => d.remove());
   const [vbW, vbH] = (varFlag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
   wrap.style.aspectRatio = vbW + ' / ' + vbH;
-  const svg = makeSvg(v.logos, '100%', '100%', 'back', true, varFlag, varColors, v.textLayers || [], gsTagOpts);
+  const svg = makeSvg(v.logos, '100%', '100%', 'back', true, varFlag, varColors, [], gsTagOpts);
   const old = document.getElementById('varSvg');
   if (!svg) { if (old) old.remove(); return; }
   svg.id = 'varSvg';
   svg.classList.add('bsvg');
   svg.style.cssText = 'display:block;width:100%;height:100%';
   if (old) old.replaceWith(svg); else wrap.appendChild(svg);
+  // makeSvg's own showGsTagVariant call ran on this <svg> before it was
+  // attached above, so the tag's mirror-center lookup (getBBox()) couldn't
+  // measure real geometry and fell back to an approximation — visibly
+  // shifting the tag versus the same call made on the (already-attached)
+  // independent-back canvas. Re-run it now that the SVG is in the document.
+  const gst = gsTagOpts ?? { enabled: S.gsTag, mode: S.gsTagMode };
+  if (gst.enabled) {
+    const keyZone = varFlag.tagKeyZone || 'zone-primary';
+    showGsTagVariant(svg, 'back', gst.mode, resolveColors(varColors, varFlag)[keyZone]);
+  }
+  renderFlagTextOverlaysStatic('varWrap', v.textLayers || [], true);
 }
 
 function renderVarCanvas() {
@@ -769,23 +737,37 @@ function renderVarCanvas() {
 
   if (!Array.isArray(v.logos))     v.logos     = [];
   if (!Array.isArray(v.backLogos)) v.backLogos = [];
+  if (!Array.isArray(v.textLayers)) v.textLayers = [];
+  if (!Array.isArray(v.backTextLayers)) v.backTextLayers = [];
+  // Independent back: reconcile the *logo* set against the front on every
+  // render, so logos added to (or removed from) the front after the toggle
+  // was switched off still show up (or disappear) on the back. Text is
+  // deliberately NOT synced this way — see toggleSameSides.
+  if (!S.sameLogoOnBothSides) {
+    syncBackLogos(v);
+  }
   const varColors = getVarColors(v);
   const gsTagOpts = getVarGsTagOpts(v);
   const onChange = () => { refreshVarThumbs(); markDirty(); };
 
-  if (!Array.isArray(v.textLayers)) v.textLayers = [];
-
   if (activeFace === 'back' && S.sameLogoOnBothSides) {
     // Derived, read-only mirror of the front — matches what export produces
     // (makeSvg's `mirrorX`), so there's nothing here to drag/select.
+    // clearFlagTextOverlays drops the front's selection/toolbar state before
+    // renderBackMirrorPreview draws its own static (non-interactive) text.
+    clearFlagTextOverlays('varWrap');
     renderBackMirrorPreview(v, varFlag, varColors, gsTagOpts);
   } else if (activeFace === 'front') {
     ensureVarSvg();
     renderDropZones('varWrap', 'varSvg', v.logos, 'front', onChange, varFlag, varColors, gsTagOpts);
     renderFlagTextOverlays('varWrap', v.textLayers, onChange);
   } else {
+    // Independent back — its own text layers, seeded from the front when the
+    // "Same Front & Back Design" toggle was switched off, editable here just
+    // like the front's.
     ensureVarSvg();
     renderDropZones('varWrap', 'varSvg', v.backLogos, 'back', onChange, varFlag, varColors, gsTagOpts);
+    renderFlagTextOverlays('varWrap', v.backTextLayers, onChange);
   }
 
   const fb = S.feedback?.find(f => f.variation_id === v.id);
@@ -848,9 +830,13 @@ window.addFlagText = function () {
   const v = S.variations.find(v => v.id === S.activeVarId);
   if (!v) return;
   if (!Array.isArray(v.textLayers)) v.textLayers = [];
-  // Text only ever lives on the front — jump there so the new layer is visible.
-  if (activeFace === 'back') window.setActiveFace('front');
-  addFlagTextLayer(v.textLayers, 'varWrap', () => { refreshVarThumbs(); markDirty(); });
+  if (!Array.isArray(v.backTextLayers)) v.backTextLayers = [];
+  // The mirrored back view is read-only — nothing to add to there, so fall
+  // back to front (matches openVarAddMenu's logo behavior below). Independent
+  // back editing gets its own text layers, same as it gets its own logos.
+  if (activeFace === 'back' && S.sameLogoOnBothSides) window.setActiveFace('front');
+  const target = activeFace === 'back' ? v.backTextLayers : v.textLayers;
+  addFlagTextLayer(target, 'varWrap', () => { refreshVarThumbs(); markDirty(); });
 };
 
 // Header "+" button — there's no in-canvas add affordance anymore, so this is
@@ -863,7 +849,7 @@ window.openVarAddMenu = function (e) {
 };
 
 window.addVariation = function () {
-  const nv = { id: 'v' + Date.now(), name: 'Variation ' + (S.variations.length + 1), logos: [], backLogos: [], textLayers: [] };
+  const nv = { id: 'v' + Date.now(), name: 'Variation ' + (S.variations.length + 1), logos: [], backLogos: [], textLayers: [], backTextLayers: [] };
   S.variations.push(nv);
   S.activeVarId = nv.id;
   renderVarList();
@@ -871,14 +857,40 @@ window.addVariation = function () {
   markDirty();
 };
 
-window.dupVar = function (id) {
+function dupVar(id) {
   const src = S.variations.find(v => v.id === id);
   if (!src) return;
+  // Map each cloned front item's old id -> new id, so backLogos/backTextLayers
+  // (linked to the front by srcId) can be remapped to still point at their
+  // counterpart instead of looking orphaned and getting re-seeded from scratch.
+  const logoIdMap = new Map();
+  const newLogos = src.logos.map(l => {
+    const nid = 'pl-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    logoIdMap.set(l.id, nid);
+    return { ...l, id: nid };
+  });
+  const textIdMap = new Map();
+  const newTextLayers = src.textLayers.map(l => {
+    const nid = 'ftl-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    textIdMap.set(l.id, nid);
+    return { ...l, id: nid };
+  });
+  // Back items with no srcId were added directly on the back (no front
+  // counterpart) — carry them over as-is instead of dropping them.
   const nv = {
     id: 'v' + Date.now(), name: src.name + ' copy',
-    logos: src.logos.map(l => ({ ...l, id: 'pl-' + Date.now() + '-' + Math.random().toString(36).slice(2) })),
-    backLogos: (src.backLogos || []).map(l => ({ ...l, id: 'pl-' + Date.now() + '-' + Math.random().toString(36).slice(2) })),
-    textLayers: (src.textLayers || []).map(l => ({ ...l, id: 'ftl-' + Date.now() + '-' + Math.random().toString(36).slice(2) })),
+    logos: newLogos,
+    backLogos: (src.backLogos || []).map(l => {
+      const clone = { ...l, id: 'pl-' + Date.now() + '-' + Math.random().toString(36).slice(2) };
+      if (l.srcId) clone.srcId = logoIdMap.get(l.srcId);
+      return clone;
+    }),
+    textLayers: newTextLayers,
+    backTextLayers: (src.backTextLayers || []).map(l => {
+      const clone = { ...l, id: 'ftl-' + Date.now() + '-' + Math.random().toString(36).slice(2) };
+      if (l.srcId) clone.srcId = textIdMap.get(l.srcId);
+      return clone;
+    }),
   };
   if (src.flagId) nv.flagId = src.flagId;
   if (src.colors) nv.colors = { ...src.colors };
@@ -887,19 +899,19 @@ window.dupVar = function (id) {
   renderVarList();
   renderVarCanvas();
   markDirty();
-};
+}
 
-window.delVar = function (id) {
+function delVar(id) {
   S.variations = S.variations.filter(v => v.id !== id);
   if (S.activeVarId === id) S.activeVarId = S.variations[0]?.id || null;
   renderVarList();
   renderVarCanvas();
   markDirty();
-};
+}
 
-window.selectVar = function (id) { S.activeVarId = id; renderVarList(); renderVarCanvas(); };
+function selectVar(id) { S.activeVarId = id; renderVarList(); renderVarCanvas(); }
 
-window.renameVar = function (id, name) {
+function renameVar(id, name) {
   const v = S.variations.find(v => v.id === id);
   if (v) v.name = name;
   const nameEl = document.getElementById('activeVarName');
@@ -909,23 +921,7 @@ window.renameVar = function (id, name) {
     if (titleEl) titleEl.textContent = name;
   }
   markDirty();
-};
-
-window.setVarQty = function (id, val) {
-  const v = S.variations.find(v => v.id === id);
-  if (!v) return;
-  v.qty = Math.max(1, parseInt(val, 10) || 1);
-  markDirty();
-};
-
-window.adjustVarQty = function (id, delta) {
-  const v = S.variations.find(v => v.id === id);
-  if (!v) return;
-  v.qty = Math.max(1, (v.qty ?? 1) + delta);
-  const input = document.getElementById('vqty-' + id);
-  if (input) input.value = v.qty;
-  markDirty();
-};
+}
 
 // ── Project name ───────────────────────────────────────────
 
@@ -943,7 +939,7 @@ window.saveDraft = async function () {
     await saveFlagConfig(S.projectId, S);
     markClean();
     if (btn) {
-      btn.innerHTML = '<span class="save-check">✓</span>';
+      btn.innerHTML = '<span class="save-check"><i class="fa-solid fa-check" aria-hidden="true"></i></span>';
       setTimeout(() => { btn.innerHTML = 'Save draft'; btn.disabled = false; }, 1500);
     }
   } catch (err) {
@@ -959,6 +955,32 @@ window.goToGallery = async function () {
 
 // ── Init ──────────────────────────────────────────────────
 
+renderSidebar(document.getElementById('sidebar'), {
+  projectType: 'Tournament Flags',
+  activeStep: 2,
+  projectId: new URLSearchParams(window.location.search).get('project'),
+  steps: [
+    {
+      id: 'navDesign', label: 'Design', desc: 'Style, colors & logos',
+      onClick: async () => {
+        const p = new URLSearchParams(window.location.search).get('project');
+        await window.saveDraft?.();
+        window.location.href = 'flags.html' + (p ? '?project=' + p : '');
+      },
+    },
+    { id: 'navVariations', label: 'Variations', desc: 'Build combinations' },
+    {
+      id: 'navGallery', label: 'Gallery', desc: 'Review & export',
+      onClick: async () => {
+        const p = new URLSearchParams(window.location.search).get('project');
+        if (!p) return;
+        await window.saveDraft?.();
+        window.location.href = 'flags-gallery.html?project=' + p;
+      },
+    },
+  ],
+});
+
 const _urlProject = new URLSearchParams(window.location.search).get('project');
 if (!_urlProject) { window.location.href = '/'; }
 
@@ -973,6 +995,7 @@ try {
   S.projectId = project.id;
   S.projectName = project.name || '';
   S.library = logos;
+  await preloadLogoAspects(S.library);
   if (flagCfg) {
     S.flagId = flagCfg.flag_id;
     S.colors = flagCfg.colors || {};
@@ -986,8 +1009,7 @@ try {
     S.sameLogoOnBothSides = flagCfg.same_logo_on_both_sides ?? true;
     S.activeVarId = S.variations[0]?.id || null;
   }
-  const nameDisplay = document.getElementById('projectNameDisplay');
-  if (nameDisplay) nameDisplay.textContent = S.projectName || '—';
+  setSidebarProjectName(S.projectName, S.projectId);
 
   // Subscribe to feedback updates
   S.feedback = await getFeedback(S.projectId, 'flags').catch(() => []);
@@ -1006,10 +1028,8 @@ try {
       document.querySelector('.var-card.active')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
   }
-  requestAnimationFrame(resizeCanvasToViewport);
+  requestAnimationFrame(flagCanvas.refit);
 } catch (err) {
   console.error('Could not load project', err);
 }
-
-window.addEventListener('resize', resizeCanvasToViewport);
 

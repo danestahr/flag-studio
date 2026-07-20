@@ -3,6 +3,8 @@
     { "source": "/order", "destination": "/order.html" },
     { "source": "/project", "destination": "/project.html" },
     { "source": "/flags", "destination": "/flags.html" },
+    { "source": "/flags-variations", "destination": "/flags-variations.html" },
+    { "source": "/flags-gallery", "destination": "/flags-gallery.html" },
     { "source": "/hole-signs", "destination": "/hole-signs.html" },
     { "source": "/review", "destination": "/review.html" },
     { "source": "/login", "destination": "/login.html" }
