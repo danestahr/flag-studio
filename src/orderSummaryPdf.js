@@ -153,6 +153,27 @@ function drawRowPair(cursor, entries, { labelFont, valueFont, size = 10 }) {
   cursor.setY(y - size * 1.5 - 2);
 }
 
+// Mirrors the wrapping in drawColorSwatchLine so callers can reserve the
+// right amount of vertical space up front instead of assuming a single row.
+function colorSwatchRowCount(colorEntries, valueFont, size = 9) {
+  if (!colorEntries?.length) return 0;
+  const sw = 8, gapAfterSwatch = 4, gapBetween = 16;
+  const maxX = W - M;
+  let rows = 1;
+  let x = M;
+  for (const entry of colorEntries) {
+    const text = `${entry.label}: ${entry.name} ${entry.hex.toUpperCase()}`;
+    const textW = valueFont.widthOfTextAtSize(text, size);
+    const entryW = sw + gapAfterSwatch + textW;
+    if (x !== M && x + entryW > maxX) {
+      rows++;
+      x = M;
+    }
+    x += entryW + gapBetween;
+  }
+  return rows;
+}
+
 // One line of small colour swatches + "Label #HEX" text, wrapping to a new
 // line only if it overflows the content width (rare — most flags use 1-2 zones).
 function drawColorSwatchLine(cursor, colorEntries, { valueFont, size = 9 }) {
@@ -310,7 +331,8 @@ export async function buildOrderSummaryPdf({
 
     for (let i = 0; i < variationImages.length; i++) {
       const { name, frontPng, backPng, flagName, colorEntries: varColors } = variationImages[i];
-      const colorLineH = varColors?.length ? 16 : 0;
+      const colorRows = colorSwatchRowCount(varColors, reg, 9);
+      const colorLineH = colorRows ? colorRows * 9 * 1.5 + 2 : 0; // matches drawColorSwatchLine's own consumption
       const blockH = 14 + colorLineH + 12 + imgH + 14; // name/style + colours + face labels + image + margin
 
       cursor.ensureSpace(blockH + (i > 0 ? 8 : 0));
