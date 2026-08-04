@@ -1,4 +1,4 @@
-import { HS, UI } from './state.js';
+import { HS, UI, getEffectiveState } from './state.js';
 import { renderVarList } from './variations.js';
 import { renderVariationPreview } from './var-canvas.js';
 import { getLogoZone } from '../hole-sign-render.js';
@@ -103,7 +103,7 @@ export async function prepareLogo(variation, src) {
 }
 
 export function applyFillToVariation(variation) {
-  const lz = getLogoZone(HS, variation.templateId);
+  const lz = getLogoZone(getEffectiveState(variation));
   const aspect = variation.logoAspect ?? 1;
   const byHeight = 100 * (lz.h / lz.w) / aspect;
   const newW = Math.min(100, byHeight) * 0.97;
@@ -128,5 +128,6 @@ export function hideHsToolbar() {
   const picker = document.getElementById('hsLibPicker');
   if (picker) picker.style.display = 'none';
   if (UI.hsActiveZone?.dzone) UI.hsActiveZone.dzone.classList.remove('selected');
+  UI.hsActiveZone?.wrap?.classList.remove('selected');
   UI.hsActiveZone = null;
 }

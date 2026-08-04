@@ -10,6 +10,7 @@ import { renderVariationList } from '../variation-list.js';
 import { escXml, renderHoleSignInto } from '../hole-sign-render.js';
 import { deleteLogo, uploadLogo, saveHsOneOffs } from '../supabase.js';
 import { applyHsZoom, initHsVarCanvas, renderVariationPreview } from './var-canvas.js';
+import { fitSidePanel } from '../canvas-panel.js';
 import { renderEditor } from './var-editor.js';
 import { openDefaultsPanel } from './defaults.js';
 
@@ -29,32 +30,37 @@ export function renderStep2() {
         <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
       </div>
     </div>
-    <div class="var-strip-wrap">
-      <div class="var-strip-label">Logo library</div>
-      <div class="var-strip" id="hsLibStrip"></div>
-    </div>
-    <div class="s4layout">
-      <div class="var-canvas-panel" id="hsCanvasPanel"></div>
-      <div class="var-list-panel">
-        <div class="var-list-header">
-          <div class="var-list-title">Variations</div>
-          <div class="add-var-wrap" id="addVarWrap">
-            <button class="add-var-trigger" onclick="toggleAddVarMenu(event)">+ Add ▾</button>
-            <div class="add-var-dropdown" id="addVarDropdown">
-              <button class="add-var-opt" onclick="addEmptyHsVar();closeAddVarMenu()">New variation</button>
-              <button class="add-var-opt" onclick="openDefaultsPanel();closeAddVarMenu()">Default sign</button>
-              <button class="add-var-opt add-var-opt-upload" onclick="document.getElementById('hsCustomArtboardFile').click();closeAddVarMenu()">Upload custom design</button>
+    <div class="var-page-body">
+      <div class="var-strip-wrap">
+        <div class="var-strip-label">Logo library</div>
+        <div class="var-strip" id="hsLibStrip"></div>
+      </div>
+      <div class="s4layout">
+        <div class="var-canvas-panel" id="hsCanvasPanel"></div>
+        <div class="var-list-panel" id="hsVarListPanel">
+          <div class="var-list-header">
+            <div class="var-list-title">Variations</div>
+            <div class="add-var-wrap" id="addVarWrap">
+              <button class="add-var-trigger" onclick="toggleAddVarMenu(event)">+ Add ▾</button>
+              <button class="add-var-upload-btn" title="Upload custom design" onclick="document.getElementById('hsCustomArtboardFile').click()">
+                <i class="fa-solid fa-circle-arrow-up" aria-hidden="true"></i>
+              </button>
+              <div class="add-var-dropdown" id="addVarDropdown">
+                <button class="add-var-opt" onclick="addEmptyHsVar();closeAddVarMenu()">New variation</button>
+                <button class="add-var-opt" onclick="openDefaultsPanel();closeAddVarMenu()">Default sign</button>
+              </div>
+              <input type="file" id="hsCustomArtboardFile" accept="image/*" style="display:none">
             </div>
-            <input type="file" id="hsCustomArtboardFile" accept="image/*" style="display:none">
           </div>
+          <div class="var-list" id="hsVarList"></div>
         </div>
-        <div class="var-list" id="hsVarList"></div>
       </div>
     </div>`;
 
   document.getElementById('hsCustomArtboardFile').addEventListener('change', handleHsArtboardUpload);
   initHsVarCanvas(document.getElementById('hsCanvasPanel'));
   applyHsZoom(UI.hsZoom);
+  fitSidePanel('hsVarListPanel');
 
   buildLibStrip();
   renderVarList();
@@ -382,7 +388,7 @@ export function renderVarList() {
     thumbClass: 'hs-vthumb',
     renderThumb: renderHsVarThumb,
     feedbackFor: v => HS.feedback?.find(f => f.variation_id === v.id),
-    badgeFor: v => (v.template || v.sponsorText || (v.templateId && v.templateId !== HS.templateStyle))
+    badgeFor: v => (v.template || v.sponsorText)
       ? '<span class="var-custom-badge">Customized</span>' : '',
     onSelect: v => selectVariation(v.id),
     onRename: (v, name) => { v.name = name; },
@@ -496,15 +502,19 @@ window.setHsDefaultQty = function (id, val) {
   saveHsOneOffs(HS.projectId, HS.defaults).catch(() => {});
 };
 
-window.addEmptyHsVar = function () {
-  const v = {
+export function createEmptyVariation(name) {
+  return {
     id: crypto.randomUUID(),
-    name: 'Variation ' + (HS.variations.length + 1),
+    name,
     templateId: HS.templateStyle,
     logoId: null,
     logoSrc: null,
     logoData: { x: 50, y: 50, w: 90 },
   };
+}
+
+window.addEmptyHsVar = function () {
+  const v = createEmptyVariation('Variation ' + (HS.variations.length + 1));
   HS.variations.push(v);
   updateSidebar();
   selectVariation(v.id);

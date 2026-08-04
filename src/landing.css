@@ -48,18 +48,16 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 .btn.primary:hover { background:var(--accent-hover); border-color:var(--accent-hover); }
 .btn.sm { height:30px; font-size:12px; padding:0 11px; }
 
-/* Projects grid */
-.drafts-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
-.draft-card { background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--r); padding:1rem 1.25rem; color:var(--black); display:flex; flex-direction:column; gap:.5rem; transition:border-color .15s; }
+/* Projects list */
+.drafts-grid { display:flex; flex-direction:column; gap:10px; }
+.draft-card { background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--r); padding:.9rem 1.25rem; color:var(--black); display:flex; align-items:center; gap:1.25rem; transition:border-color .15s; }
 .draft-card:hover { border-color:var(--gray-200); }
 
-.draft-card-top { display:flex; align-items:flex-start; justify-content:space-between; gap:.5rem; }
-.draft-card-name { font-size:14px; font-weight:500; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.draft-card-del { background:none; border:none; color:var(--gray-400); cursor:pointer; font-size:14px; line-height:1; padding:1px 2px; border-radius:4px; flex-shrink:0; }
-.draft-card-del:hover { color:var(--black); background:var(--gray-100); }
+.draft-card-main { display:flex; flex-direction:column; gap:.2rem; flex:1; min-width:0; }
+.draft-card-name { font-size:14px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .draft-card-meta { font-size:12px; color:var(--gray-400); }
 
-.draft-card-tools { display:flex; gap:6px; margin-top:.25rem; }
+.draft-card-tools { display:flex; gap:6px; flex-shrink:0; }
 .draft-card-tool { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:6px; font-size:12px; font-weight:500; text-decoration:none; background:var(--gray-50); border:1.5px solid var(--gray-100); color:var(--gray-600); transition:border-color .15s, color .15s; }
 .draft-card-tool:hover { border-color:var(--gray-400); color:var(--black); }
 .draft-card-tool.configured { border-color:var(--accent); color:var(--accent); background:var(--accent-tint); }

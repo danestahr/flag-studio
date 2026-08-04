@@ -1,6 +1,14 @@
 import { HS_FONTS, emptyBanner, emptyTemplateLogos } from '../hole-sign-data.js';
 import { eyedropperBtn as sharedEyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
 
+// Tracks which caption slots the user has actually typed into (as opposed to
+// still holding whichever placeholder text the current template shipped
+// with), so switching templates only carries forward real user text — see
+// captureUserCaptions()/restoreUserCaptions() in design.js.
+export function defaultCaptionsEdited() {
+  return { primary: false, primarySub: false, secondary: false, secondarySub: false };
+}
+
 // ── State ──────────────────────────────────────────────────
 export const HS = {
   projectId: null,
@@ -11,6 +19,7 @@ export const HS = {
   bottomText: { text: '', font: 'dm-serif', size: 300, color: '#111110' },
   bannerTop:    emptyBanner(),
   bannerBottom: emptyBanner(),
+  captionsEdited: defaultCaptionsEdited(),
   templateLogos: emptyTemplateLogos(),
   textLayers: [],
   library: [],
@@ -32,10 +41,9 @@ export const UI = {
   hsMenuAnimate: false,      // animate the menu slide on navigation only
   hsVarMenu: null,           // open per-variation editor section key
   hsVarMenuAnimate: false,
-  qaLogosOpen: null,         // quick-add logos popover position
   canvasEdit: null,          // { kind, caret } — text band edited inline
   canvasRerendering: false,  // true while a live re-render swaps the input
-  tlSelectedIdx: null,       // selected template-logo slot index
+  tlSelectedIdxs: new Set(), // selected template-logo slot indices (shift-click multi-select)
   tlPickerEl: null,          // open template-logo picker element
   tlJustDragged: false,      // suppress click right after a slot drag
   hsZoom: 100,               // Step-2 preview zoom %
@@ -65,15 +73,15 @@ window.runEyedropper = async function (inputId) {
 
 // Deep-merge a stored banner config onto the empty-banner defaults so older
 // saved configs (missing newer fields) stay valid. Also used to clone a banner.
+// Legacy `topText`/`subText` (removed from the banner shape — see emptyBanner)
+// are stripped out here rather than merged, so stray keys from old saved data
+// don't leak onto the result; callers that need to preserve that legacy text
+// should run it through migrateBannerCaptions() before calling mergeBanner.
 export function mergeBanner(b) {
   const base = emptyBanner();
   if (!b) return base;
-  return {
-    ...base, ...b,
-    bg:      { ...base.bg,      ...(b.bg      || {}) },
-    topText: { ...base.topText, ...(b.topText || {}) },
-    subText: { ...base.subText, ...(b.subText || {}) },
-  };
+  const { topText, subText, ...rest } = b;
+  return { ...base, ...rest, bg: { ...base.bg, ...(b.bg || {}) } };
 }
 
 // Merge any per-variation template override onto HS for rendering.

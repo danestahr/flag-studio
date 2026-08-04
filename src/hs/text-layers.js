@@ -52,6 +52,8 @@ window.addTextLayer = function () {
     size: 300,
     color: '#000000',
     align: 'center',
+    dock: null,
+    dockOrder: 0,
   });
   UI.activeTextLayerId = id;
   doRefresh();
@@ -106,6 +108,15 @@ window.openTextLayerToolbar = function (id, anchorEl) {
       <i class="fa-solid fa-align-right" aria-hidden="true"></i>
     </button>
     <div class="hs-tl-tb-sep"></div>
+    <button class="hs-tl-tb-btn" id="hsTlFrameToggle" title="Move relative to the template's banner/text frame">
+      ${layer.aboveFrame ? '<i class="fa-solid fa-arrow-down"></i> Below Template' : '<i class="fa-solid fa-arrow-up"></i> Above Template'}
+    </button>
+    ${layer.dock ? `
+    <div class="hs-tl-tb-sep"></div>
+    <button class="hs-tl-tb-btn" id="hsTlUndock" title="Pull this layer out of the banner">
+      <i class="fa-solid fa-arrow-up-from-bracket"></i> Undock
+    </button>` : ''}
+    <div class="hs-tl-tb-sep"></div>
     <button class="hs-tl-tb-btn hs-tl-tb-delete" data-del="${id}" title="Remove">Remove</button>`;
 
   document.body.appendChild(tb);
@@ -139,6 +150,21 @@ window.openTextLayerToolbar = function (id, anchorEl) {
       const l = textLayerSource().find(x => x.id === id); if (!l) return;
       l.align = btn.dataset.align; doRefresh();
     });
+  });
+  tb.querySelector('#hsTlUndock')?.addEventListener('click', () => {
+    const l = textLayerSource().find(x => x.id === id); if (!l) return;
+    l.dock = null;
+    doRefresh();
+    window.closeTextLayerToolbar();
+  });
+  const frameToggleBtn = tb.querySelector('#hsTlFrameToggle');
+  frameToggleBtn.addEventListener('click', () => {
+    const l = textLayerSource().find(x => x.id === id); if (!l) return;
+    l.aboveFrame = !l.aboveFrame;
+    frameToggleBtn.innerHTML = l.aboveFrame
+      ? '<i class="fa-solid fa-arrow-down"></i> Below Template'
+      : '<i class="fa-solid fa-arrow-up"></i> Above Template';
+    doRefresh();
   });
   tb.querySelector('[data-del]').addEventListener('click', () => {
     window.removeTextLayer(id);
@@ -178,7 +204,9 @@ document.addEventListener('keydown', e => {
   if (!layer) return;
 
   const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
-  if (arrows[e.key]) {
+  // A docked layer's visual position is driven by dockedLayerPositions(), not
+  // its stored x/y — nudging those would silently do nothing visible.
+  if (arrows[e.key] && !layer.dock) {
     e.preventDefault();
     const step = e.shiftKey ? 100 : 20;
     const [dx, dy] = arrows[e.key];

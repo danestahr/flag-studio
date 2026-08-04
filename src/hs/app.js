@@ -1,9 +1,9 @@
-import { HS, UI, mergeBanner } from './state.js';
+import { HS, UI, defaultCaptionsEdited, mergeBanner } from './state.js';
 import { renderStep1, updateStep1Preview } from './design.js';
-import { renderStep2, renderVarList } from './variations.js';
+import { renderStep2, renderVarList, createEmptyVariation } from './variations.js';
 import { cropSvgToArtwork } from './logo-utils.js';
 import { renderGallery, saveDraftInternal } from './export.js';
-import { emptyTemplateLogos } from '../hole-sign-data.js';
+import { emptyTemplateLogos, migrateBannerCaptions } from '../hole-sign-data.js';
 import { getFeedback, loadHoleSignConfig, loadLogosForProject, loadOrderIntake, loadProject, supabase } from '../supabase.js';
 import { requireAuth } from '../auth.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
@@ -51,6 +51,7 @@ export async function init() {
       if (c.background) HS.background = { ...HS.background, ...c.background };
       if (c.topText)    HS.topText    = { ...HS.topText,    ...c.topText };
       if (c.bottomText) HS.bottomText = { ...HS.bottomText, ...c.bottomText };
+      HS.captionsEdited = { ...defaultCaptionsEdited(), ...(c.captionsEdited || {}) };
       // Migrate legacy single-banner format: c.banner used a position field.
       const legacyTop = c.banner?.position !== 'bottom' ? c.banner : null;
       const legacyBot = c.banner?.position === 'bottom' ? c.banner : null;
@@ -70,6 +71,16 @@ export async function init() {
       if (c.textLayers && c.textLayers.length) {
         HS.textLayers = c.textLayers.map(l => ({ ...l }));
       }
+      // Legacy banner topText/subText (removed from the banner shape — see
+      // emptyBanner in hole-sign-data.js) become docked free text layers.
+      // Reads the raw pre-merge legacy banner object, so this only ever
+      // produces entries for old-shape saved data — a no-op once the project
+      // has been re-saved in the new shape.
+      [['top', c.bannerTop || legacyTop], ['bottom', c.bannerBottom || legacyBot]].forEach(([which, legacyBanner]) => {
+        migrateBannerCaptions(legacyBanner, which).forEach(spec => {
+          HS.textLayers.push({ ...spec, id: 'tl-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7) });
+        });
+      });
       if (hsCfg.one_offs && hsCfg.one_offs.length) {
         HS.defaults = hsCfg.one_offs;
       }
@@ -90,6 +101,22 @@ export async function init() {
               if (tight) { v.logoSrcTight = tight.url; v.logoAspect = tight.aspect; }
             }).catch(() => {});
           }
+          // Same legacy banner-caption migration as the global config above,
+          // scoped to this variation's own override. Falls back to a clone of
+          // the global textLayers array if the variation doesn't have its own
+          // yet, matching getEffectiveState()'s inheritance rule (state.js).
+          if (v.template?.bannerTop || v.template?.bannerBottom) {
+            const specs = [
+              ...migrateBannerCaptions(v.template.bannerTop, 'top'),
+              ...migrateBannerCaptions(v.template.bannerBottom, 'bottom'),
+            ];
+            if (specs.length) {
+              if (!Array.isArray(v.textLayers)) v.textLayers = (HS.textLayers || []).map(l => ({ ...l }));
+              specs.forEach(spec => {
+                v.textLayers.push({ ...spec, id: 'tl-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7) });
+              });
+            }
+          }
           // Backward-compat migration: an earlier apply path snapshotted the
           // whole template state (including an empty templateLogos) into
           // v.template. That empty override now blocks the project default
@@ -105,6 +132,12 @@ export async function init() {
         });
         HS.activeVarId = HS.variations[0].id;
       }
+    }
+
+    if (!HS.variations.length) {
+      const v = createEmptyVariation('Variation 1');
+      HS.variations.push(v);
+      HS.activeVarId = v.id;
     }
 
     setSidebarProjectName(HS.projectName, HS.projectId);
@@ -139,7 +172,8 @@ export function renderCustomerSection(intake) {
   if (!el) return;
   const fmt = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '';
   const addr = [intake.address_line1, intake.address_line2, intake.city, intake.state_province, intake.postal_code, intake.country].filter(Boolean).map(escHtml).join(', ');
-  const colors = Array.isArray(intake.flag_colors) ? intake.flag_colors : [];
+  // flag_colors is either a legacy bare array (old orders) or { zones, gsTag, gsTagMode } (see order.js)
+  const colors = Array.isArray(intake.flag_colors) ? intake.flag_colors : (intake.flag_colors?.zones || []);
   el.innerHTML = `
     <div class="sdivider"></div>
     <div class="cs-wrap">
@@ -176,7 +210,7 @@ let _hsMaxStep = 1;
 
 export function goStep(n) {
   _hsMaxStep = Math.max(_hsMaxStep, n);
-  if (HS.projectId) saveDraftInternal().catch(() => {});
+  if (HS.projectId && !UI.hsOnboarding) saveDraftInternal().catch(() => {});
 
   document.querySelectorAll('.panel').forEach((p, i) => p.classList.toggle('visible', i === n - 1));
   document.querySelectorAll('.step-item').forEach((s, i) => {
@@ -184,7 +218,7 @@ export function goStep(n) {
     if (i === n - 1) s.classList.add('active');
     else if (i < n - 1) s.classList.add('done');
   });
-  if (n === 1) { UI.hsMenu = null; UI.hsMenuAnimate = false; UI.qaLogosOpen = null; renderStep1(); }
+  if (n === 1) { UI.hsMenu = null; UI.hsMenuAnimate = false; renderStep1(); }
   if (n === 2) renderStep2();
   if (n === 3) renderGallery();
   window.scrollTo(0, 0);

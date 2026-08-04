@@ -1,13 +1,19 @@
 import { S, _dragLogoId, setDragLogoId } from '../state.js';
-import { getFlag, applyColors, showGsTagVariant, resolveColors } from '../render.js';
+import { getFlag, applyColors, showGsTagVariant, resolveColors, extractFrameElements } from '../render.js';
 import { uploadLogo } from '../supabase.js';
 import { logoThumbHtml } from '../media-utils.js';
+import { createImageBox } from '../image-box.js';
 
 let _onLibraryUpdated = () => {};
 let _ensureProject = async () => {};
-// { layerId, logos, dz, wrapId, svgId, face, onChange }
-// layerId === '_add_' means "add new logo" mode
-let _activeLayer = null;
+// Multi-select: _selectedIds holds the ids of the currently selected logo
+// layers (shift-click toggles membership); _ctx holds the shared render
+// context for whichever zone is active (same for every selected layer, since
+// they all live in one zone); _addActive is a separate transient mode for
+// the "+ Logo" add-new flow (mutually exclusive with a real selection).
+let _selectedIds = new Set();
+let _addActive = false;
+let _ctx = null;
 
 // Set on every renderDropZones() call to open that zone's Text/Logo choice —
 // there's no in-canvas "+" anymore, so callers outside this module (a header
@@ -52,24 +58,29 @@ export function hideZoneToolbar() {
   if (tb) tb.style.display = 'none';
   const picker = document.getElementById('dzLibPicker');
   if (picker) picker.style.display = 'none';
-  _activeLayer?.dz?.querySelectorAll('.dz-logo-wrap').forEach(w => w.classList.remove('selected'));
-  _activeLayer = null;
+  _ctx?.dz?.querySelectorAll('.dz-logo-wrap').forEach(w => w.classList.remove('selected'));
+  _selectedIds = new Set();
+  _addActive = false;
+  _ctx = null;
 }
 
+// Removes every selected logo (batch, when multi-selected).
 function removeActiveLogo() {
-  if (!_activeLayer || _activeLayer.layerId === '_add_') return;
-  const { layerId, logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _activeLayer;
-  const idx = logos.findIndex(l => l.id === layerId);
-  if (idx >= 0) logos.splice(idx, 1);
+  if (_addActive || !_selectedIds.size || !_ctx) return;
+  const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
+  for (const id of _selectedIds) {
+    const idx = logos.findIndex(l => l.id === id);
+    if (idx >= 0) logos.splice(idx, 1);
+  }
   hideZoneToolbar();
   renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
   onChange();
 }
 
-// Delete/Backspace removes the selected logo, unless the user is typing in a
-// text field or editing a text layer (which has its own keydown handling).
+// Delete/Backspace removes the selected logo(s), unless the user is typing in
+// a text field or editing a text layer (which has its own keydown handling).
 document.addEventListener('keydown', e => {
-  if (!_activeLayer || _activeLayer.layerId === '_add_') return;
+  if (_addActive || !_selectedIds.size) return;
   if (e.key !== 'Delete' && e.key !== 'Backspace') return;
   if (document.activeElement?.closest?.('input, textarea, select, [contenteditable]')) return;
   e.preventDefault();
@@ -91,25 +102,28 @@ function positionToolbar(anchorEl, show = false) {
 
 function renderLibPicker() {
   const picker = document.getElementById('dzLibPicker');
-  if (!picker || !_activeLayer) return;
-  const { layerId, logos } = _activeLayer;
-  const isAdd = layerId === '_add_';
-  const layer = logos.find(l => l.id === layerId);
+  if (!picker || !_ctx) return;
+  const { logos } = _ctx;
+  const isAdd = _addActive;
+  // Replace/highlight only makes sense against a single selected layer —
+  // hidden entirely when 2+ are selected (see showToolbar).
+  const singleId = !isAdd && _selectedIds.size === 1 ? [..._selectedIds][0] : null;
+  const layer = singleId ? logos.find(l => l.id === singleId) : null;
 
   picker.innerHTML = S.library.map(l => `
-      <div class="dz-lp-item${!isAdd && layer?.logoId === l.id ? ' active' : ''}" data-lid="${l.id}" title="${l.name}">
+      <div class="dz-lp-item${layer?.logoId === l.id ? ' active' : ''}" data-lid="${l.id}" title="${l.name}">
         ${logoThumbHtml(l.src, l.name)}
       </div>`).join('') + `<div class="dz-lp-upload" id="dzLpUpload">+</div>`;
 
   picker.querySelectorAll('.dz-lp-item').forEach(el => {
     el.addEventListener('click', () => {
-      if (!_activeLayer) return;
-      const { layerId, logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _activeLayer;
+      if (!_ctx) return;
+      const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
       const lid = el.dataset.lid;
-      if (layerId === '_add_') {
+      if (isAdd) {
         logos.push({ id: 'pl-' + Date.now(), logoId: lid, x: 50, y: 50, w: 75 });
-      } else {
-        const l = logos.find(l => l.id === layerId);
+      } else if (singleId) {
+        const l = logos.find(l => l.id === singleId);
         if (l) l.logoId = lid;
       }
       hideZoneToolbar();
@@ -125,15 +139,29 @@ function renderLibPicker() {
 
 function showToolbar(anchorEl, isAdd) {
   ensureToolbar();
-  const showOrder = !isAdd && (_activeLayer?.logos?.length > 1);
+  const multi = !isAdd && _selectedIds.size > 1;
+  const showOrder = !isAdd && (_ctx?.logos?.length > 1);
   document.getElementById('dzTbRemove').style.display = isAdd ? 'none' : '';
   document.getElementById('dzTbSep').style.display = isAdd ? 'none' : '';
-  document.getElementById('dzTbRemoveBg').style.display = isAdd ? 'none' : '';
-  document.getElementById('dzTbRemoveBgSep').style.display = isAdd ? 'none' : '';
+  // Replace and Remove BG only make sense for a single selected image.
+  document.getElementById('dzTbRemoveBg').style.display = (isAdd || multi) ? 'none' : '';
+  document.getElementById('dzTbRemoveBgSep').style.display = (isAdd || multi) ? 'none' : '';
+  document.getElementById('dzTbReplace').style.display = multi ? 'none' : '';
   document.getElementById('dzTbBack').style.display = showOrder ? '' : 'none';
   document.getElementById('dzTbFront').style.display = showOrder ? '' : 'none';
   document.getElementById('dzTbOrderSep').style.display = showOrder ? '' : 'none';
   document.getElementById('dzTbReplace').textContent  = isAdd ? 'Add logo ▾' : 'Replace ▾';
+
+  const frameBtn = document.getElementById('dzTbFrame');
+  const frameSep = document.getElementById('dzTbFrameSep');
+  frameBtn.style.display = isAdd ? 'none' : '';
+  frameSep.style.display = isAdd ? 'none' : '';
+  if (!isAdd) {
+    const firstLayer = _ctx?.logos?.find(l => _selectedIds.has(l.id));
+    frameBtn.innerHTML = firstLayer?.aboveFrame
+      ? '<i class="fa-solid fa-arrow-down"></i> Below Template'
+      : '<i class="fa-solid fa-arrow-up"></i> Above Template';
+  }
 
   const picker = document.getElementById('dzLibPicker');
   picker.style.display = 'none';
@@ -149,6 +177,8 @@ function ensureToolbar() {
     <button class="dz-tb-btn" id="dzTbBack" title="Send to back"><i class="fa-solid fa-arrow-down"></i> Back</button>
     <button class="dz-tb-btn" id="dzTbFront" title="Bring to front"><i class="fa-solid fa-arrow-up"></i> Front</button>
     <div class="dz-tb-sep" id="dzTbOrderSep"></div>
+    <button class="dz-tb-btn" id="dzTbFrame" title="Move relative to the template's border/tag frame"></button>
+    <div class="dz-tb-sep" id="dzTbFrameSep"></div>
     <button class="dz-tb-btn" id="dzTbRemove">Remove</button>
     <div class="dz-tb-sep" id="dzTbSep"></div>
     <button class="dz-tb-btn" id="dzTbRemoveBg" title="Remove background"><i class="fa-solid fa-wand-magic-sparkles"></i> Remove BG</button>
@@ -160,21 +190,38 @@ function ensureToolbar() {
     <input type="file" id="dzReplaceFile" accept="image/*,.pdf,.ai,.eps" style="display:none">`;
   document.body.appendChild(t);
 
+  // Send-to-back/bring-to-front move every selected layer as a block,
+  // preserving their relative order, so a multi-selection reorders together.
   document.getElementById('dzTbBack').addEventListener('click', () => {
-    if (!_activeLayer || _activeLayer.layerId === '_add_') return;
-    const { layerId, logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _activeLayer;
-    const idx = logos.findIndex(l => l.id === layerId);
-    if (idx > 0) { const [item] = logos.splice(idx, 1); logos.unshift(item); }
+    if (_addActive || !_selectedIds.size || !_ctx) return;
+    const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
+    const selected = logos.filter(l => _selectedIds.has(l.id));
+    const rest = logos.filter(l => !_selectedIds.has(l.id));
+    logos.length = 0;
+    logos.push(...selected, ...rest);
     hideZoneToolbar();
     renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
     onChange();
   });
 
   document.getElementById('dzTbFront').addEventListener('click', () => {
-    if (!_activeLayer || _activeLayer.layerId === '_add_') return;
-    const { layerId, logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _activeLayer;
-    const idx = logos.findIndex(l => l.id === layerId);
-    if (idx < logos.length - 1) { const [item] = logos.splice(idx, 1); logos.push(item); }
+    if (_addActive || !_selectedIds.size || !_ctx) return;
+    const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
+    const selected = logos.filter(l => _selectedIds.has(l.id));
+    const rest = logos.filter(l => !_selectedIds.has(l.id));
+    logos.length = 0;
+    logos.push(...rest, ...selected);
+    hideZoneToolbar();
+    renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
+    onChange();
+  });
+
+  document.getElementById('dzTbFrame').addEventListener('click', () => {
+    if (_addActive || !_selectedIds.size || !_ctx) return;
+    const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
+    const firstLayer = logos.find(l => _selectedIds.has(l.id));
+    const newVal = !firstLayer?.aboveFrame;
+    logos.forEach(l => { if (_selectedIds.has(l.id)) l.aboveFrame = newVal; });
     hideZoneToolbar();
     renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
     onChange();
@@ -183,8 +230,9 @@ function ensureToolbar() {
   document.getElementById('dzTbRemove').addEventListener('click', removeActiveLogo);
 
   document.getElementById('dzTbRemoveBg').addEventListener('click', async () => {
-    if (!_activeLayer || _activeLayer.layerId === '_add_') return;
-    const { layerId, logos, dz, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _activeLayer;
+    if (_addActive || _selectedIds.size !== 1 || !_ctx) return;
+    const layerId = [..._selectedIds][0];
+    const { logos, dz, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
     const layer = logos.find(l => l.id === layerId);
     const logo = layer && S.library.find(l => l.id === layer.logoId);
     if (!logo) return;
@@ -219,6 +267,7 @@ function ensureToolbar() {
 
   document.getElementById('dzTbReplace').addEventListener('click', e => {
     e.stopPropagation();
+    if (!_addActive && _selectedIds.size !== 1) return;
     const picker = document.getElementById('dzLibPicker');
     const open = picker.style.display !== 'none';
     picker.style.display = open ? 'none' : 'block';
@@ -228,15 +277,15 @@ function ensureToolbar() {
   document.getElementById('dzReplaceFile').addEventListener('change', async e => {
     const file = e.target.files[0];
     e.target.value = '';
-    if (!file || !_activeLayer) return;
-    const { layerId, logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _activeLayer;
+    if (!file || !_ctx) return;
+    const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
     try {
       const logo = await uploadLogo(S.projectId, file);
       S.library.push(logo);
-      if (layerId === '_add_') {
+      if (_addActive) {
         logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75 });
-      } else {
-        const l = logos.find(l => l.id === layerId);
+      } else if (_selectedIds.size === 1) {
+        const l = logos.find(l => l.id === [..._selectedIds][0]);
         if (l) l.logoId = logo.id;
       }
       hideZoneToolbar();
@@ -253,145 +302,6 @@ function ensureToolbar() {
   });
 }
 
-// The logo's x/y/w are stored as % of its zone box, but a logo should be
-// draggable anywhere across the whole flag canvas (not boxed into its zone) —
-// the flag's own overflow:hidden wrap is what clips it once it bleeds past the
-// canvas edge. Convert the canvas bounds into that zone-relative % space.
-function canvasBoundsInZonePct(dz, wrapId) {
-  const dzRect = dz.getBoundingClientRect();
-  const wrapRect = document.getElementById(wrapId).getBoundingClientRect();
-  return {
-    minX: (wrapRect.left - dzRect.left) / dzRect.width  * 100,
-    maxX: (wrapRect.right - dzRect.left) / dzRect.width  * 100,
-    minY: (wrapRect.top  - dzRect.top)  / dzRect.height * 100,
-    maxY: (wrapRect.bottom - dzRect.top) / dzRect.height * 100,
-  };
-}
-
-function setupLogoInteraction(logoWrap, corners, dz, layer, logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts) {
-  const isCorner = el => corners.some(c => c.el === el);
-  let dragging = false, startPX, startPY, startX, startY;
-
-  logoWrap.addEventListener('pointerdown', e => {
-    if (isCorner(e.target)) return;
-    dragging = true;
-    dz.classList.add('dz-adjusting');
-    logoWrap.setPointerCapture(e.pointerId);
-    startPX = e.clientX; startPY = e.clientY;
-    startX = layer.x; startY = layer.y;
-    const tb = document.getElementById('dzToolbar');
-    if (tb) tb.style.visibility = 'hidden';
-    e.preventDefault();
-  });
-
-  logoWrap.addEventListener('pointermove', e => {
-    // hasPointerCapture guards against a dropped/lost pointerup (e.g. the OS or
-    // browser interrupts the gesture) leaving `dragging` stuck true — without it,
-    // the next hover-only pointermove would move the logo using the stale start point.
-    if (!dragging || !logoWrap.hasPointerCapture(e.pointerId)) return;
-    const dzRect = dz.getBoundingClientRect();
-    const dx = (e.clientX - startPX) / dzRect.width  * 100;
-    const dy = (e.clientY - startPY) / dzRect.height * 100;
-    const bounds = canvasBoundsInZonePct(dz, wrapId);
-    let nx = Math.max(bounds.minX, Math.min(bounds.maxX, startX + dx));
-    let ny = Math.max(bounds.minY, Math.min(bounds.maxY, startY + dy));
-
-    const snapPxX = 5 / dzRect.width  * 100;
-    const snapPxY = 5 / dzRect.height * 100;
-    const snapH = Math.abs(nx - 50) < snapPxX;
-    const snapV = Math.abs(ny - 50) < snapPxY;
-    if (snapH) nx = 50;
-    if (snapV) ny = 50;
-    dz.classList.toggle('snap-h', snapH);
-    dz.classList.toggle('snap-v', snapV);
-
-    layer.x = nx; layer.y = ny;
-    logoWrap.style.left = nx + '%';
-    logoWrap.style.top  = ny + '%';
-  });
-
-  const stopDragging = () => {
-    if (!dragging) return;
-    dragging = false;
-    dz.classList.remove('dz-adjusting', 'snap-h', 'snap-v');
-    const tb = document.getElementById('dzToolbar');
-    if (tb) { tb.style.visibility = ''; positionToolbar(logoWrap); }
-    onChange();
-  };
-  logoWrap.addEventListener('pointerup', stopDragging);
-  logoWrap.addEventListener('pointercancel', stopDragging);
-
-  corners.forEach(({ pos, el: handle }) => {
-    const isLeft = pos === 'tl' || pos === 'bl';
-    const isTop  = pos === 'tl' || pos === 'tr';
-    // unit vector pointing outward from center for this corner
-    const dirX = isLeft ? -1 : 1;
-    const dirY = isTop  ? -1 : 1;
-    let resizing = false, rStartX, rStartY, rStartW, rStartX0, rDzW, rDzH;
-
-    handle.addEventListener('pointerdown', e => {
-      resizing = true;
-      dz.classList.add('dz-adjusting');
-      handle.setPointerCapture(e.pointerId);
-      rStartX = e.clientX;
-      rStartY = e.clientY;
-      rStartW = layer.w;
-      rStartX0 = layer.x;
-      const dzRect = dz.getBoundingClientRect();
-      rDzW = dzRect.width;
-      rDzH = dzRect.height;
-      const tb = document.getElementById('dzToolbar');
-      if (tb) tb.style.visibility = 'hidden';
-      e.stopPropagation();
-      e.preventDefault();
-    });
-
-    handle.addEventListener('pointermove', e => {
-      // hasPointerCapture guards against a dropped/lost pointerup leaving `resizing`
-      // stuck true — without it, merely hovering the handle afterward would resize
-      // the logo using the stale rStartX/rStartY from the original drag.
-      if (!resizing || !handle.hasPointerCapture(e.pointerId)) return;
-      const dx = e.clientX - rStartX;
-      const dy = e.clientY - rStartY;
-      // dead-zone: ignore micro-movements
-      if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
-      // project displacement onto outward direction; both axes contribute
-      const rawDx = dx / rDzW * 100 * 2;
-      const rawDy = dy / rDzH * 100 * 2;
-      const dw = dirX * rawDx + dirY * rawDy;
-      const nw = Math.max(10, Math.min(150, rStartW + dw));
-      const actualDw = nw - rStartW;
-      layer.w = nw;
-      logoWrap.style.width = nw + '%';
-      if (isLeft) {
-        const bounds = canvasBoundsInZonePct(dz, wrapId);
-        layer.x = Math.max(bounds.minX, Math.min(bounds.maxX, rStartX0 - actualDw / 2));
-        logoWrap.style.left = layer.x + '%';
-      }
-    });
-
-    const stopResizing = () => {
-      if (!resizing) return;
-      resizing = false;
-      dz.classList.remove('dz-adjusting');
-      const tb = document.getElementById('dzToolbar');
-      if (tb) { tb.style.visibility = ''; positionToolbar(logoWrap); }
-      onChange();
-    };
-    handle.addEventListener('pointerup', stopResizing);
-    handle.addEventListener('pointercancel', stopResizing);
-  });
-
-  logoWrap.addEventListener('click', e => {
-    e.stopPropagation();
-    dz.querySelectorAll('.dz-logo-wrap').forEach(w => w.classList.remove('selected'));
-    logoWrap.classList.add('selected');
-    _activeLayer = { layerId: layer.id, logos, dz, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts };
-    showToolbar(logoWrap, false);
-    document.getElementById('dzLibPicker').style.display = 'none';
-  });
-}
-
 export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange = () => {}, flagOverride = null, colorsOverride = null, gsTagOpts = null) {
   const flag = flagOverride || getFlag();
   if (!flag) return;
@@ -399,15 +309,15 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
   if (!wrap) return;
   wrap._dzReadonly = false;
 
-  wrap.querySelectorAll('.dzone, .dz-badge').forEach(d => d.remove());
+  wrap.querySelectorAll('.dzone, .dz-badge, .dz-frame-overlay').forEach(d => d.remove());
   const svg = document.getElementById(svgId);
   if (!svg) return;
 
+  const ns = 'http://www.w3.org/2000/svg';
   const [vbW, vbH] = (flag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
   svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
   if (face === 'back') {
     svg.innerHTML = '';
-    const ns = 'http://www.w3.org/2000/svg';
     const g = document.createElementNS(ns, 'g');
     g.setAttribute('transform', `translate(${vbW},0) scale(-1,1)`);
     g.innerHTML = flag.svgContent;
@@ -422,6 +332,36 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
   if (gst.enabled) {
     const keyZone = flag.tagKeyZone || 'zone-primary';
     showGsTagVariant(svg, face, gst.mode, resolveColors(colors, flag)[keyZone]);
+  }
+
+  // Relocate the template's frame (border + GS tag) into its own overlay
+  // svg, appended after the logo layer, so it defaults to painting above
+  // logos here just like it does in the baked export (makeSvg) — see
+  // .dz-frame-overlay / .above-frame in style.css for the z-index rule that
+  // lets an individual logo opt back above it.
+  const frameEls = extractFrameElements(svg);
+  // The border zone is drawn full-bleed (it's meant to run past the trim
+  // line so a print with no white edge after cutting) — thicker than the
+  // grey guide margin itself, so once the border lands in this elevated
+  // overlay it paints straight over the guide. Move the guide in after it,
+  // same as it already sits topmost in the plain (non-drop-zone) preview.
+  const bleedEl = svg.querySelector('[id="Bleed"], [id="bleed"]');
+  if (frameEls.length || bleedEl) {
+    const frameSvg = document.createElementNS(ns, 'svg');
+    frameSvg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
+    frameSvg.setAttribute('class', 'dz-frame-overlay');
+    // Match the main svg's own fill="none" (set in applyColors) — some
+    // templates' relocated content (e.g. a stroke-only accent nested in
+    // Bleed) has no fill of its own and relies on inheriting that default;
+    // without it here, a plain <svg> falls back to the CSS-initial fill
+    // (black), turning an invisible line into a solid shape.
+    frameSvg.setAttribute('fill', 'none');
+    const holder = document.createElementNS(ns, 'g');
+    if (face === 'back') holder.setAttribute('transform', `translate(${vbW},0) scale(-1,1)`);
+    frameEls.forEach(el => holder.appendChild(el));
+    if (bleedEl) holder.appendChild(bleedEl);
+    frameSvg.appendChild(holder);
+    wrap.appendChild(frameSvg);
   }
 
   wrap.style.aspectRatio = vbW + ' / ' + vbH;
@@ -449,33 +389,65 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
     const logo = S.library.find(l => l.id === layer.logoId);
     if (!logo) return;
 
-    const logoWrap = document.createElement('div');
-    logoWrap.className = 'dz-logo-wrap';
-    logoWrap.dataset.layerId = layer.id;
-    logoWrap.style.left  = layer.x + '%';
-    logoWrap.style.top   = layer.y + '%';
-    logoWrap.style.width = layer.w + '%';
-
-    const img = document.createElement('img');
-    img.className = 'placed-img';
-    img.src = logo.src;
-    img.alt = logo.name;
-    img.draggable = false;
-    logoWrap.appendChild(img);
-
-    const corners = ['tl','tr','bl','br'].map(pos => {
-      const h = document.createElement('div');
-      h.className = `dz-resize dz-resize-${pos}`;
-      logoWrap.appendChild(h);
-      return { pos, el: h };
+    let logoWrap; // closed over by onClick below; assigned from createImageBox's return
+    logoWrap = createImageBox(dz, wrap, layer, {
+      src: logo.src,
+      alt: logo.name,
+      aboveFrame: layer.aboveFrame,
+      onStart: () => {
+        const tb = document.getElementById('dzToolbar');
+        if (tb) tb.style.visibility = 'hidden';
+      },
+      onCommit: () => {
+        const tb = document.getElementById('dzToolbar');
+        if (tb) { tb.style.visibility = ''; positionToolbar(logoWrap); }
+        onChange();
+      },
+      onClick: e => {
+        if (e.shiftKey) {
+          if (_selectedIds.has(layer.id)) _selectedIds.delete(layer.id);
+          else _selectedIds.add(layer.id);
+        } else {
+          _selectedIds = new Set([layer.id]);
+        }
+        _addActive = false;
+        _ctx = { logos, dz, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts };
+        dz.querySelectorAll('.dz-logo-wrap').forEach(w => {
+          w.classList.toggle('selected', _selectedIds.has(w.dataset.layerId));
+        });
+        if (!_selectedIds.size) { hideZoneToolbar(); return; }
+        showToolbar(logoWrap, false);
+        document.getElementById('dzLibPicker').style.display = 'none';
+      },
+      // Hover shortcuts — select just this one layer and jump straight to the
+      // same toolbar+picker (swap) or removal (remove) a plain click would
+      // reach, without the intermediate select-then-click-Replace step.
+      onSwap: () => {
+        _selectedIds = new Set([layer.id]);
+        _addActive = false;
+        _ctx = { logos, dz, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts };
+        dz.querySelectorAll('.dz-logo-wrap').forEach(w => {
+          w.classList.toggle('selected', _selectedIds.has(w.dataset.layerId));
+        });
+        showToolbar(logoWrap, false);
+        document.getElementById('dzLibPicker').style.display = 'block';
+        renderLibPicker();
+      },
+      onRemove: () => {
+        _selectedIds = new Set([layer.id]);
+        _addActive = false;
+        _ctx = { logos, dz, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts };
+        removeActiveLogo();
+      },
     });
-
+    logoWrap.dataset.layerId = layer.id;
     dz.appendChild(logoWrap);
-    setupLogoInteraction(logoWrap, corners, dz, layer, logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts);
   });
 
   function openAddPicker(anchorEl) {
-    _activeLayer = { layerId: '_add_', logos, dz, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts };
+    _selectedIds = new Set();
+    _addActive = true;
+    _ctx = { logos, dz, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts };
     if (!S.library.length) {
       ensureToolbar();
       document.getElementById('dzReplaceFile').click();

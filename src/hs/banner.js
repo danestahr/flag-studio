@@ -1,12 +1,13 @@
 import { HS, UI, eyedropperBtn, getEffectiveState, getEffectiveVariation } from './state.js';
 import { renderStep1, updateStep1Preview, stripSlotImages, repositionToolbar } from './design.js';
 import { hideHsToolbar } from './logo-utils.js';
-import { closeTlSlotToolbar, ensureTlSlots, snapTlSlotsToDefaults, tlSource } from './template-logos.js';
+import { ensureTlSlots, snapTlSlotsToDefaults, tlSource } from './template-logos.js';
 import { renderEditor } from './var-editor.js';
 import { renderVariationPreview } from './var-canvas.js';
-import { HS_BANNER_MAX_H, HS_BANNER_MIN_H, HS_FONTS, HS_H, HS_MARGIN, HS_TEMPLATES, HS_W, emptyBanner, emptyTemplateLogos } from '../hole-sign-data.js';
-import { bannerTitleSubSplit, escXml, getBannerRect, getLogoZone, getTemplateLogoSlots, getTextRegions, renderHoleSignInto } from '../hole-sign-render.js';
+import { HS_BANNER_MAX_H, HS_BANNER_MIN_H, HS_FONTS, HS_H, HS_MARGIN, HS_W, emptyBanner } from '../hole-sign-data.js';
+import { dockedLayerPositions, dockedLayers, getBannerRect, getLogoZone, getTemplateLogoSlots, getTextRegions, renderHoleSignInto } from '../hole-sign-render.js';
 import { uploadLogo } from '../supabase.js';
+import { logoThumbHtml } from '../media-utils.js';
 
 // ── Banner controls ───────────────────────────────────────
 // Like tlSource(): Step 1 edits HS.bannerTop/HS.bannerBottom; the per-variation
@@ -104,7 +105,7 @@ export function renderBannerSection(which) {
     </div>
     <div class="hs-section">
       <div class="hs-section-title">Text spacing <span id="hsBanner${cap}SpacingVal" class="hs-optional">${b.spacing || 0}</span></div>
-      <div class="hs-canvas-hint">Drag the line between the title and subtitle in the canvas to adjust.</div>
+      <div class="hs-canvas-hint">Drag a free text layer into this banner to dock it — drag the line between stacked layers in the canvas to adjust their spacing.</div>
     </div>`;
 }
 
@@ -213,89 +214,6 @@ window.setBannerSpacing = function (which, val) {
   redrawBannerPreview();
 };
 
-// ── Hover quick-add ───────────────────────────────────────
-// Hovering near the top or bottom edge of a preview reveals a small toolbar
-// offering what can be placed in that band (banner / text / logos), so the
-// available options are discoverable directly on the template.
-// Which band (top/bottom) currently has its inline logo-count selector expanded.
-
-export function quickAddTemplateInfo() {
-  const editing = !!(HS.editingVarId && HS.editingDraft);
-  const tid = editing ? HS.editingDraft.templateStyle : HS.templateStyle;
-  const tmpl = HS_TEMPLATES.find(t => t.id === tid) || HS_TEMPLATES[0];
-  return { supportsText: tmpl.supportsText, allowsLogos: tid !== 'hole-sign-logo-only' };
-}
-
-export function currentTemplateLogos() {
-  return (HS.editingVarId && HS.editingDraft)
-    ? (HS.editingDraft.templateLogos || emptyTemplateLogos())
-    : (HS.templateLogos || emptyTemplateLogos());
-}
-
-export function currentBannerFor(which) {
-  const key = which === 'bottom' ? 'bannerBottom' : 'bannerTop';
-  return (HS.editingVarId && HS.editingDraft) ? (HS.editingDraft[key] || emptyBanner()) : (HS[key] || emptyBanner());
-}
-export function currentText(which) {
-  const src = (HS.editingVarId && HS.editingDraft) ? HS.editingDraft : HS;
-  return which === 'bottom' ? src.bottomText : src.topText;
-}
-
-export function buildQuickAddBar(position) {
-  const { supportsText, allowsLogos } = quickAddTemplateInfo();
-  const chips = [];
-
-  // Banner: show a chip for each position that doesn't yet have an active banner.
-  const banner = currentBannerFor(position);
-  if (!banner.enabled) chips.push(`<button class="qa-chip" onclick="quickAdd('banner','${position}')">+ Banner</button>`);
-
-  // Text: hide the option for a band that already has text.
-  if (supportsText) {
-    const hasText = !!(currentText(position).text || '').trim();
-    if (!hasText) chips.push(`<button class="qa-chip" onclick="quickAdd('text','${position}')">+ ${position === 'bottom' ? 'Bottom ' : ''}Text</button>`);
-  }
-
-  // Logos: when this band already has logos, show only the 1/2/3 count + Remove.
-  if (allowsLogos) {
-    const tl = currentTemplateLogos();
-    const logosHere = tl.count > 0 && tl.vAlign === position;
-    if (logosHere || UI.qaLogosOpen === position) {
-      const cur = logosHere ? tl.count : 1;
-      const nums = [1, 2, 3].map(n =>
-        `<button class="qa-num${cur === n ? ' active' : ''}" onclick="quickAddLogosCount('${position}',${n})">${n}</button>`).join('');
-      chips.push(`<span class="qa-bar-label">Logos</span><span class="qa-nums">${nums}</span><button class="qa-chip qa-remove" onclick="quickAddLogosRemove('${position}')">Remove</button>`);
-    } else {
-      chips.push(`<button class="qa-chip" onclick="quickAddLogos('${position}')">+ Logos</button>`);
-    }
-  }
-
-  chips.push(`<button class="qa-chip" onclick="addTextLayer()">+ Text layer</button>`);
-  const label = chips.length ? `<span class="qa-bar-label">Add to ${position}</span>` : '';
-  return `<div class="qa-bar qa-${position}">${label}${chips.join('')}</div>`;
-}
-
-export function wireQuickAddHover(previewEl) {
-  if (!previewEl) return;
-  ['top', 'bottom'].forEach(pos => {
-    const wrap = document.createElement('div');
-    wrap.innerHTML = buildQuickAddBar(pos);
-    previewEl.appendChild(wrap.firstElementChild);
-  });
-  const topBar = previewEl.querySelector('.qa-top');
-  const botBar = previewEl.querySelector('.qa-bottom');
-  // Assign (not addEventListener) so re-renders overwrite rather than stack.
-  previewEl.onmousemove = e => {
-    const r = previewEl.getBoundingClientRect();
-    const ry = (e.clientY - r.top) / r.height;
-    if (topBar) topBar.classList.toggle('show', ry < 0.28);
-    if (botBar) botBar.classList.toggle('show', ry > 0.72);
-  };
-  previewEl.onmouseleave = () => {
-    if (topBar) topBar.classList.remove('show');
-    if (botBar) botBar.classList.remove('show');
-  };
-}
-
 window.quickAdd = function (kind, position) {
   const editing = !!(HS.editingVarId && HS.editingDraft);
   if (kind === 'banner') {
@@ -303,50 +221,7 @@ window.quickAdd = function (kind, position) {
     const b = bannerSource(position);  // position is 'top' | 'bottom'
     b.enabled = true;
     openMenu(position === 'bottom' ? 'bannerBottom' : 'bannerTop');
-  } else if (kind === 'text') {
-    // Text editing lives entirely on the canvas now — jump straight into the
-    // inline editor for this band instead of opening a sidebar section.
-    UI.canvasEdit = { kind: position === 'bottom' ? 'bottom' : 'top', caret: null };
-    quickAddRedraw();
   }
-};
-
-export function quickAddRedraw() {
-  if (HS.editingVarId) renderVariationPreview();
-  else updateStep1Preview();
-}
-
-// "+ Logos" tap: expand the inline count selector and place one logo by default.
-window.quickAddLogos = function (position) {
-  const tl = tlSource();
-  if (!tl.count) { tl.count = 1; ensureTlSlots(); }
-  tl.vAlign = position;
-  snapTlSlotsToDefaults(tl);
-  UI.qaLogosOpen = position;
-  quickAddRedraw();
-};
-
-// Picking a number in the inline selector updates how many logo slots there are.
-window.quickAddLogosCount = function (position, n) {
-  const tl = tlSource();
-  tl.count = n;
-  ensureTlSlots();
-  tl.vAlign = position;
-  snapTlSlotsToDefaults(tl);
-  UI.qaLogosOpen = position;
-  quickAddRedraw();
-};
-
-// Remove all template logos from the band.
-window.quickAddLogosRemove = function () {
-  const tl = tlSource();
-  tl.count = 0;
-  ensureTlSlots();
-  UI.tlSelectedIdx = null;
-  UI.qaLogosOpen = null;
-  closeTlSidePanel();
-  closeTlSlotToolbar();
-  quickAddRedraw();
 };
 
 // ── Drag-to-snap (banner + logo block) ────────────────────
@@ -395,7 +270,7 @@ export function beginBandSnap(previewEl, kind, e, captureEl) {
   {
     const slots = (state.templateLogos?.slots || []).filter(s => s?.logoSrc);
     ghost.innerHTML = slots.length
-      ? `<div class="band-ghost-logos">${slots.map(s => `<img src="${escXml(s.logoSrcTight || s.logoSrc)}">`).join('')}</div>`
+      ? `<div class="band-ghost-logos">${slots.map(s => logoThumbHtml(s.logoSrcTight || s.logoSrc)).join('')}</div>`
       : `<span class="band-ghost-label">Logos</span>`;
   }
   previewEl.appendChild(ghost);
@@ -428,6 +303,7 @@ export function beginBandSnap(previewEl, kind, e, captureEl) {
     syncTextZones(previewEl, st);
     syncLogoZone(previewEl, st);
     syncBannerHandles(previewEl, st);
+    syncDockedLayerOverlays(previewEl, st);
   };
 
   const startY = e.clientY;
@@ -513,6 +389,89 @@ function syncLogoZone(previewEl, st) {
   });
 }
 
+// ── Docking: free text layers can be dragged into a banner's rect ──────────
+// A banner is a dock zone, not a fixed title/sub slot — any number of ordinary
+// free text layers (HS.textLayers) can dock to it via their own `dock`/
+// `dockOrder` fields (see hole-sign-data.js/hole-sign-render.js). `which` is
+// 'top' | 'bottom' throughout.
+
+// Sign-coord hysteresis margin: once a layer is already docked to a zone, the
+// pointer must travel this far past the zone's edge before it undocks, so
+// hovering right at the boundary doesn't flicker in and out. Matches the
+// existing Shift-drag edge-snap threshold (design.js's snapNearest).
+const DOCK_HYSTERESIS = 200;
+
+export function getDockedSiblings(state, which, excludeId) {
+  return dockedLayers(state, which).filter(l => l.id !== excludeId);
+}
+
+// Point-in-rect test against a banner's zone. `stickyTo` is the layer's
+// current dock (or null) — when it matches a zone, that zone's rect is
+// expanded by DOCK_HYSTERESIS so undocking needs real intent, not just
+// grazing the pixel edge.
+export function hitTestDockZone(state, cx, cy, stickyTo) {
+  for (const which of ['top', 'bottom']) {
+    const rect = getBannerRect(state, which);
+    if (!rect) continue;
+    const sticky = stickyTo === which;
+    const y0 = sticky ? rect.y - DOCK_HYSTERESIS : rect.y;
+    const y1 = sticky ? rect.y + rect.h + DOCK_HYSTERESIS : rect.y + rect.h;
+    if (cx >= rect.x && cx <= rect.x + rect.w && cy >= y0 && cy <= y1) return which;
+  }
+  return null;
+}
+
+export function showDockHighlight(previewEl, state, which) {
+  const rect = getBannerRect(state, which);
+  if (!rect) { clearDockHighlight(previewEl); return; }
+  const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
+  let el = previewEl.querySelector('.hs-dock-highlight');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'hs-dock-highlight band-drop-target active';
+    el.style.cssText = 'position:absolute;left:0;width:100%;z-index:4;';
+    previewEl.appendChild(el);
+  }
+  el.style.top = pct(rect.y, HS_H);
+  el.style.height = pct(rect.h, HS_H);
+}
+
+export function clearDockHighlight(previewEl) {
+  previewEl.querySelector('.hs-dock-highlight')?.remove();
+}
+
+// Repositions every currently-docked layer's DOM overlay to match
+// dockedLayerPositions() — called from reflowBannerSvg/beginBandSnap's
+// reflowTo so docked layers live-follow a banner height/spacing/valign drag
+// instead of lagging behind until the next full render.
+export function syncDockedLayerOverlays(previewEl, st) {
+  const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
+  ['top', 'bottom'].forEach(which => {
+    const positions = dockedLayerPositions(st, which);
+    Object.entries(positions).forEach(([id, r]) => {
+      const el = previewEl.querySelector(`.hs-tl-overlay[data-tl-id="${id}"]`);
+      if (!el) return;
+      el.style.left = pct(r.x, HS_W);
+      el.style.top = pct(r.y, HS_H);
+      el.style.width = pct(r.w, HS_W);
+    });
+  });
+}
+
+// Midpoint (sign coords) between the first two docked, non-empty layers'
+// stacked boxes in `which` — every adjacent gap uses the same banner.spacing
+// value, so any one pair is representative for positioning the spacing handle.
+// Returns null when fewer than 2 docked layers have real text.
+function dockGapMid(state, which) {
+  const siblings = dockedLayers(state, which).filter(l => l.text && l.text.trim());
+  if (siblings.length < 2) return null;
+  const positions = dockedLayerPositions(state, which);
+  const first = positions[siblings[0].id];
+  const second = positions[siblings[1].id];
+  if (!first || !second) return null;
+  return (first.y + first.h + second.y) / 2;
+}
+
 // Dragging either the height handle or the spacing handle can move the
 // other one too (growing the banner shifts the gap's midpoint; widening the
 // gap can grow the banner past its stored height) — reposition BOTH handles,
@@ -530,12 +489,8 @@ function syncBannerHandles(previewEl, st) {
     }
     const spacingHandle = previewEl.querySelector(`.hs-banner-spacing-handle[data-which="${which}"]`);
     if (spacingHandle && rect && banner) {
-      const hasTitle = !!(banner.topText?.text || '').trim();
-      const hasSub = !!(banner.subText?.text || '').trim();
-      if (hasTitle && hasSub) {
-        const { titleY, titleH, subY } = bannerTitleSubSplit(banner, rect);
-        spacingHandle.style.top = pct((titleY + titleH + subY) / 2, HS_H);
-      }
+      const mid = dockGapMid(st, which);
+      if (mid != null) spacingHandle.style.top = pct(mid, HS_H);
     }
   });
 }
@@ -548,11 +503,10 @@ function reflowBannerSvg(previewEl, editingVar) {
   const st = getEffectiveState(editingVar);
   const bgVar = (editingVar && !editingVar.logoSrc) ? getEffectiveVariation(editingVar) : null;
   const tmp = document.createElement('div');
-  // Strip free text layers + top/bottom text from the SVG the same way the
-  // main render does — their DOM overlays stay on top throughout the drag, so
-  // without this the reflow would show a duplicate SVG copy behind them (the
-  // halo). Banner-hosted title/sub aren't stripped — they have no DOM-overlay
-  // copy of their own; the SVG is their only visual.
+  // Strip free text layers (including any docked to a banner) + top/bottom
+  // text from the SVG the same way the main render does — their DOM overlays
+  // stay on top throughout the drag, so without this the reflow would show a
+  // duplicate SVG copy behind them (the halo).
   const bgState = { ...stripSlotImages(st), hideTextLayers: (st.textLayers || []).map(l => l.id), hideText: ['top', 'bottom'] };
   renderHoleSignInto(tmp, bgState, bgVar);
   const newSvg = tmp.querySelector('svg');
@@ -564,6 +518,7 @@ function reflowBannerSvg(previewEl, editingVar) {
   syncTextZones(previewEl, st);
   syncLogoZone(previewEl, st);
   syncBannerHandles(previewEl, st);
+  syncDockedLayerOverlays(previewEl, st);
   return st;
 }
 
@@ -619,28 +574,20 @@ export function wireBannerHeightHandles(previewEl) {
   });
 }
 
-// On-canvas drag handle for the gap between a banner's title and subtitle —
-// only shown when both lines are present — in place of the sidebar's
+// On-canvas drag handle for the gap between adjacent docked text layers —
+// only shown when 2+ are docked with real text — in place of the sidebar's
 // "Text spacing" slider.
 export function wireBannerSpacingHandles(previewEl) {
   const editingVar = HS.editingVarId ? HS.variations.find(v => v.id === HS.editingVarId) : null;
   const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
-  // Midpoint of the actual gap between the title's bottom edge and the
-  // subtitle's top edge, so the handle sits evenly spaced between the two
-  // lines of text rather than flush against either one.
-  const gapMid = (banner, rect) => {
-    const { titleY, titleH, subY } = bannerTitleSubSplit(banner, rect);
-    return (titleY + titleH + subY) / 2;
-  };
 
   ['top', 'bottom'].forEach(which => {
     const state = getEffectiveState(editingVar);
     const key = which === 'bottom' ? 'bannerBottom' : 'bannerTop';
     const banner = state[key];
     if (!banner?.enabled) return;
-    const hasTitle = !!(banner.topText?.text || '').trim();
-    const hasSub = !!(banner.subText?.text || '').trim();
-    if (!hasTitle || !hasSub) return;
+    const mid = dockGapMid(state, which);
+    if (mid == null) return;
 
     const rect = getBannerRect(state, which);
     if (!rect) return;
@@ -649,8 +596,8 @@ export function wireBannerSpacingHandles(previewEl) {
     const handle = document.createElement('div');
     handle.className = 'hs-banner-spacing-handle';
     handle.dataset.which = which;
-    handle.style.top = pct(gapMid(banner, rect), HS_H);
-    handle.title = 'Drag to adjust spacing between title and subtitle';
+    handle.style.top = pct(mid, HS_H);
+    handle.title = 'Drag to adjust spacing between docked text layers';
 
     let startY, startSpacing;
     handle.addEventListener('pointerdown', e => {
@@ -716,10 +663,9 @@ export function selectAll(el) {
 export function wireCanvasTextEditing(previewEl) {
   const editing = HS.editingVarId && HS.editingDraft;
   const state = getEffectiveState(editing ? HS.variations.find(v => v.id === HS.editingVarId) : null);
-  // Keep the active text band alive even if its text is momentarily cleared —
-  // also covers a banner subtitle that's just been added via "+ Add subtitle"
-  // and doesn't have any text yet, so its click-to-edit zone still gets created.
-  const forceableKinds = ['top', 'bottom', 'bannerTopSub', 'bannerBotSub'];
+  // Keep the active text band alive even if its text is momentarily cleared,
+  // so clearing the text doesn't dismiss the editor.
+  const forceableKinds = ['top', 'bottom'];
   const forceText = (UI.canvasEdit && forceableKinds.includes(UI.canvasEdit.kind)) ? [UI.canvasEdit.kind] : [];
   const regions = getTextRegions(state, state.templateStyle, forceText);
   const sc = (previewEl.clientHeight || HS_H) / HS_H;
@@ -728,49 +674,34 @@ export function wireCanvasTextEditing(previewEl) {
   // Available span a text box's width can grow into — matches fitTextBox() in
   // hole-sign-render.js so the live drag preview lines up with the re-render.
   const innerW = HS_W - 2 * HS_MARGIN;
-  const textObj = kind =>
-    kind === 'bannerTopTitle' ? state.bannerTop.topText
-    : kind === 'bannerTopSub' ? state.bannerTop.subText
-    : kind === 'bannerBotTitle' ? state.bannerBottom.topText
-    : kind === 'bannerBotSub'   ? state.bannerBottom.subText
-    : kind === 'top' ? state.topText : state.bottomText;
+  const textObj = kind => kind === 'top' ? state.topText : state.bottomText;
   // Recompute a 'top'/'bottom' band's box (x/y/w/h) via the same layout math
   // the SVG uses, given a live in-drag size/width — so edge/corner drags can
   // grow the box's height too (more lines wrap in) instead of only its width,
   // and always land exactly where the eventual re-render will put it.
   const recomputeBox = (targetKind, overrides) => {
     const merged = { ...textObj(targetKind), ...overrides };
-    const liveState = targetKind === 'bannerTopTitle' ? { ...state, bannerTop: { ...state.bannerTop, topText: merged } }
-      : targetKind === 'bannerTopSub' ? { ...state, bannerTop: { ...state.bannerTop, subText: merged } }
-      : targetKind === 'bannerBotTitle' ? { ...state, bannerBottom: { ...state.bannerBottom, topText: merged } }
-      : targetKind === 'bannerBotSub' ? { ...state, bannerBottom: { ...state.bannerBottom, subText: merged } }
-      : { ...state, [targetKind === 'top' ? 'topText' : 'bottomText']: merged };
+    const liveState = { ...state, [targetKind === 'top' ? 'topText' : 'bottomText']: merged };
     return getTextRegions(liveState, liveState.templateStyle, forceText)[targetKind];
   };
   const setText = (kind, value) => {
-    if      (kind === 'bannerTopTitle') bannerSource('top').topText.text    = value;
-    else if (kind === 'bannerTopSub')   bannerSource('top').subText.text    = value;
-    else if (kind === 'bannerBotTitle') bannerSource('bottom').topText.text = value;
-    else if (kind === 'bannerBotSub')   bannerSource('bottom').subText.text = value;
-    else {
-      const obj = editing ? HS.editingDraft : HS;
-      const k = kind === 'top' ? 'topText' : 'bottomText';
-      obj[k] = { ...obj[k], text: value };
+    const obj = editing ? HS.editingDraft : HS;
+    const k = kind === 'top' ? 'topText' : 'bottomText';
+    obj[k] = { ...obj[k], text: value };
+    // Per-variation overrides (HS.editingDraft) aren't part of the Step-1
+    // template-switch carry-over logic, so only the main design state counts.
+    if (!editing) {
+      const slot = kind === 'top' ? 'primary' : 'secondary';
+      HS.captionsEdited[slot] = true;
     }
   };
   // Same idea as setText but for font/size/color/align — used by the on-canvas
   // toolbar (setText's text-only path stays separate since inline typing has
   // its own commit flow).
   const setProp = (kind, prop, value) => {
-    if      (kind === 'bannerTopTitle') bannerSource('top').topText[prop]    = value;
-    else if (kind === 'bannerTopSub')   bannerSource('top').subText[prop]    = value;
-    else if (kind === 'bannerBotTitle') bannerSource('bottom').topText[prop] = value;
-    else if (kind === 'bannerBotSub')   bannerSource('bottom').subText[prop] = value;
-    else {
-      const obj = editing ? HS.editingDraft : HS;
-      const k = kind === 'top' ? 'topText' : 'bottomText';
-      obj[k] = { ...obj[k], [prop]: value };
-    }
+    const obj = editing ? HS.editingDraft : HS;
+    const k = kind === 'top' ? 'topText' : 'bottomText';
+    obj[k] = { ...obj[k], [prop]: value };
   };
   // Live: re-render the preview only (re-runs this wiring, which restores the
   // input below). Final: also refresh the side controls.
@@ -876,25 +807,14 @@ export function wireCanvasTextEditing(previewEl) {
     // contenteditable (flex-centered) so the text wraps and stays vertically
     // centered in place — it doesn't jump to the top the way a textarea would.
     const input = document.createElement('div');
-    // Banner-hosted title/sub keep the SVG as their display layer (input text
-    // stays transparent), so their selection highlight must stay invisible too
-    // (see .canvas-edit-input-ghost::selection) — otherwise selecting text would
-    // briefly reveal a misaligned duplicate on top of the SVG copy (the halo).
-    const isBanner = kind.startsWith('banner');
-    input.className = 'canvas-edit-input' + (isBanner ? ' canvas-edit-input-ghost' : '');
+    input.className = 'canvas-edit-input';
     input.contentEditable = 'true';
-    input.dataset.ph = kind === 'top' ? 'Sponsored by…'
-      : kind === 'bottom' ? 'Club name, tagline…'
-      : kind === 'bannerTopTitle' || kind === 'bannerBotTitle' ? 'Sponsored by…'
-      : 'Subtitle…';
+    input.dataset.ph = kind === 'top' ? 'Sponsored by…' : 'Club name, tagline…';
     input.textContent = t.text || '';
-    // Top/bottom bands hide their SVG copy while editing (no halo), so the
-    // input itself must show the real text color. Banner-hosted title/sub
-    // still rely on the SVG as the display layer, so their input stays
-    // transparent — only the cursor and selection highlight come from the HTML side.
+    // The SVG copy of this band is hidden while editing (no halo), so the
+    // input itself must show the real text color.
     const textColor = textObj(kind).color || '#111110';
-    const editColor = isBanner ? 'color:transparent;' : '';
-    input.style.cssText = `width:100%;height:100%;box-sizing:border-box;outline:none;display:flex;align-items:center;${fontStyle(kind)}${editColor}caret-color:${textColor};`;
+    input.style.cssText = `width:100%;height:100%;box-sizing:border-box;outline:none;display:flex;align-items:center;${fontStyle(kind)}caret-color:${textColor};`;
     // The SVG text for this band is hidden while editing (no halo), so the live
     // editor sits over the band background without needing an opaque cover.
     // Only the hotspot is replaced — the resize-corner handles are siblings
@@ -961,86 +881,42 @@ export function wireCanvasTextEditing(previewEl) {
 
   Object.entries(regions).forEach(([kind, rect]) => {
     const t = textObj(kind);
-    const isBanner = kind.startsWith('banner');
     const hasText = !!(t.text && t.text.trim());
     const isActive = UI.canvasEdit?.kind === kind;
     const zone = document.createElement('div');
     // hs-tl-overlay reuses the free text-layer's hover/selected border + the
     // resize-corner hover-reveal CSS (same purple `--guides` selected color).
-    zone.className = 'canvas-edit-zone hs-tl-overlay' + (isBanner ? ' is-banner' : '') + (isActive ? ' selected' : '');
+    zone.className = 'canvas-edit-zone hs-tl-overlay' + (isActive ? ' selected' : '');
     zone.dataset.kind = kind;
-    // Banner band is draggable → grab hand on the empty box; text bands are
-    // purely editable → text cursor across the band.
-    // Empty (non-banner) text bands get a subtle grey background so the zone
-    // is visible. Banner-hosted text never gets one — it always relies solely
-    // on the SVG as its display layer, even before any text has been typed.
-    const zoneBg = (!isBanner && !hasText) ? 'background:rgba(0,0,0,0.05);border-radius:6px;' : '';
-    // Banners always center their content; body text zones match the text alignment
-    // so the hotspot / editor sits at the same edge as the rendered SVG text.
-    const zoneJc = isBanner ? 'center' : alignJc(t.align || 'center');
-    zone.style.cssText = `position:absolute;left:${pct(rect.x, HS_W)};top:${pct(rect.y, HS_H)};width:${pct(rect.w, HS_W)};height:${pct(rect.h, HS_H)};z-index:3;cursor:${isBanner ? 'default' : 'text'};display:flex;align-items:center;justify-content:${zoneJc};${zoneBg}`;
-    if (isBanner) zone.addEventListener('click', e => {
-      if (!e.target.closest('.canvas-edit-hotspot')) {
-        const menuKey = kind.startsWith('bannerTop') ? 'bannerTop' : 'bannerBottom';
-        if (!editing) window.openHsMenuSection?.(menuKey);
-      }
-    });
+    // Empty text bands get a subtle grey background so the zone is visible.
+    const zoneBg = !hasText ? 'background:rgba(0,0,0,0.05);border-radius:6px;' : '';
+    // Zones match the text alignment so the hotspot / editor sits at the same
+    // edge as the rendered SVG text.
+    const zoneJc = alignJc(t.align || 'center');
+    zone.style.cssText = `position:absolute;left:${pct(rect.x, HS_W)};top:${pct(rect.y, HS_H)};width:${pct(rect.w, HS_W)};height:${pct(rect.h, HS_H)};z-index:3;cursor:text;display:flex;align-items:center;justify-content:${zoneJc};${zoneBg}`;
 
     // Hotspot over the text. Top/bottom bands hide their SVG copy (see
     // hideText) and use this element as the only visual, so hover/idle/drag
     // states all show real text — needed for the corner-resize handles below
-    // to scale it live. Banner-hosted title/sub still render via the SVG, so
-    // their hotspot stays transparent (I-beam hit-box only). Empty (non-banner)
-    // bands show the "Write Here..." placeholder in a muted grey.
+    // to scale it live. Empty bands show the "Write Here..." placeholder in a
+    // muted grey.
     const hot = document.createElement('div');
     hot.className = 'canvas-edit-hotspot';
-    const hotColor = isBanner ? 'transparent' : (hasText ? (t.color || '#111110') : 'rgba(0,0,0,0.28)');
+    const hotColor = hasText ? (t.color || '#111110') : 'rgba(0,0,0,0.28)';
     hot.style.cssText = `max-width:96%;cursor:text;${fontStyle(kind)}color:${hotColor};`;
-    const phText = kind === 'top' ? 'Sponsored by…'
-      : kind === 'bottom' ? 'Club name, tagline…'
-      : kind === 'bannerTopTitle' || kind === 'bannerBotTitle' ? 'Sponsored by…'
-      : 'Subtitle…';
+    const phText = kind === 'top' ? 'Sponsored by…' : 'Club name, tagline…';
     hot.textContent = hasText ? t.text : phText;
     const startEdit = e => {
       e.stopPropagation();
       if (UI.tlJustDragged || zone.querySelector('.canvas-edit-input')) return;
       UI.canvasEdit = { kind, caret: null };
-      // Only the banner section still has a sidebar panel (height/background/
-      // spacing) — plain top/bottom text has no sidebar section anymore, all
-      // its editing lives on the canvas.
-      if (!editing && isBanner) window.openHsMenuSection?.(kind.startsWith('bannerTop') ? 'bannerTop' : 'bannerBottom');
       enterEdit(zone, kind);
     };
     hot.addEventListener('pointerdown', e => e.stopPropagation());
     hot.addEventListener('click', startEdit);
     zone.appendChild(hot);
-    // Clicking the empty area of a (non-draggable) text band also edits it.
-    if (!isBanner) zone.addEventListener('click', startEdit);
-
-    // Hover affordance on a banner's title: offers to add a subtitle below it,
-    // only while there isn't one yet (and one isn't already being added).
-    if (isBanner && (kind === 'bannerTopTitle' || kind === 'bannerBotTitle') && hasText) {
-      const which = kind === 'bannerTopTitle' ? 'top' : 'bottom';
-      const subKind = which === 'top' ? 'bannerTopSub' : 'bannerBotSub';
-      if (!regions[subKind]) {
-        const banner = which === 'top' ? state.bannerTop : state.bannerBottom;
-        const { titleY, titleH } = bannerTitleSubSplit(banner, rect, false);
-        const localTop = Math.min(92, (titleY + titleH - rect.y) / rect.h * 100);
-        const addBtn = document.createElement('button');
-        addBtn.type = 'button';
-        addBtn.className = 'hs-banner-add-sub';
-        addBtn.style.top = localTop.toFixed(2) + '%';
-        addBtn.textContent = '+ Add subtitle';
-        addBtn.addEventListener('pointerdown', e => e.stopPropagation());
-        addBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          UI.canvasEdit = { kind: subKind, caret: null };
-          if (!editing) window.openHsMenuSection?.(which === 'top' ? 'bannerTop' : 'bannerBottom');
-          rerenderFinal();
-        });
-        zone.appendChild(addBtn);
-      }
-    }
+    // Clicking the empty area of the text band also edits it.
+    zone.addEventListener('click', startEdit);
 
     // Edge handles — drag either side to adjust the box width. The box is
     // always centered within the sign's margins (there's no stored x position,
@@ -1081,11 +957,8 @@ export function wireCanvasTextEditing(previewEl) {
     // Corner handles — drag outward to grow font size (and the box width in
     // the same proportion), inward to shrink. Same mechanic (and CSS) as the
     // free text-layer resize corners; only revealed on hover/selected via the
-    // shared .hs-tl-overlay CSS. Banner-hosted title/sub-text skips these —
-    // its own toolbar slider controls font size, and the width-only edge
-    // handles above cover resizing, so a duplicate corner control is just
-    // visual clutter on top of the banner band.
-    if (!isBanner) {
+    // shared .hs-tl-overlay CSS.
+    {
       const makeCorner = (cls, xSign, ySign) => {
         const ch = document.createElement('div');
         ch.className = `hs-tl-resize-corner ${cls}`;

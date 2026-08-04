@@ -1,15 +1,16 @@
-import { HS, UI, eyedropperBtn, mergeBanner } from './state.js';
+import { HS, UI, defaultCaptionsEdited, eyedropperBtn, mergeBanner } from './state.js';
 import './text-layers.js';
 import { goStep } from './app.js';
-import { renderBannerSection, wireBannerHeightHandles, wireBannerSpacingHandles, wireCanvasTextEditing, wireElementDrag, wireQuickAddHover } from './banner.js';
+import { clearDockHighlight, getDockedSiblings, hitTestDockZone, renderBannerSection, showDockHighlight, syncDockedLayerOverlays, wireBannerHeightHandles, wireBannerSpacingHandles, wireCanvasTextEditing, wireElementDrag } from './banner.js';
 import { applyTlSlotImgStyle, openTlLibPicker, openTlSidePanel, redrawTplPreview, renderTemplateLogoControls, renderTplSlotBody, snapTlSlotsToDefaults, tlSource, wireTlSlotFreeDrag } from './template-logos.js';
 import { applyHsStep1Zoom, initHsStep1Canvas } from './var-canvas.js';
 import { cropSvgToArtwork } from './logo-utils.js';
 import { saveDraftInternal } from './export.js';
-import { HS_DEFAULT_TEMPLATES, HS_FONTS, HS_H, HS_TEMPLATES, HS_W, emptyBanner, emptyTemplateLogos } from '../hole-sign-data.js';
-import { escXml, getBannerRect, getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
+import { HS_DEFAULT_TEMPLATES, HS_FONTS, HS_H, HS_TEMPLATES, HS_W, emptyBanner, emptyTemplateLogos, migrateBannerCaptions } from '../hole-sign-data.js';
+import { dockedLayerPositions, dockedLayers, escXml, getBannerRect, getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
 import { wrapText } from '../text-utils.js';
 import { uploadLogo } from '../supabase.js';
+import { fileTypeLabel, isDisplayableImage } from '../media-utils.js';
 
 export function buildBackgroundSection() {
   const bg = HS.background;
@@ -142,13 +143,27 @@ export function buildMyTemplatesSection() {
 }
 
 // One row in an options list. `hint` may contain HTML (e.g. a swatch).
-// `handler` is the global fn invoked with the section key on click.
-export function menuRow(key, label, hint, handler = 'openHsMenu') {
+// `handler` is the global fn invoked with the section key on click. `icon` is
+// an optional fa-solid class (or space-separated classes) shown before the label.
+export function menuRow(key, label, hint, handler = 'openHsMenu', icon = '') {
+  const iconHtml = icon ? `<i class="fa-solid ${icon} hs-menu-row-icon" aria-hidden="true"></i>` : '';
   return `
     <button class="hs-menu-row" onclick="${handler}('${key}')">
-      <span class="hs-menu-row-label">${label}</span>
+      ${iconHtml}<span class="hs-menu-row-label">${label}</span>
       <span class="hs-menu-row-hint">${hint}</span>
       <span class="hs-menu-row-chev"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></span>
+    </button>`;
+}
+
+// An "add new" row — unlike menuRow() (which drills into a submenu), this
+// performs the add immediately (enable a banner, add a text/image layer),
+// so it has no hint/chevron, just a label. `icon` is an optional fa-solid
+// class (or space-separated classes) shown before the label.
+function addRow(label, onclick, icon = '') {
+  const iconHtml = icon ? `<i class="fa-solid ${icon} hs-menu-row-icon" aria-hidden="true"></i>` : '';
+  return `
+    <button class="hs-menu-row hs-menu-row-add" onclick="${onclick}">
+      ${iconHtml}<span class="hs-menu-row-label">${label}</span>
     </button>`;
 }
 
@@ -160,12 +175,18 @@ export function renderDesignMenuList(activeTmpl) {
     ? `<span class="hs-menu-swatch" style="background:${escXml(bg.color)}"></span>`
     : (bg.imageUrl ? 'Image' : 'No image');
   rows.push(menuRow('background', 'Background', bgHint));
-  rows.push(menuRow('bannerTop',    'Top banner',    HS.bannerTop?.enabled    ? 'On' : 'Off'));
-  rows.push(menuRow('bannerBottom', 'Bottom banner', HS.bannerBottom?.enabled ? 'On' : 'Off'));
-  if (activeTmpl.id !== 'hole-sign-logo-only') {
-    const c = HS.templateLogos?.count ?? 0;
-    rows.push(menuRow('logos', 'Template logos', c ? `${c} logo${c > 1 ? 's' : ''}` : 'Off'));
-  }
+
+  // A banner already on shows as a normal drill-in row (hint "On") so it can
+  // be switched back off from inside that same section's toggle — matches
+  // the per-variation editor's equivalent rows (var-editor.js).
+  rows.push(HS.bannerTop?.enabled
+    ? menuRow('bannerTop', 'Top banner', 'On', 'openHsMenu', 'fa-window-maximize')
+    : addRow('Top banner', "quickAdd('banner','top')", 'fa-window-maximize'));
+  rows.push(HS.bannerBottom?.enabled
+    ? menuRow('bannerBottom', 'Bottom banner', 'On', 'openHsMenu', 'fa-window-maximize hs-icon-flip')
+    : addRow('Bottom banner', "quickAdd('banner','bottom')", 'fa-window-maximize hs-icon-flip'));
+  rows.push(addRow('Text', 'addTextLayer()', 'fa-font'));
+  rows.push(addRow('Images', 'addTplImage()', 'fa-image'));
   return `<div class="hs-menu-list">${rows.join('')}</div>`;
 }
 
@@ -228,8 +249,14 @@ export function renderStep1() {
   const panel = document.getElementById('panel-1');
 
   // ── Onboarding: full-panel template picker for brand-new projects ──────────
+  // Shows every starting point available in the in-project "Template" menu
+  // (buildTemplateSection/buildMyTemplatesSection below): structural layouts
+  // (HS_TEMPLATES), styled starter designs (HS_DEFAULT_TEMPLATES), and this
+  // browser's saved "My templates" (localStorage) — so nothing added to any
+  // of those three sources needs a matching update here.
   if (UI.hsOnboarding) {
     const defaultState = { ...HS_BUILTIN_DEFAULTS, templateLogos: emptyTemplateLogos() };
+    const customs = loadCustomTemplates();
     panel.innerHTML = `
       <div class="hs-ob-wrap">
         <div class="hs-ob-header">
@@ -245,18 +272,44 @@ export function renderStep1() {
                 <div class="hs-ob-desc">${t.description}</div>
               </div>
             </div>`).join('')}
+          ${HS_DEFAULT_TEMPLATES.map(t => `
+            <div class="hs-ob-card" onclick="pickOnboardingDefaultTemplate('${t.id}')">
+              <div class="hs-ob-thumb" id="hs-ob-dtmpl-${t.id}"></div>
+              <div class="hs-ob-info">
+                <div class="hs-ob-name">${escXml(t.name)}</div>
+              </div>
+            </div>`).join('')}
         </div>
+        ${customs.length ? `
+          <div class="hs-ob-subheader">My templates</div>
+          <div class="hs-ob-grid">
+            ${customs.map(t => `
+              <div class="hs-ob-card" onclick="pickOnboardingCustomTemplate('${t.id}')">
+                <div class="hs-ob-thumb" id="hs-ob-ctmpl-${t.id}"></div>
+                <div class="hs-ob-info">
+                  <div class="hs-ob-name">${escXml(t.name)}</div>
+                </div>
+              </div>`).join('')}
+          </div>` : ''}
       </div>`;
     HS_TEMPLATES.forEach(t => {
       const el = document.getElementById('hs-ob-' + t.id);
       if (el) renderHoleSignInto(el, defaultState, { templateId: t.id });
     });
+    HS_DEFAULT_TEMPLATES.forEach(t => {
+      const el = document.getElementById('hs-ob-dtmpl-' + t.id);
+      if (el) renderHoleSignInto(el, t, { templateId: t.templateStyle });
+    });
+    customs.forEach(t => {
+      const el = document.getElementById('hs-ob-ctmpl-' + t.id);
+      if (el) renderHoleSignInto(el, t, { templateId: t.templateStyle });
+    });
     return;
   }
 
   const activeTmpl = HS_TEMPLATES.find(t => t.id === HS.templateStyle) || HS_TEMPLATES[0];
-  // A section may have become unavailable (e.g. logo-only template hides text).
-  if (UI.hsMenu === 'logos' && activeTmpl.id === 'hole-sign-logo-only') UI.hsMenu = null;
+  // A section may have become unavailable (e.g. a template with no fixed
+  // top/bottom caption text).
   if ((UI.hsMenu === 'top' || UI.hsMenu === 'bottom') && !activeTmpl.supportsText) UI.hsMenu = null;
   if (UI.hsMenu === 'banner') UI.hsMenu = 'bannerTop'; // migrate stale key
 
@@ -408,7 +461,13 @@ export function applyBuiltInDefaults() {
   HS.bottomText = { ...HS_BUILTIN_DEFAULTS.bottomText };
   HS.bannerTop    = emptyBanner();
   HS.bannerBottom = emptyBanner();
+  // Built-in templates carry no banner captions of their own — drop any
+  // docked layers left over from whatever template was active before (their
+  // text, if user-edited, is carried forward by captureUserCaptions/
+  // restoreUserCaptions in setHsTemplate, into HS.topText/HS.bottomText).
+  HS.textLayers = (HS.textLayers || []).filter(l => !l.dock);
   HS.templateLogos = emptyTemplateLogos();
+  HS.captionsEdited = defaultCaptionsEdited();
 }
 
 export function hasBuiltInTemplateChanges() {
@@ -420,17 +479,37 @@ export function hasBuiltInTemplateChanges() {
       || (HS.templateLogos?.count ?? 0) !== 0;
 }
 
+// Writes text into the Nth docked layer of a banner zone (dockedLayers, in
+// dockOrder — see hole-sign-render.js), creating one (with sensible default
+// styling) if it doesn't exist yet. Docked layers replaced the old fixed
+// bannerTop/bannerBottom.topText/subText slots, so a banner's "primary"/"sub"
+// caption is now just the 1st/2nd docked free text layer in that zone.
+function setDockedCaption(which, index, text) {
+  const layers = dockedLayers(HS, which);
+  if (layers[index]) { layers[index].text = text; return; }
+  if (!Array.isArray(HS.textLayers)) HS.textLayers = [];
+  HS.textLayers.push({
+    id: 'tl-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+    text, font: index === 0 ? 'dm-serif' : 'dm-sans', size: index === 0 ? 260 : 140,
+    color: '#111110', align: 'center', dock: which, dockOrder: index, aboveFrame: true,
+  });
+}
+
 // Swapping templates changes *structure* (background, banners, logo layout)
 // — the user's own caption text shouldn't have to be retyped just because
 // the surrounding template changed. Capture it beforehand (falling back to
-// whichever slot — plain text band vs. banner — currently holds it, since
-// different templates put the same caption in different places)...
+// whichever slot — plain text band vs. banner dock — currently holds it,
+// since different templates put the same caption in different places). Only
+// a slot the user has actually typed into (HS.captionsEdited) is captured —
+// a template's own placeholder/default text (e.g. "Sponsored By") is never
+// treated as user text, so it doesn't leak into the next template.
 function captureUserCaptions() {
+  const e = HS.captionsEdited || {};
   return {
-    primary:      HS.topText?.text?.trim()           || HS.bannerTop?.topText?.text?.trim()    || '',
-    primarySub:   HS.bannerTop?.subText?.text?.trim() || '',
-    secondary:    HS.bottomText?.text?.trim()          || HS.bannerBottom?.topText?.text?.trim() || '',
-    secondarySub: HS.bannerBottom?.subText?.text?.trim() || '',
+    primary:      e.primary      ? (HS.topText?.text?.trim()    || dockedLayers(HS, 'top')[0]?.text?.trim()    || '') : '',
+    primarySub:   e.primarySub   ? (dockedLayers(HS, 'top')[1]?.text?.trim()    || '') : '',
+    secondary:    e.secondary    ? (HS.bottomText?.text?.trim() || dockedLayers(HS, 'bottom')[0]?.text?.trim() || '') : '',
+    secondarySub: e.secondarySub ? (dockedLayers(HS, 'bottom')[1]?.text?.trim() || '') : '',
   };
 }
 
@@ -438,17 +517,27 @@ function captureUserCaptions() {
 // actually uses. Only overwrites when the user had actually typed something
 // — an untouched template's own placeholder/blank text is left alone, so a
 // pristine template swap still looks like that template, not a mash-up.
+// Re-marks the restored slot as edited so it keeps carrying forward through
+// further template switches.
 function restoreUserCaptions(prev) {
   if (prev.primary) {
-    if (HS.bannerTop?.enabled) HS.bannerTop.topText.text = prev.primary;
+    if (HS.bannerTop?.enabled) setDockedCaption('top', 0, prev.primary);
     else HS.topText.text = prev.primary;
+    HS.captionsEdited.primary = true;
   }
-  if (prev.primarySub && HS.bannerTop?.enabled) HS.bannerTop.subText.text = prev.primarySub;
+  if (prev.primarySub && HS.bannerTop?.enabled) {
+    setDockedCaption('top', 1, prev.primarySub);
+    HS.captionsEdited.primarySub = true;
+  }
   if (prev.secondary) {
-    if (HS.bannerBottom?.enabled) HS.bannerBottom.topText.text = prev.secondary;
+    if (HS.bannerBottom?.enabled) setDockedCaption('bottom', 0, prev.secondary);
     else HS.bottomText.text = prev.secondary;
+    HS.captionsEdited.secondary = true;
   }
-  if (prev.secondarySub && HS.bannerBottom?.enabled) HS.bannerBottom.subText.text = prev.secondarySub;
+  if (prev.secondarySub && HS.bannerBottom?.enabled) {
+    setDockedCaption('bottom', 1, prev.secondarySub);
+    HS.captionsEdited.secondarySub = true;
+  }
 }
 
 window.pickOnboardingTemplate = function (templateId) {
@@ -456,6 +545,16 @@ window.pickOnboardingTemplate = function (templateId) {
   HS.templateStyle = templateId;
   applyBuiltInDefaults();
   renderStep1();
+};
+
+window.pickOnboardingDefaultTemplate = function (id) {
+  UI.hsOnboarding = false;
+  window.applyDefaultTemplate(id);
+};
+
+window.pickOnboardingCustomTemplate = function (id) {
+  UI.hsOnboarding = false;
+  window.applyCustomTemplate(id);
 };
 
 window.setHsTemplate = function (templateId) {
@@ -488,6 +587,16 @@ window.hideSaveTmplForm = function () {
   if (form) form.style.display = 'none';
 };
 
+// Snapshot of a banner zone's docked layers, in the same partial-spec shape
+// migrateBannerCaptions() produces (no `id` — a fresh one is assigned when
+// the template is later applied).
+function snapshotDockedLayerSpecs(which) {
+  return dockedLayers(HS, which).map(l => ({
+    text: l.text, font: l.font, size: l.size, color: l.color, align: l.align, w: l.w,
+    dock: which, dockOrder: l.dockOrder ?? 0, aboveFrame: l.aboveFrame ?? true,
+  }));
+}
+
 window.confirmSaveTemplate = function () {
   const name = document.getElementById('hsTmplNameInput')?.value.trim();
   if (!name) return;
@@ -501,6 +610,8 @@ window.confirmSaveTemplate = function () {
     bottomText:    { ...HS.bottomText },
     bannerTop:     mergeBanner(HS.bannerTop),
     bannerBottom:  mergeBanner(HS.bannerBottom),
+    bannerTopTextLayers:    snapshotDockedLayerSpecs('top'),
+    bannerBottomTextLayers: snapshotDockedLayerSpecs('bottom'),
     templateLogos: cloneTemplateLogos(HS.templateLogos),
   });
   saveCustomTemplates(list);
@@ -512,6 +623,26 @@ window.deleteCustomTemplate = function (id) {
   renderStep1();
 };
 
+// Template banners no longer carry caption text of their own (see emptyBanner
+// in hole-sign-data.js) — a template's banner captions are docked free text
+// layers instead, seeded from `bannerTopTextLayers`/`bannerBottomTextLayers`
+// (new-shape templates) or migrated from a legacy `bannerTop.topText`/
+// `subText` pair (older "My templates" entries saved before this change).
+// Existing docked layers belong to the *previous* template and are dropped
+// first — captureUserCaptions/restoreUserCaptions (called by the two
+// `apply*Template` functions below) is what carries real user text forward.
+function replaceBannerDockSeeds(tmpl) {
+  HS.textLayers = (HS.textLayers || []).filter(l => !l.dock);
+  ['top', 'bottom'].forEach(which => {
+    const key = which === 'top' ? 'bannerTopTextLayers' : 'bannerBottomTextLayers';
+    const legacyBanner = which === 'top' ? tmpl.bannerTop : tmpl.bannerBottom;
+    const specs = Array.isArray(tmpl[key]) ? tmpl[key] : migrateBannerCaptions(legacyBanner, which);
+    specs.forEach(spec => {
+      HS.textLayers.push({ ...spec, id: 'tl-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7) });
+    });
+  });
+}
+
 window.applyCustomTemplate = function (id) {
   const tmpl = loadCustomTemplates().find(t => t.id === id);
   if (!tmpl) return;
@@ -522,7 +653,9 @@ window.applyCustomTemplate = function (id) {
   HS.bottomText    = { ...tmpl.bottomText };
   HS.bannerTop    = mergeBanner(tmpl.bannerTop    || (tmpl.banner?.position !== 'bottom' ? tmpl.banner : null));
   HS.bannerBottom = mergeBanner(tmpl.bannerBottom || (tmpl.banner?.position === 'bottom' ? tmpl.banner : null));
+  replaceBannerDockSeeds(tmpl);
   HS.templateLogos = cloneTemplateLogos(tmpl.templateLogos);
+  HS.captionsEdited = defaultCaptionsEdited();
   restoreUserCaptions(prev);
   HS.templateLogos.slots.forEach(s => {
     if (s.logoSrc && s.logoArtworkBounds) {
@@ -547,7 +680,9 @@ window.applyDefaultTemplate = function (id) {
   HS.bottomText    = { ...tmpl.bottomText };
   HS.bannerTop     = mergeBanner(tmpl.bannerTop);
   HS.bannerBottom  = mergeBanner(tmpl.bannerBottom);
+  replaceBannerDockSeeds(tmpl);
   HS.templateLogos = cloneTemplateLogos(tmpl.templateLogos);
+  HS.captionsEdited = defaultCaptionsEdited();
   restoreUserCaptions(prev);
   renderStep1();
 };
@@ -561,6 +696,7 @@ export function cloneTemplateLogos(tl) {
     hAlign: tl.hAlign || 'spread',
     stack: tl.stack || 'horizontal',
     slots: (tl.slots || []).map(s => ({ ...s, logoSrcTight: undefined })),
+    ...(tl.customPositions ? { customPositions: true } : {}),
   };
 }
 
@@ -605,13 +741,17 @@ export function updateStep1Preview() {
   ph.style.cssText = `left:${pctP(lz.x, HS_W)};top:${pctP(lz.y, HS_H)};width:${pctP(lz.w, HS_W)};height:${pctP(lz.h, HS_H)};pointer-events:none;`;
   ph.innerHTML = '<span class="hs-ph-label">Variation logo</span>';
   el.appendChild(ph);
-  wireQuickAddHover(el);
   // Clicking the canvas background (not on an interactive element) closes the
-  // current submenu and returns to the main menu list.
+  // current submenu, returns to the main menu list, and deselects any
+  // selected image(s) — including a multi-selection, so clicking off two
+  // shift-selected images deselects both, not just closes their panel.
   el.addEventListener('click', e => {
-    if (!UI.hsMenu) return;
-    const onInteractive = e.target.closest('.canvas-edit-zone,.tl-slot,.band-drag,.dzone,.qa-bar,.hs-tl-overlay,.hs-banner-height-handle,.hs-banner-spacing-handle');
-    if (!onInteractive) window.closeHsMenu(true);
+    const onInteractive = e.target.closest('.canvas-edit-zone,.tl-slot,.band-drag,.dzone,.hs-tl-overlay,.hs-banner-height-handle,.hs-banner-spacing-handle');
+    if (onInteractive) return;
+    const hadSelection = UI.tlSelectedIdxs.size > 0;
+    if (hadSelection) UI.tlSelectedIdxs.clear();
+    if (UI.hsMenu) window.closeHsMenu(true);
+    else if (hadSelection) updateStep1Preview();
   }, { capture: false });
 }
 
@@ -633,95 +773,118 @@ export function stripSlotImages(state) {
 export function paintTplSlotOverlays(parentEl, state) {
   const tl = state.templateLogos;
   if (!tl || !tl.count) return;
-  if (state.templateStyle === 'hole-sign-logo-only') return;
   const slots = getTemplateLogoSlots(state, state.templateStyle);
   const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
   slots.forEach((rect, i) => {
     const slot = tl.slots[i];
     const overlay = document.createElement('div');
-    overlay.className = 'tl-slot' + (slot?.logoSrc ? ' has-logo' : '') + (UI.tlSelectedIdx === i ? ' selected' : '');
+    overlay.className = 'tl-slot' + (slot?.logoSrc ? ' has-logo' : '') + (UI.tlSelectedIdxs.has(i) ? ' selected' : '');
     overlay.style.cssText = `position:absolute;left:${pct(rect.x, HS_W)};top:${pct(rect.y, HS_H)};width:${pct(rect.w, HS_W)};height:${pct(rect.h, HS_H)};`;
     overlay.dataset.idx = i;
 
-    // Resize handle present on all slots so empty ones are also draggable.
-    const handle = document.createElement('div');
-    handle.className = 'tl-slot-handle';
-    overlay.appendChild(handle);
+    // Corner resize handles present on all slots so empty ones are also
+    // draggable — matches the text-layer's 4-corner white-square handle look.
+    const handles = {};
+    ['tl', 'tr', 'bl', 'br'].forEach(corner => {
+      const h = document.createElement('div');
+      h.className = 'tl-slot-handle ' + corner;
+      handles[corner] = h;
+      overlay.appendChild(h);
+    });
+
+    // Hover-only remove button, top-right corner — shown on every slot
+    // (filled or still-empty), since an empty slot is still a whole added
+    // image component (e.g. the library picker was dismissed before a logo
+    // was picked) and should be removable without having to assign one first.
+    const makeRemoveBtn = () => {
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'tl-slot-mini-btn tl-slot-remove';
+      removeBtn.title = 'Remove';
+      removeBtn.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+      removeBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        window.removeTlSlot(i);
+      });
+      return removeBtn;
+    };
 
     if (slot?.logoSrc) {
       if (slot.bg && slot.bg !== 'transparent') overlay.style.background = slot.bg;
       if (slot.border?.color && slot.ratio !== 'fit') overlay.style.border = `1.5px solid ${slot.border.color}`;
-      const img = document.createElement('img');
-      img.src = slot.logoSrcTight || slot.logoSrc;
-      img.alt = '';
-      img.draggable = false;
-      img.className = 'tl-slot-img';
-      applyTlSlotImgStyle(img, slot);
-      overlay.appendChild(img);
-      const gh = document.createElement('div'); gh.className = 'tl-snap-guide h'; overlay.appendChild(gh);
-      const gv = document.createElement('div'); gv.className = 'tl-snap-guide v'; overlay.appendChild(gv);
+      // Clip only the image to the slot's shape (not the whole overlay), so the
+      // corner handles can sit outside the slot's edge without being cut off.
+      const imgClip = document.createElement('div');
+      imgClip.className = 'tl-slot-imgclip';
+      const slotSrc = slot.logoSrcTight || slot.logoSrc;
+      let slotVisual;
+      if (isDisplayableImage(slotSrc)) {
+        slotVisual = document.createElement('img');
+        slotVisual.src = slotSrc;
+        slotVisual.alt = '';
+        slotVisual.draggable = false;
+        slotVisual.className = 'tl-slot-img';
+      } else {
+        slotVisual = document.createElement('div');
+        slotVisual.className = 'tl-slot-img tl-slot-file-badge';
+        slotVisual.textContent = fileTypeLabel(slotSrc);
+      }
+      applyTlSlotImgStyle(slotVisual, slot);
+      imgClip.appendChild(slotVisual);
+      overlay.appendChild(imgClip);
 
-      // Hover actions: Edit opens side panel; ✕ removes
-      const actions = document.createElement('div');
-      actions.className = 'tl-slot-actions';
-      const editBtn = document.createElement('button');
-      editBtn.className = 'tl-slot-act-btn';
-      editBtn.textContent = 'Edit';
-      const delBtn = document.createElement('button');
-      delBtn.className = 'tl-slot-act-btn danger';
-      delBtn.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
-      actions.appendChild(editBtn);
-      actions.appendChild(delBtn);
-      overlay.appendChild(actions);
-      editBtn.addEventListener('click', e => {
+      // Hover-only swap/remove buttons, top-right corner.
+      const hoverActions = document.createElement('div');
+      hoverActions.className = 'tl-slot-hover-actions';
+      const swapBtn = document.createElement('button');
+      swapBtn.className = 'tl-slot-mini-btn';
+      swapBtn.title = 'Swap image';
+      swapBtn.innerHTML = '<i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i>';
+      swapBtn.addEventListener('click', e => {
         e.stopPropagation();
-        UI.tlSelectedIdx = i;
-        if (HS.editingVarId) {
-          UI.hsVarMenuSlotIdx = i;
-          window.openHsVarMenu?.('tplSlot');
-        } else {
-          UI.hsMenuSlotIdx = i;
-          window.openHsMenu?.('tplSlot');
-        }
+        openTlLibPicker(i);
       });
-      delBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        window.removeTlSlot(i);
-      });
-
-      // Size badge — shows slot dimensions as % of sign
-      const badge = document.createElement('div');
-      badge.className = 'tl-slot-size-badge';
-      badge.textContent = `${Math.round(rect.w / HS_W * 100)}% × ${Math.round(rect.h / HS_H * 100)}%`;
-      overlay.appendChild(badge);
+      hoverActions.appendChild(swapBtn);
+      hoverActions.appendChild(makeRemoveBtn());
+      overlay.appendChild(hoverActions);
     } else {
       const ph = document.createElement('div');
       ph.className = 'tl-slot-placeholder';
       ph.innerHTML = '<span><i class="fa-solid fa-plus" aria-hidden="true"></i></span><span class="tl-slot-ph-label">Add logo</span>';
       overlay.appendChild(ph);
+
+      const hoverActions = document.createElement('div');
+      hoverActions.className = 'tl-slot-hover-actions';
+      hoverActions.appendChild(makeRemoveBtn());
+      overlay.appendChild(hoverActions);
     }
 
-    // Wire free drag/resize for all slots. onTap fires on pointerup with no drag.
-    // Double-tap (≤350ms, same slot) opens the visual options menu level.
-    // Single tap navigates to logos section and opens picker on empty slots.
-    wireTlSlotFreeDrag(overlay, handle, i, rect, () => {
-      const now = Date.now();
-      const isDoubleTap = (now - (UI.tlLastTapMs || 0)) < 350 && UI.tlLastTapSlot === i;
-      UI.tlLastTapMs = now;
-      UI.tlLastTapSlot = i;
-      const cur = tlSource().slots[i];
-      if (isDoubleTap && cur?.logoSrc) {
-        UI.tlSelectedIdx = i;
+    // Wire free drag/resize for all slots. onTap fires on pointerup with no
+    // drag: a plain tap selects just this slot and opens its own "Logo
+    // options" panel directly; shift+tap toggles this slot into/out of a
+    // multi-selection — once 2+ slots are selected, the shared "Template
+    // logos" group panel opens instead (dropping back to 1 selected returns
+    // to that slot's own panel).
+    wireTlSlotFreeDrag(overlay, handles, i, slots, (shiftKey) => {
+      if (shiftKey) {
+        if (UI.tlSelectedIdxs.has(i)) UI.tlSelectedIdxs.delete(i);
+        else UI.tlSelectedIdxs.add(i);
+      } else {
+        UI.tlSelectedIdxs = new Set([i]);
+      }
+      const sel = UI.tlSelectedIdxs;
+      if (sel.size >= 2) {
+        if (HS.editingVarId) window.openHsVarMenu?.('logos');
+        else window.openHsMenu?.('logos');
+      } else if (sel.size === 1) {
+        const only = [...sel][0];
         if (HS.editingVarId) {
-          UI.hsVarMenuSlotIdx = i;
+          UI.hsVarMenuSlotIdx = only;
           window.openHsVarMenu?.('tplSlot');
         } else {
-          UI.hsMenuSlotIdx = i;
+          UI.hsMenuSlotIdx = only;
           window.openHsMenu?.('tplSlot');
         }
-      } else {
-        if (!HS.editingVarId) window.openHsMenuSection?.('logos');
-        if (!cur?.logoSrc) openTlLibPicker(i, overlay);
+        if (!shiftKey && !tlSource().slots[i]?.logoSrc) openTlLibPicker(i);
       }
     });
 
@@ -776,19 +939,26 @@ export function paintTextLayerOverlays(parentEl, state) {
   if (!layers.length) return;
   const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
   const { ySnaps, xSnaps } = getSnapTargets(state);
+  // A layer docked to a banner (see hole-sign-data.js/hole-sign-render.js) is
+  // positioned by that banner's computed stack, not its own stored x/y/w.
+  const dockPosByWhich = { top: dockedLayerPositions(state, 'top'), bottom: dockedLayerPositions(state, 'bottom') };
 
   layers.forEach(layer => {
     const sc = parentEl.offsetHeight / HS_H;
     const fontFamily = HS_FONTS.find(f => f.id === layer.font)?.family || "'DM Serif Display', serif";
     const fsPx = Math.max(8, Math.round(layer.size * sc));
     const isActive = UI.activeTextLayerId === layer.id;
+    const dockPos = layer.dock ? dockPosByWhich[layer.dock]?.[layer.id] : null;
+    const boxX = dockPos ? dockPos.x : layer.x;
+    const boxY = dockPos ? dockPos.y : layer.y;
+    const boxW = dockPos ? dockPos.w : (layer.w || Math.round(HS_W * 0.8));
 
     const overlay = document.createElement('div');
-    overlay.className = 'hs-tl-overlay' + (isActive ? ' selected' : '');
+    overlay.className = 'hs-tl-overlay' + (isActive ? ' selected' : '') + (layer.dock ? ' docked' : '');
     overlay.dataset.tlId = layer.id;
     // No fixed height — auto-sizes to text content. Wrapping + font-size changes
     // both flow into height naturally, giving real-time resize feedback.
-    overlay.style.cssText = `position:absolute;left:${pct(layer.x, HS_W)};top:${pct(layer.y, HS_H)};width:${pct(layer.w, HS_W)};`;
+    overlay.style.cssText = `position:absolute;left:${pct(boxX, HS_W)};top:${pct(boxY, HS_H)};width:${pct(boxW, HS_W)};`;
 
     // Permanent text content — the only visual render (SVG copy always hidden).
     // Normal-flow div so the overlay auto-sizes to it; white-space:pre-wrap so
@@ -822,11 +992,21 @@ export function paintTextLayerOverlays(parentEl, state) {
       if (!lh.hasPointerCapture(e.pointerId)) return;
       const sx = parentEl.offsetWidth / HS_W;
       const dx = (e.clientX - lhStartX) / sx;
-      const rightEdge = lhStartLayerX + lhStartW;
-      const newW = Math.max(layer.size, Math.round(lhStartW - dx));
-      layer.x = rightEdge - newW; layer.w = newW;
-      overlay.style.left  = pct(layer.x, HS_W);
-      overlay.style.width = pct(newW, HS_W);
+      if (layer.dock) {
+        // Docked layers are always centered within the banner's margin span
+        // (see fitTextBox) — grow symmetrically from center instead of
+        // sliding just the left edge, so the live drag matches the re-render.
+        const newW = Math.max(layer.size, Math.round(lhStartW - dx * 2));
+        layer.w = newW;
+        const pos = dockedLayerPositions(state, layer.dock)[layer.id];
+        if (pos) { overlay.style.left = pct(pos.x, HS_W); overlay.style.width = pct(pos.w, HS_W); }
+      } else {
+        const rightEdge = lhStartLayerX + lhStartW;
+        const newW = Math.max(layer.size, Math.round(lhStartW - dx));
+        layer.x = rightEdge - newW; layer.w = newW;
+        overlay.style.left  = pct(layer.x, HS_W);
+        overlay.style.width = pct(newW, HS_W);
+      }
     });
     lh.addEventListener('pointerup', () => {
       document.body.style.cursor = '';
@@ -849,9 +1029,17 @@ export function paintTextLayerOverlays(parentEl, state) {
     rh.addEventListener('pointermove', e => {
       if (!rh.hasPointerCapture(e.pointerId)) return;
       const sx = parentEl.offsetWidth / HS_W;
-      const newW = Math.max(layer.size, Math.round(rhStartW + (e.clientX - rhStartX) / sx));
-      layer.w = newW;
-      overlay.style.width = pct(newW, HS_W);
+      const dx = (e.clientX - rhStartX) / sx;
+      if (layer.dock) {
+        const newW = Math.max(layer.size, Math.round(rhStartW + dx * 2));
+        layer.w = newW;
+        const pos = dockedLayerPositions(state, layer.dock)[layer.id];
+        if (pos) { overlay.style.left = pct(pos.x, HS_W); overlay.style.width = pct(pos.w, HS_W); }
+      } else {
+        const newW = Math.max(layer.size, Math.round(rhStartW + dx));
+        layer.w = newW;
+        overlay.style.width = pct(newW, HS_W);
+      }
     });
     rh.addEventListener('pointerup', () => {
       document.body.style.cursor = '';
@@ -870,7 +1058,10 @@ export function paintTextLayerOverlays(parentEl, state) {
         e.stopPropagation();
         ch.setPointerCapture(e.pointerId);
         chStartX = e.clientX; chStartY = e.clientY; chStartSize = layer.size;
-        chStartW = layer.w; chStartLayerX = layer.x;
+        chStartW = layer.w;
+        // A docked layer's real on-screen x is its computed dock position, not
+        // the (possibly stale) stored layer.x — center growth from that instead.
+        chStartLayerX = layer.dock ? (dockedLayerPositions(state, layer.dock)[layer.id]?.x ?? layer.x) : layer.x;
         document.body.style.cursor = getComputedStyle(ch).cursor || 'nwse-resize';
         e.preventDefault();
       });
@@ -927,12 +1118,21 @@ export function paintTextLayerOverlays(parentEl, state) {
     });
 
     let startCX, startCY, startX, startY, didDrag = false;
+    // The zone (if any) this layer is currently docked/hovering-to-dock to
+    // during this drag — re-evaluated every tick, seeded from its dock state
+    // at drag start so hitTestDockZone can apply undock hysteresis correctly.
+    let dockHit = null;
 
     overlay.addEventListener('pointerdown', e => {
       if (e.target.closest('.hs-tl-editor-wrap, .hs-tl-resize-l, .hs-tl-resize-r, .hs-tl-resize-corner')) return;
       overlay.setPointerCapture(e.pointerId);
       startCX = e.clientX; startCY = e.clientY;
-      startX = layer.x;    startY = layer.y;
+      // Start from the layer's current visual box (its computed dock position
+      // if docked, else its stored x/y) so the first move doesn't jump.
+      const dockPos0 = layer.dock ? dockPosByWhich[layer.dock]?.[layer.id] : null;
+      startX = dockPos0 ? dockPos0.x : layer.x;
+      startY = dockPos0 ? dockPos0.y : layer.y;
+      dockHit = layer.dock || null;
       didDrag = false;
       e.preventDefault();
     });
@@ -953,17 +1153,70 @@ export function paintTextLayerOverlays(parentEl, state) {
 
       let nx = Math.round(startX + dx);
       let ny = Math.round(startY + dy);
+
       if (e.shiftKey) {
+        // Shift always means free positioning + edge-snap, regardless of zone
+        // overlap — an explicit "pull this out precisely" escape hatch, so
+        // undock immediately if it was docked.
+        if (dockHit) { dockHit = null; layer.dock = null; clearDockHighlight(parentEl); }
         nx = snapNearest(nx, xSnaps, 200);
         ny = snapNearest(ny, ySnaps, 200);
+        layer.x = nx; layer.y = ny;
+        overlay.style.left = pct(nx, HS_W);
+        overlay.style.top  = pct(ny, HS_H);
+        return;
       }
-      layer.x = nx; layer.y = ny;
-      overlay.style.left = pct(nx, HS_W);
-      overlay.style.top  = pct(ny, HS_H);
+
+      // Hit-test the box's center (not the raw cursor) against the banner
+      // zones — a docked layer can be arbitrarily tall, so center is a more
+      // predictable signal than wherever the user happens to be gripping it.
+      const boxH = overlay.offsetHeight / sy;
+      const cx = nx + (layer.w || 0) / 2;
+      const cy = ny + boxH / 2;
+      const hit = hitTestDockZone(state, cx, cy, dockHit);
+
+      if (hit) {
+        showDockHighlight(parentEl, state, hit);
+        const siblings = getDockedSiblings(state, hit, layer.id);
+        const positions = dockedLayerPositions(state, hit);
+        // Insertion index: first sibling whose stacked box midpoint sits below cy.
+        let index = siblings.length;
+        for (let i = 0; i < siblings.length; i++) {
+          const r = positions[siblings[i].id];
+          if (r && cy < r.y + r.h / 2) { index = i; break; }
+        }
+        if (layer.dock !== hit || (layer.dockOrder ?? 0) !== index) {
+          const ordered = [...siblings];
+          ordered.splice(index, 0, layer);
+          ordered.forEach((l, i) => { l.dockOrder = i; });
+        }
+        layer.dock = hit;
+        dockHit = hit;
+        const freshPositions = dockedLayerPositions(state, hit);
+        const myPos = freshPositions[layer.id];
+        if (myPos) {
+          overlay.style.left  = pct(myPos.x, HS_W);
+          overlay.style.top   = pct(myPos.y, HS_H);
+          overlay.style.width = pct(myPos.w, HS_W);
+        }
+        // Reposition every sibling too, so they visibly shift to make room as
+        // this layer drags past them.
+        siblings.forEach(sib => {
+          const r = freshPositions[sib.id];
+          const el = parentEl.querySelector(`.hs-tl-overlay[data-tl-id="${sib.id}"]`);
+          if (el && r) { el.style.left = pct(r.x, HS_W); el.style.top = pct(r.y, HS_H); el.style.width = pct(r.w, HS_W); }
+        });
+      } else {
+        if (dockHit) { dockHit = null; layer.dock = null; clearDockHighlight(parentEl); }
+        layer.x = nx; layer.y = ny;
+        overlay.style.left = pct(nx, HS_W);
+        overlay.style.top  = pct(ny, HS_H);
+      }
     });
 
     overlay.addEventListener('pointerup', () => {
       document.body.style.cursor = '';
+      clearDockHighlight(parentEl);
       if (didDrag) {
         if (HS.editingVarId) window._hsRenderVariationPreview?.();
         else updateStep1Preview();

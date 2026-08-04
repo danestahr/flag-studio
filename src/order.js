@@ -2,10 +2,11 @@ import './order.css';
 import './icons.js';
 import { COLORS, FLAGS } from './data.js';
 import { createProject, uploadLogo, supabase, sendOrderConfirmation } from './supabase.js';
+import { loadAllFlags } from './svgLoader.js';
+import { applyColors, showGsTagVariant, resolveColors } from './render.js';
+import { isDisplayableImage, fileTypeLabel } from './media-utils.js';
 
-// TEMP: demo mode — bypass required-field validation so the order form can
-// be stepped through without filling everything in. Flip back to `false` after.
-const SKIP_VALIDATION = true;
+const SKIP_VALIDATION = false;
 
 // ── US States ──────────────────────────────────────────────
 const US_STATES = [
@@ -36,25 +37,6 @@ const CA_PROVINCES = [
   {code:'QC',name:'Quebec'},{code:'SK',name:'Saskatchewan'},{code:'YT',name:'Yukon'},
 ];
 
-// ── SVG cache ──────────────────────────────────────────────
-const svgCache = new Map();
-
-async function loadSvg(name) {
-  if (svgCache.has(name)) return svgCache.get(name);
-  try {
-    const res = await fetch('/flags/' + name + '.svg');
-    const text = await res.text();
-    svgCache.set(name, text);
-    return text;
-  } catch (_) {
-    return '';
-  }
-}
-
-function preloadSvgs() {
-  FLAGS.forEach(f => loadSvg(f.name));
-}
-
 // ── State ──────────────────────────────────────────────────
 const O = {
   step: 1,
@@ -69,16 +51,20 @@ const O = {
   // Step 3
   flagStyle: '',
   flagStyleOpen: false,
-  flagPrimaryColor: null,    // { hex, name }
-  primaryColorOpen: false,
-  flagSecondaryColor: null,  // { hex, name }
-  secondaryColorOpen: false,
+  flagColors: {},        // { [zoneId]: { hex, name } | null } — same shape as the
+                          // template design page's zone color map. A zone key
+                          // absent from this object (border) means "match" mode.
+  colorPickerOpen: {},    // { [zoneId]: bool } — which zone pickers are expanded
+  gsTag: true,
+  gsTagMode: 'auto',      // 'auto' | 'dark' | 'light' — same as the design page
   flagSetup: 'same',
   flagQty: 9,
   flagQtyCustom: false,
   designNotes: '',
   // Step 4
-  logoFiles: [],
+  logoFiles: [],   // { file, previewUrl, logoRecord } — logoRecord is null until
+                   // this specific file has been successfully uploaded via
+                   // uploadLogo(); used to make retrying orderSubmit() idempotent.
   // Step 5
   ackDeadline: false,
   ackPricing: false,
@@ -294,24 +280,21 @@ function renderStep2() {
 
 function renderStep3() {
   const e = O.errors;
+  const flag = FLAGS.find(f => f.id === O.flagStyle);
   return `
     <div class="order-title">Design preferences</div>
     <div class="order-sub">Help us understand your vision for the flags.</div>
 
-    <div class="color-pickers-row">
-      <div class="color-picker-col">
-        <div class="form-section-label" style="margin-top:0">Primary color</div>
-        ${renderCollapsibleColorPicker('primary')}
-      </div>
-      <div class="color-picker-col">
-        <div class="form-section-label" style="margin-top:0">Secondary color</div>
-        ${renderCollapsibleColorPicker('secondary')}
-      </div>
-    </div>
-
-    <div class="form-section-label">Flag style</div>
-    ${renderCollapsibleFlagPicker()}
+    <div class="form-section-label" style="margin-top:0">Flag style</div>
+    ${renderFlagStylePicker()}
     ${e.flagStyle ? `<div class="form-error" style="margin-top:6px">${esc(e.flagStyle)}</div>` : ''}
+
+    ${flag
+      ? renderZoneColorSection(flag)
+      : `<div class="form-section-label" style="margin-top:1.5rem">Colors</div>
+         <div class="color-none-label" style="font-style:italic">Select a flag style above to choose colors</div>`}
+
+    ${flag && !flag.noGsTag ? renderGsTagSection() : ''}
 
     <div class="form-section-label" style="margin-top:1.5rem">Flag setup</div>
     <div class="setup-toggle">
@@ -342,7 +325,9 @@ function renderStep4() {
   const e = O.errors;
   const previews = O.logoFiles.map((lf, i) => `
     <div class="logo-preview-item">
-      <img src="${lf.previewUrl}" alt="Logo ${i + 1}">
+      ${isDisplayableImage(lf.file.name)
+        ? `<img src="${lf.previewUrl}" alt="Logo ${i + 1}">`
+        : `<div class="file-type-badge">${fileTypeLabel(lf.file.name)}</div>`}
       <button class="logo-preview-remove" onclick="window.removeLogoFile(${i})" title="Remove"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
     </div>`).join('');
 
@@ -383,10 +368,13 @@ function renderStep5() {
   const setupLabel = O.flagSetup === 'different' ? 'Different front & back' : 'Same front & back';
   const selectedFlag = FLAGS.find(f => f.id === O.flagStyle);
   const styleLabel = selectedFlag ? selectedFlag.name : (O.flagStyle || null);
+  const colorZones = selectedFlag?.colorZones || [];
+  const gsTagLabel = !O.gsTag ? 'Off' : 'On — ' + (O.gsTagMode === 'dark' ? 'Black' : O.gsTagMode === 'light' ? 'White' : 'Auto');
 
   return `
     <div class="order-title">Review &amp; submit</div>
     <div class="order-sub">Acknowledge the following, then confirm your details before submitting.</div>
+    ${e.submit ? `<div class="submit-error-banner">${esc(e.submit)}</div>` : ''}
     ${(() => {
       const dl = calcApprovalDeadline(O.eventDate);
       if (!dl) return '';
@@ -430,8 +418,14 @@ function renderStep5() {
         <button class="rs-edit-btn" onclick="window.editStep(3)">Edit</button>
       </div>
       <div class="rs-row"><span class="rs-label">Style</span><span class="rs-value">${styleLabel ? esc(styleLabel) : '<span style="color:var(--gray-400)">—</span>'}</span></div>
-      <div class="rs-row"><span class="rs-label">Primary</span><span class="rs-value">${colorChip(O.flagPrimaryColor)}</span></div>
-      <div class="rs-row"><span class="rs-label">Secondary</span><span class="rs-value">${colorChip(O.flagSecondaryColor)}</span></div>
+      ${colorZones.map(z => {
+        if (z.id === 'zone-border' && !('zone-border' in O.flagColors)) {
+          const matchLabel = colorZones.some(zz => zz.id === 'zone-secondary') ? 'Secondary Color' : 'Primary Color';
+          return `<div class="rs-row"><span class="rs-label">${esc(z.label || z.id)}</span><span class="rs-value">Matches ${esc(matchLabel)}</span></div>`;
+        }
+        return `<div class="rs-row"><span class="rs-label">${esc(z.label || z.id)}</span><span class="rs-value">${colorChip(O.flagColors[z.id])}</span></div>`;
+      }).join('')}
+      <div class="rs-row"><span class="rs-label">GS Tag</span><span class="rs-value">${esc(gsTagLabel)}</span></div>
       <div class="rs-row"><span class="rs-label">Setup</span><span class="rs-value">${setupLabel}</span></div>
       <div class="rs-row"><span class="rs-label">Quantity</span><span class="rs-value">${O.flagQty} flag${O.flagQty === 1 ? '' : 's'}</span></div>
       ${O.designNotes ? `<div class="rs-row"><span class="rs-label">Notes</span><span class="rs-value">${esc(O.designNotes)}</span></div>` : ''}
@@ -465,88 +459,128 @@ function renderConfirmation() {
     </div>`;
 }
 
-// ── SVG helpers ────────────────────────────────────────────
-function extractSvgInner(svgText) {
-  const match = svgText.match(/<svg[^>]*>([\s\S]*)<\/svg>/i);
-  return match ? match[1] : svgText;
+// ── SVG rendering — reuses the same applyColors/showGsTagVariant pipeline as
+// the template design page so previews here match exactly ──────────────────
+function colorsForRender() {
+  const out = {};
+  Object.entries(O.flagColors).forEach(([zid, v]) => { out[zid] = v?.hex || null; });
+  return out;
 }
 
-function coloredSvgInner(svgText, primaryHex, secondaryHex) {
-  if (!svgText) return '';
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(svgText, 'image/svg+xml');
-  const svgEl = doc.documentElement;
-  if (primaryHex) {
-    const el = svgEl.querySelector('#zone-primary');
-    if (el) {
-      el.setAttribute('fill', primaryHex);
-      el.querySelectorAll('rect,path,polygon,circle,ellipse').forEach(c => {
-        if (!c.closest('[id^="Bleed"]')) c.setAttribute('fill', primaryHex);
-      });
+// Resolves each zone to its chosen color — including the border zone's
+// "match" mode, which has no entry of its own in O.flagColors — for
+// submission (order_intakes.flag_colors) and the confirmation email.
+function buildFlagColorEntries(flag) {
+  const zones = flag?.colorZones || [
+    { id: 'zone-primary', label: 'Primary Color' },
+    { id: 'zone-secondary', label: 'Secondary Color' },
+  ];
+  return zones.map(z => {
+    let c = O.flagColors[z.id];
+    if (z.id === 'zone-border' && !('zone-border' in O.flagColors)) {
+      c = zones.some(zz => zz.id === 'zone-secondary') ? O.flagColors['zone-secondary'] : O.flagColors['zone-primary'];
     }
-    svgEl.querySelectorAll('[id^="zone-primary"]').forEach(el => el.setAttribute('fill', primaryHex));
-  }
-  if (secondaryHex) {
-    const el = svgEl.querySelector('#zone-secondary');
-    if (el) {
-      el.setAttribute('fill', secondaryHex);
-      el.querySelectorAll('rect,path,polygon,circle,ellipse').forEach(c => {
-        if (!c.closest('[id^="Bleed"]')) c.setAttribute('fill', secondaryHex);
-      });
-    }
-    svgEl.querySelectorAll('[id^="zone-secondary"]').forEach(el => el.setAttribute('fill', secondaryHex));
-  }
-  svgEl.querySelectorAll('[id*="logo-placement"]').forEach(g => g.setAttribute('display', 'none'));
-  svgEl.querySelector('[id="GolfStatus Tag"]')?.setAttribute('display', 'none');
-  return svgEl.innerHTML;
+    if (!c) return null;
+    return { zone: z.id, label: z.label, hex: c.hex, name: c.name };
+  }).filter(Boolean);
 }
 
-// ── Collapsible pickers ────────────────────────────────────
-function renderCollapsibleFlagPicker() {
-  const primaryHex = O.flagPrimaryColor?.hex || null;
-  const secondaryHex = O.flagSecondaryColor?.hex || null;
+function buildFlagSvgHtml(flag) {
+  if (!flag?.svgContent) return '';
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', '100%');
+  svg.innerHTML = flag.svgContent;
+  const colors = colorsForRender();
+  applyColors(svg, colors, flag.noColors, flag);
+  if (O.gsTag && !flag.noGsTag) {
+    const keyZone = flag.tagKeyZone || 'zone-primary';
+    showGsTagVariant(svg, 'front', O.gsTagMode, resolveColors(colors, flag)[keyZone]);
+  }
+  return svg.outerHTML;
+}
 
+// ── Flag style picker ────────────────────────────────────────
+function renderFlagStylePicker() {
   if (O.flagStyle && !O.flagStyleOpen) {
     const flag = FLAGS.find(f => f.id === O.flagStyle);
     const label = flag ? flag.name : O.flagStyle;
-    const svgText = svgCache.get(flag?.name || label) || '';
-    const inner = svgText ? coloredSvgInner(svgText, primaryHex, secondaryHex) : '';
-    const vb = flag?.viewBox || '0 0 7519 4669';
-    return `<div class="picker-collapsed" onclick="window.openPicker('flagStyle')" style="cursor:pointer">
-      <div class="picker-flag-thumb">${inner ? `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%" fill="none">${inner}</svg>` : ''}</div>
-      <span class="picker-collapsed-name">${esc(label)}</span>
-      <span style="flex:1"></span>
-      <button class="picker-clear-btn" onclick="event.stopPropagation();window.clearPicker('flagStyle')" title="Clear"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+    const svgHtml = flag ? buildFlagSvgHtml(flag) : '';
+    return `<div class="flag-selected-preview">
+      <div class="flag-selected-thumb" onclick="window.openPicker('flagStyle')" style="cursor:pointer">${svgHtml}</div>
+      <div class="flag-selected-footer">
+        <span class="picker-collapsed-name">${esc(label)}</span>
+        <span style="flex:1"></span>
+        <button class="picker-change-btn" onclick="window.openPicker('flagStyle')">Change style</button>
+        <button class="picker-clear-btn" onclick="window.clearPicker('flagStyle')" title="Clear"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>
     </div>`;
   }
 
   const cards = FLAGS.map(flag => {
     const isActive = O.flagStyle === flag.id;
-    const svgText = svgCache.get(flag.name) || '';
-    const inner = svgText ? coloredSvgInner(svgText, primaryHex, secondaryHex) : '';
+    const svgHtml = buildFlagSvgHtml(flag);
     return `<div class="flag-tmpl-card${isActive ? ' active' : ''}" onclick="window.selectFlagStyle('${flag.id}')">
-      <div class="flag-tmpl-thumb">${inner ? `<svg viewBox="${flag.viewBox}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%" fill="none">${inner}</svg>` : '<div style="width:100%;height:100%;background:var(--gray-100)"></div>'}</div>
-      <div class="flag-tmpl-name">${flag.name}</div>
+      <div class="flag-tmpl-thumb">${svgHtml}</div>
+      <div class="flag-tmpl-name">${esc(flag.name)}</div>
     </div>`;
   }).join('');
   return `<div class="flag-tmpl-grid">${cards}</div>`;
 }
 
-function renderCollapsibleColorPicker(which) {
-  const isSecondary = which === 'secondary';
-  const selected = isSecondary ? O.flagSecondaryColor : O.flagPrimaryColor;
-  const isOpen = isSecondary ? O.secondaryColorOpen : O.primaryColorOpen;
-  const selectFn = isSecondary ? 'window.selectSecondaryColor' : 'window.selectPrimaryColor';
-  const customId = isSecondary ? 'secondaryCustomPicker' : 'primaryCustomPicker';
-  const pickerKey = isSecondary ? 'secondaryColor' : 'primaryColor';
+// ── Color zone pickers — mirrors the template design page's per-zone color
+// controls (including the border "match" toggle) instead of a fixed
+// primary/secondary pair, so any flag style's full zone set is editable ─────
+function renderZoneColorSection(flag) {
+  if (flag?.noColors) {
+    return `<div class="form-section-label" style="margin-top:1.5rem">Colors</div>
+      <div class="color-none-label" style="font-style:italic">Colors are fixed for this template</div>`;
+  }
+  const zones = flag?.colorZones || [
+    { id: 'zone-primary', label: 'Primary Color' },
+    { id: 'zone-secondary', label: 'Secondary Color' },
+    { id: 'zone-border', label: 'Border' },
+  ];
+  const mainZones = zones.filter(z => z.id !== 'zone-border');
+  const hasBorder = zones.some(z => z.id === 'zone-border');
+
+  const stackHtml = mainZones.map((z, i) => `
+    <div class="color-picker-col" style="margin-top:${i > 0 ? '1.25rem' : '1.5rem'}">
+      <div class="form-section-label" style="margin-top:0">${esc(z.label || 'Color')}</div>
+      ${renderZoneColorPicker(z.id)}
+    </div>`).join('');
+
+  return `${stackHtml}${hasBorder ? renderBorderSection(zones) : ''}`;
+}
+
+function renderBorderSection(zones) {
+  const matches = !('zone-border' in O.flagColors);
+  const matchLabel = zones.some(z => z.id === 'zone-secondary') ? 'Secondary Color' : 'Primary Color';
+  const body = matches ? '' : renderZoneColorPicker('zone-border');
+  return `<div class="form-section-label" style="margin-top:1.25rem">Border</div>
+    <label class="gs-tag-label" style="margin-bottom:8px">
+      <input type="checkbox" class="gs-toggle-input" ${matches ? 'checked' : ''} onchange="window.toggleBorderMatch(this.checked)">
+      <span class="gs-toggle-switch"></span>
+      <span class="gs-toggle-text">Match ${esc(matchLabel)}</span>
+    </label>
+    ${body}`;
+}
+
+function renderZoneColorPicker(zoneId) {
+  const selected = O.flagColors[zoneId];
+  const isOpen = !!O.colorPickerOpen[zoneId];
+  const customId = 'customPicker-' + zoneId;
 
   if (selected && !isOpen) {
     const isWhite = selected.hex === '#FFFFFF';
-    return `<div class="picker-collapsed" onclick="window.openPicker('${pickerKey}')" style="cursor:pointer">
+    return `<div class="picker-collapsed" onclick="window.openPicker('${zoneId}')" style="cursor:pointer">
       <span class="picker-color-dot" style="background:${selected.hex};${isWhite ? 'border:1px solid var(--gray-200)' : ''}"></span>
       <span class="picker-collapsed-name">${esc(selected.name)}</span>
       <span style="flex:1"></span>
-      <button class="picker-clear-btn" onclick="event.stopPropagation();window.clearPicker('${pickerKey}')" title="Clear"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      <button class="picker-clear-btn" onclick="event.stopPropagation();window.clearPicker('${zoneId}')" title="Clear"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
     </div>`;
   }
 
@@ -558,16 +592,33 @@ function renderCollapsibleColorPicker(which) {
     const isWhite = c.hex === '#FFFFFF';
     return `<div class="color-swatch${isSel ? ' selected' : ''}${isWhite ? ' white-swatch' : ''}"
       style="background:${c.hex}" title="${esc(c.name)}"
-      onclick="${selectFn}('${esc(c.hex)}','${esc(c.name)}')"></div>`;
+      onclick="window.selectZoneColor('${zoneId}','${esc(c.hex)}','${esc(c.name)}')"></div>`;
   }).join('');
 
   return `<div class="color-swatch-grid">
     ${swatches}
     <label class="color-swatch color-custom-swatch${isCustom ? ' selected' : ''}" title="Custom color">
-      <input type="color" id="${customId}" class="color-custom-input" value="${customValue}">
+      <input type="color" id="${customId}" class="color-custom-input" data-zone="${zoneId}" value="${customValue}">
       <span class="color-custom-icon"><i class="fa-solid fa-plus" aria-hidden="true"></i></span>
     </label>
   </div>`;
+}
+
+// ── GolfStatus tag — same on/off + auto/black/white control as the design page
+function renderGsTagSection() {
+  return `<div class="form-section-label" style="margin-top:1.5rem">GolfStatus Tag</div>
+    <div class="gs-tag-row">
+      <label class="gs-tag-label">
+        <input type="checkbox" ${O.gsTag ? 'checked' : ''} onchange="window.toggleGsTag(this.checked)" class="gs-toggle-input">
+        <span class="gs-toggle-switch"></span>
+        <span class="gs-toggle-text">${O.gsTag ? 'On' : 'Off'}</span>
+      </label>
+      <div class="gs-mode-wrap" style="display:${O.gsTag ? 'flex' : 'none'}">
+        <button type="button" class="gs-mode-btn${O.gsTagMode === 'auto' ? ' active' : ''}" onclick="window.setGsTagMode('auto')">Auto</button>
+        <button type="button" class="gs-mode-btn${O.gsTagMode === 'dark' ? ' active' : ''}" onclick="window.setGsTagMode('dark')">Black</button>
+        <button type="button" class="gs-mode-btn${O.gsTagMode === 'light' ? ' active' : ''}" onclick="window.setGsTagMode('light')">White</button>
+      </div>
+    </div>`;
 }
 
 // ── Attach listeners ───────────────────────────────────────
@@ -611,23 +662,16 @@ function attachListeners() {
   const notes = document.getElementById('f-notes');
   if (notes) notes.addEventListener('input', e => { O.designNotes = e.target.value; });
 
-  // Custom color pickers (fire on change so picker closes before DOM replace)
-  const primaryCustom = document.getElementById('primaryCustomPicker');
-  if (primaryCustom) {
-    primaryCustom.addEventListener('change', e => {
-      O.flagPrimaryColor = { hex: e.target.value, name: 'Custom' };
-      O.primaryColorOpen = false;
+  // Custom color pickers, one per zone (fire on change so the picker closes
+  // before the DOM is replaced)
+  document.querySelectorAll('.color-custom-input').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const zoneId = e.target.dataset.zone;
+      O.flagColors[zoneId] = { hex: e.target.value, name: 'Custom' };
+      O.colorPickerOpen[zoneId] = false;
       render();
     });
-  }
-  const secondaryCustom = document.getElementById('secondaryCustomPicker');
-  if (secondaryCustom) {
-    secondaryCustom.addEventListener('change', e => {
-      O.flagSecondaryColor = { hex: e.target.value, name: 'Custom' };
-      O.secondaryColorOpen = false;
-      render();
-    });
-  }
+  });
 
   // Step 4 dropzone
   const dropzone = document.getElementById('logoDropzone');
@@ -661,7 +705,7 @@ function attachListeners() {
 function addLogoFiles(files) {
   files.forEach(file => {
     const previewUrl = URL.createObjectURL(file);
-    O.logoFiles.push({ file, previewUrl });
+    O.logoFiles.push({ file, previewUrl, logoRecord: null });
   });
   O.errors = {};
   render();
@@ -709,14 +753,25 @@ window.orderSubmit = async function () {
   render();
 
   try {
-    const projectName = O.eventName + ' — ' + formatDate(O.eventDate);
-    const projectId = await createProject(projectName);
-
-    for (const lf of O.logoFiles) {
-      await uploadLogo(projectId, lf.file);
+    // Reuse the project from a previous attempt in this session instead of
+    // creating a duplicate `projects` row every time "Submit Order" is retried.
+    let projectId = O.projectId;
+    if (!projectId) {
+      const projectName = O.eventName + ' — ' + formatDate(O.eventDate);
+      projectId = await createProject(projectName);
+      O.projectId = projectId;
     }
 
-    await supabase.from('order_intakes').insert({
+    // Only upload logos that haven't already succeeded in a previous attempt.
+    for (const lf of O.logoFiles) {
+      if (lf.logoRecord) continue;
+      lf.logoRecord = await uploadLogo(projectId, lf.file);
+    }
+
+    const selectedFlagForEmail = FLAGS.find(f => f.id === O.flagStyle);
+    const flagColorEntries = buildFlagColorEntries(selectedFlagForEmail);
+
+    const { error: intakeError } = await supabase.from('order_intakes').insert({
       project_id: projectId,
       course_name: O.courseName || null,
       event_name: O.eventName,
@@ -731,15 +786,18 @@ window.orderSubmit = async function () {
       postal_code: O.postalCode,
       country: O.country,
       flag_style: O.flagStyle,
-      flag_colors: [O.flagPrimaryColor, O.flagSecondaryColor].filter(Boolean),
+      // { zones: [{zone,label,hex,name}], gsTag, gsTagMode } — zone-tagged so
+      // the design page can map colors back to the right zone (not just
+      // positional primary/secondary), and carries the GS tag choice through.
+      flag_colors: { zones: flagColorEntries, gsTag: O.gsTag, gsTagMode: O.gsTagMode },
       flag_setup: O.flagSetup,
       flag_qty: O.flagQty,
       design_notes: O.designNotes || null,
       ack_deadline: O.ackDeadline,
       ack_pricing: O.ackPricing,
     });
+    if (intakeError) throw intakeError;
 
-    const selectedFlagForEmail = FLAGS.find(f => f.id === O.flagStyle);
     sendOrderConfirmation({
       contactName: O.contactName,
       contactEmail: O.contactEmail,
@@ -756,7 +814,7 @@ window.orderSubmit = async function () {
       },
       flagStyle: O.flagStyle,
       flagStyleName: selectedFlagForEmail ? selectedFlagForEmail.name : O.flagStyle,
-      flagColors: [O.flagPrimaryColor, O.flagSecondaryColor].filter(Boolean),
+      flagColors: flagColorEntries,
       flagSetup: O.flagSetup,
       flagQty: O.flagQty,
       designNotes: O.designNotes || '',
@@ -766,14 +824,14 @@ window.orderSubmit = async function () {
 
     O.submitting = false;
     O.submitted = true;
-    O.projectId = projectId;
     render();
     window.scrollTo(0, 0);
   } catch (err) {
     console.error('Order submission failed', err);
     O.submitting = false;
-    O.errors = { submit: 'Something went wrong. Please try again.' };
+    O.errors = { submit: 'We couldn’t finish submitting your order. Please try again — if this keeps happening, contact us directly so we can follow up.' };
     render();
+    window.scrollTo(0, 0);
   }
 };
 
@@ -784,29 +842,39 @@ window.toggleAck = function (which) {
   render();
 };
 
-window.selectPrimaryColor = function (hex, name) {
-  O.flagPrimaryColor = O.flagPrimaryColor?.hex === hex ? null : { hex, name };
-  if (O.flagPrimaryColor) O.primaryColorOpen = false;
+window.selectZoneColor = function (zoneId, hex, name) {
+  const cur = O.flagColors[zoneId];
+  O.flagColors[zoneId] = cur?.hex === hex ? null : { hex, name };
+  if (O.flagColors[zoneId]) O.colorPickerOpen[zoneId] = false;
   render();
 };
 
-window.selectSecondaryColor = function (hex, name) {
-  O.flagSecondaryColor = O.flagSecondaryColor?.hex === hex ? null : { hex, name };
-  if (O.flagSecondaryColor) O.secondaryColorOpen = false;
+window.toggleBorderMatch = function (checked) {
+  if (checked) delete O.flagColors['zone-border'];
+  else O.flagColors['zone-border'] = null; // independent, unset — show the picker
+  O.colorPickerOpen['zone-border'] = false;
+  render();
+};
+
+window.toggleGsTag = function (checked) {
+  O.gsTag = checked;
+  render();
+};
+
+window.setGsTagMode = function (mode) {
+  O.gsTagMode = mode;
   render();
 };
 
 window.openPicker = function (which) {
   if (which === 'flagStyle') O.flagStyleOpen = true;
-  else if (which === 'primaryColor') O.primaryColorOpen = true;
-  else if (which === 'secondaryColor') O.secondaryColorOpen = true;
+  else O.colorPickerOpen[which] = true;
   render();
 };
 
 window.clearPicker = function (which) {
   if (which === 'flagStyle') { O.flagStyle = ''; O.flagStyleOpen = false; }
-  else if (which === 'primaryColor') { O.flagPrimaryColor = null; O.primaryColorOpen = false; }
-  else if (which === 'secondaryColor') { O.flagSecondaryColor = null; O.secondaryColorOpen = false; }
+  else { O.flagColors[which] = null; O.colorPickerOpen[which] = false; }
   O.errors = {};
   render();
 };
@@ -868,13 +936,11 @@ window.removeLogoFile = function (index) {
 // ── Init ───────────────────────────────────────────────────
 function init() {
   render();
-  preloadSvgs();
 
-  // Re-render step 3 once SVGs are loaded so thumbnails appear
-  setTimeout(async () => {
-    await Promise.all(FLAGS.map(f => loadSvg(f.name)));
+  // Re-render step 3 once the flag SVGs are loaded so thumbnails appear
+  loadAllFlags(FLAGS).then(() => {
     if (O.step === 3) render();
-  }, 0);
+  }).catch(err => console.error('Flag SVG load failed', err));
 }
 
 window.addEventListener('DOMContentLoaded', init);

@@ -5,10 +5,11 @@ import { saveDraftInternal } from './export.js';
 import { renderBannerSection } from './banner.js';
 import { closeTlSlotToolbar, renderTemplateLogoControls, renderTplSlotBody } from './template-logos.js';
 import { cropSvgToArtwork } from './logo-utils.js';
-import { HS_TEMPLATES } from '../hole-sign-data.js';
+import { HS_DEFAULT_TEMPLATES, HS_TEMPLATES, migrateBannerCaptions } from '../hole-sign-data.js';
 import { escXml } from '../hole-sign-render.js';
 import { renderVarList, renderVarTmplRow } from './variations.js';
 import { renderVariationPreview } from './var-canvas.js';
+import { uploadLogo } from '../supabase.js';
 
 // ── Per-variation editor ───────────────────────────────────
 
@@ -48,10 +49,9 @@ window.startEditVar = function (id) {
       }).catch(() => {});
     }
   });
-  UI.tlSelectedIdx = null;
+  UI.tlSelectedIdxs.clear();
   UI.hsVarMenu = null;
   UI.hsVarMenuAnimate = false;
-  UI.qaLogosOpen = null;
   closeTlSidePanel();
   closeTlSlotToolbar();
   renderEditor();
@@ -61,7 +61,7 @@ window.startEditVar = function (id) {
 window.cancelEditVar = function () {
   HS.editingVarId = null;
   HS.editingDraft = null;
-  UI.tlSelectedIdx = null;
+  UI.tlSelectedIdxs.clear();
   closeTlSidePanel();
   closeTlSlotToolbar();
   renderVarList();
@@ -108,7 +108,7 @@ window.applyEditVar = function () {
 
   HS.editingVarId = null;
   HS.editingDraft = null;
-  UI.tlSelectedIdx = null;
+  UI.tlSelectedIdxs.clear();
   closeTlSidePanel();
   closeTlSlotToolbar();
   renderVarList();
@@ -132,6 +132,29 @@ window.revertVarOverrides = function () {
   saveDraftInternal().catch(() => {});
 };
 
+// Replaces the editing draft's docked banner-caption layers (dropping the
+// ones that belonged to whatever template it had before) with fresh clones of
+// `sourceLayers` — either the project default's own docked layers (reverting
+// to project default) or a template's seed specs / migrated legacy captions
+// (picking a template). Mirrors design.js's applyDefaultTemplate/
+// applyCustomTemplate, scoped to HS.editingDraft instead of the global state.
+function reseedDraftDockedLayers(sourceLayers) {
+  const draft = HS.editingDraft;
+  draft.textLayers = (draft.textLayers || []).filter(l => !l.dock);
+  sourceLayers.forEach(spec => {
+    draft.textLayers.push({ ...spec, id: 'tl-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7) });
+  });
+}
+
+// A template's banner caption specs — either its own `bannerTopTextLayers`/
+// `bannerBottomTextLayers` seed arrays (new-shape templates) or migrated from
+// a legacy `bannerTop.topText`/`subText` pair (older "My templates" entries).
+function bannerDockSpecsFor(tmpl) {
+  const top = Array.isArray(tmpl.bannerTopTextLayers) ? tmpl.bannerTopTextLayers : migrateBannerCaptions(tmpl.bannerTop, 'top');
+  const bottom = Array.isArray(tmpl.bannerBottomTextLayers) ? tmpl.bannerBottomTextLayers : migrateBannerCaptions(tmpl.bannerBottom, 'bottom');
+  return [...top, ...bottom];
+}
+
 window.setDraftTmpl = function (key) {
   if (!HS.editingDraft) return;
   if (key === '__default__') {
@@ -141,6 +164,7 @@ window.setDraftTmpl = function (key) {
     HS.editingDraft.bottomText    = { ...HS.bottomText };
     HS.editingDraft.bannerTop     = mergeBanner(HS.bannerTop);
     HS.editingDraft.bannerBottom  = mergeBanner(HS.bannerBottom);
+    reseedDraftDockedLayers((HS.textLayers || []).filter(l => l.dock).map(l => ({ ...l })));
     HS.editingDraft.templateLogos = cloneTemplateLogos(HS.templateLogos);
   } else if (key.startsWith('custom:')) {
     const tmpl = loadCustomTemplates().find(t => t.id === key.slice(7));
@@ -151,11 +175,23 @@ window.setDraftTmpl = function (key) {
     HS.editingDraft.bottomText    = { ...tmpl.bottomText };
     HS.editingDraft.bannerTop     = mergeBanner(tmpl.bannerTop    || (tmpl.banner?.position !== 'bottom' ? tmpl.banner : null));
     HS.editingDraft.bannerBottom  = mergeBanner(tmpl.bannerBottom || (tmpl.banner?.position === 'bottom' ? tmpl.banner : null));
+    reseedDraftDockedLayers(bannerDockSpecsFor(tmpl));
+    HS.editingDraft.templateLogos = cloneTemplateLogos(tmpl.templateLogos);
+  } else if (key.startsWith('default:')) {
+    const tmpl = HS_DEFAULT_TEMPLATES.find(t => t.id === key.slice(8));
+    if (!tmpl) return;
+    HS.editingDraft.templateStyle = tmpl.templateStyle;
+    HS.editingDraft.background    = { ...tmpl.background };
+    HS.editingDraft.topText       = { ...tmpl.topText };
+    HS.editingDraft.bottomText    = { ...tmpl.bottomText };
+    HS.editingDraft.bannerTop     = mergeBanner(tmpl.bannerTop);
+    HS.editingDraft.bannerBottom  = mergeBanner(tmpl.bannerBottom);
+    reseedDraftDockedLayers(bannerDockSpecsFor(tmpl));
     HS.editingDraft.templateLogos = cloneTemplateLogos(tmpl.templateLogos);
   } else {
     HS.editingDraft.templateStyle = key;
   }
-  UI.tlSelectedIdx = null;
+  UI.tlSelectedIdxs.clear();
   closeTlSidePanel();
   closeTlSlotToolbar();
   renderEditor();
@@ -184,6 +220,81 @@ window.setDraftBgColorHex = function (val) {
   HS.editingDraft.background = { ...HS.editingDraft.background, color: c };
   const swatch = document.getElementById('hsDraftBgSwatch');
   if (swatch) swatch.value = c;
+  renderVariationPreview();
+};
+
+window.handleDraftBgImageUpload = async function (e) {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file || !HS.projectId || !HS.editingDraft) return;
+  try {
+    const logo = await uploadLogo(HS.projectId, file);
+    HS.editingDraft.background = { ...HS.editingDraft.background, imageUrl: logo.src, storagePath: logo.storagePath };
+    renderEditor();
+    renderVariationPreview();
+  } catch (err) {
+    console.error('Background image upload failed', err);
+  }
+};
+
+window.removeDraftBgImage = function () {
+  if (!HS.editingDraft) return;
+  HS.editingDraft.background = { ...HS.editingDraft.background, imageUrl: null, storagePath: null };
+  renderEditor();
+  renderVariationPreview();
+};
+
+window.setDraftBgImgOpacity = function (val) {
+  if (!HS.editingDraft) return;
+  HS.editingDraft.background = { ...HS.editingDraft.background, imageOpacity: parseInt(val, 10) };
+  const lbl = document.getElementById('hsDraftBgImgOpLbl');
+  if (lbl) lbl.textContent = val + '%';
+  renderVariationPreview();
+};
+
+window.setDraftBgImgGreyscale = function (on) {
+  if (!HS.editingDraft) return;
+  HS.editingDraft.background = { ...HS.editingDraft.background, imageGreyscale: !!on };
+  renderVariationPreview();
+};
+
+window.setDraftBgOverlayColor = function (val) {
+  if (!HS.editingDraft) return;
+  HS.editingDraft.background = { ...HS.editingDraft.background, overlayColor: val };
+  const hex = document.getElementById('hsDraftBgOvColorSwatch');
+  if (hex) hex.nextElementSibling.value = val;
+  renderVariationPreview();
+};
+
+window.setDraftBgOverlayColorHex = function (val) {
+  if (!HS.editingDraft) return;
+  const c = val.startsWith('#') ? val : '#' + val;
+  if (!/^#[0-9a-fA-F]{6}$/.test(c)) return;
+  HS.editingDraft.background = { ...HS.editingDraft.background, overlayColor: c };
+  const swatch = document.getElementById('hsDraftBgOvColorSwatch');
+  if (swatch) swatch.value = c;
+  renderVariationPreview();
+};
+
+window.setDraftBgOverlayOpacity = function (val) {
+  if (!HS.editingDraft) return;
+  HS.editingDraft.background = { ...HS.editingDraft.background, overlayOpacity: parseInt(val, 10) };
+  const lbl = document.getElementById('hsDraftBgOvOpLbl');
+  if (lbl) lbl.textContent = val + '%';
+  renderVariationPreview();
+};
+
+window.setDraftBgOverlayBlend = function (val) {
+  if (!HS.editingDraft) return;
+  HS.editingDraft.background = { ...HS.editingDraft.background, overlayBlend: val };
+  renderVariationPreview();
+};
+
+window.setDraftBgOverlayEnabled = function (on) {
+  if (!HS.editingDraft) return;
+  const overlayOpacity = (on && !(HS.editingDraft.background.overlayOpacity > 0)) ? 50 : HS.editingDraft.background.overlayOpacity;
+  HS.editingDraft.background = { ...HS.editingDraft.background, overlayEnabled: !!on, overlayOpacity };
+  renderEditor();
   renderVariationPreview();
 };
 
@@ -255,6 +366,9 @@ export function buildVarTemplateSection(d, customs) {
         <optgroup label="Layouts">
           ${HS_TEMPLATES.map(t => `<option value="${t.id}"${d.templateStyle === t.id ? ' selected' : ''}>${escXml(t.name)}</option>`).join('')}
         </optgroup>
+        <optgroup label="Default templates">
+          ${HS_DEFAULT_TEMPLATES.map(t => `<option value="default:${t.id}">${escXml(t.name)}</option>`).join('')}
+        </optgroup>
         ${customs.length ? `<optgroup label="My templates">
           ${customs.map(t => `<option value="custom:${t.id}">${escXml(t.name)}</option>`).join('')}
         </optgroup>` : ''}
@@ -264,24 +378,75 @@ export function buildVarTemplateSection(d, customs) {
 }
 
 export function buildVarBackgroundSection(d) {
+  const bg = d.background;
   let bgControls;
-  if (d.background.type === 'color') {
+  if (bg.type === 'color') {
     bgControls = `
       <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-        <input type="color" class="hs-color-swatch" id="hsDraftBgSwatch" value="${d.background.color}"
+        <input type="color" class="hs-color-swatch" id="hsDraftBgSwatch" value="${bg.color}"
           oninput="setDraftBgColor(this.value)">
-        <input type="text" class="hexin" id="hsDraftBgHex" style="flex:1" maxlength="7" value="${d.background.color}"
+        <input type="text" class="hexin" id="hsDraftBgHex" style="flex:1" maxlength="7" value="${bg.color}"
           oninput="setDraftBgColorHex(this.value)">
+        ${eyedropperBtn('hsDraftBgSwatch')}
       </div>`;
+  } else if (bg.imageUrl) {
+    const overlayColor = bg.overlayColor || '#000000';
+    const overlayOp = bg.overlayOpacity ?? 50;
+    const overlayOn = bg.overlayEnabled !== false;
+    const imgOp = bg.imageOpacity ?? 100;
+    const blendModes = ['normal','multiply','screen','overlay','darken','lighten','color-dodge','color-burn','hard-light','soft-light','difference','color','luminosity'];
+    bgControls = `
+      <div class="hs-bg-img-row" style="margin-top:4px">
+        <img src="${bg.imageUrl}" style="width:60px;height:40px;object-fit:cover;border-radius:6px;border:1px solid var(--gray-100)">
+        <button class="btn sm" onclick="removeDraftBgImage()">Remove image</button>
+      </div>
+      <div class="tl-row">
+        <div class="tl-row-label">Opacity</div>
+        <div class="tl-size-slider">
+          <input type="range" min="0" max="100" value="${imgOp}" oninput="setDraftBgImgOpacity(this.value)">
+          <span class="tl-size-value" id="hsDraftBgImgOpLbl">${imgOp}%</span>
+        </div>
+      </div>
+      <div class="tl-row">
+        <div class="tl-row-label">Greyscale</div>
+        <label class="tl-switch"><input type="checkbox"${bg.imageGreyscale ? ' checked' : ''} onchange="setDraftBgImgGreyscale(this.checked)"><span class="tl-switch-slider"></span></label>
+      </div>
+      <div class="tl-row" style="margin-top:10px">
+        <div class="tl-row-label" style="font-size:12px;font-weight:600;color:var(--black)">Color overlay</div>
+        <label class="tl-switch"><input type="checkbox"${overlayOn ? ' checked' : ''} onchange="setDraftBgOverlayEnabled(this.checked)"><span class="tl-switch-slider"></span></label>
+      </div>
+      ${overlayOn ? `
+      <div class="color-row" style="margin-top:6px">
+        <input type="color" class="hs-color-swatch" id="hsDraftBgOvColorSwatch" value="${overlayColor}" oninput="setDraftBgOverlayColor(this.value)">
+        <input type="text" class="hexin" style="flex:1" maxlength="7" value="${overlayColor}" oninput="setDraftBgOverlayColorHex(this.value)">
+        ${eyedropperBtn('hsDraftBgOvColorSwatch')}
+      </div>
+      <div class="tl-row">
+        <div class="tl-row-label">Amount</div>
+        <div class="tl-size-slider">
+          <input type="range" min="0" max="100" value="${overlayOp}" oninput="setDraftBgOverlayOpacity(this.value)">
+          <span class="tl-size-value" id="hsDraftBgOvOpLbl">${overlayOp}%</span>
+        </div>
+      </div>
+      <div class="tl-row">
+        <div class="tl-row-label">Blend</div>
+        <select class="hs-editor-select" style="flex:1" onchange="setDraftBgOverlayBlend(this.value)">
+          ${blendModes.map(m => `<option value="${m}"${(bg.overlayBlend || 'normal') === m ? ' selected' : ''}>${m.charAt(0).toUpperCase() + m.slice(1).replace(/-/g,' ')}</option>`).join('')}
+        </select>
+      </div>` : ''}`;
   } else {
-    bgControls = `<div style="font-size:12px;color:var(--gray-400);margin-top:4px">Background image set on project default. Switch to project default to use a different one.</div>`;
+    bgControls = `
+      <div style="margin-top:4px">
+        <button class="btn sm" onclick="document.getElementById('hsDraftBgFile').click()">Upload image</button>
+        <input type="file" id="hsDraftBgFile" accept="image/*" style="display:none" onchange="handleDraftBgImageUpload(event)">
+      </div>`;
   }
   return `
     <div class="hs-editor-section">
       <div class="hs-editor-label">Background</div>
       <div class="hs-bg-toggle">
-        <button class="hs-tog-btn${d.background.type === 'color' ? ' active' : ''}" onclick="setDraftBgType('color')">Color</button>
-        <button class="hs-tog-btn${d.background.type === 'image' ? ' active' : ''}" onclick="setDraftBgType('image')">Image</button>
+        <button class="hs-tog-btn${bg.type === 'color' ? ' active' : ''}" onclick="setDraftBgType('color')">Color</button>
+        <button class="hs-tog-btn${bg.type === 'image' ? ' active' : ''}" onclick="setDraftBgType('image')">Image</button>
       </div>
       ${bgControls}
     </div>`;
@@ -305,9 +470,8 @@ export function renderEditor() {
   const d = HS.editingDraft;
   const customs = loadCustomTemplates();
   const activeTmpl = HS_TEMPLATES.find(t => t.id === d.templateStyle) || HS_TEMPLATES[0];
-  const isCustomized = !!(v.template || v.sponsorText || (v.templateId && v.templateId !== HS.templateStyle));
+  const isCustomized = !!(v.template || v.sponsorText);
 
-  if (UI.hsVarMenu === 'logos' && activeTmpl.id === 'hole-sign-logo-only') UI.hsVarMenu = null;
   if ((UI.hsVarMenu === 'top' || UI.hsVarMenu === 'bottom') && !activeTmpl.supportsText) UI.hsVarMenu = null;
   if (UI.hsVarMenu === 'banner') UI.hsVarMenu = 'bannerTop';
 
@@ -326,7 +490,7 @@ export function renderEditor() {
       rows.push(menuRow('top',    'Top text',    d.topText.text    ? escXml(d.topText.text)    : 'Empty', 'openHsVarMenu'));
       rows.push(menuRow('bottom', 'Bottom text', d.bottomText.text ? escXml(d.bottomText.text) : 'Empty', 'openHsVarMenu'));
     }
-    if (activeTmpl.id !== 'hole-sign-logo-only') {
+    {
       const c = d.templateLogos?.count ?? 0;
       rows.push(menuRow('logos', 'Template logos', c ? `${c} logo${c > 1 ? 's' : ''}` : 'Off', 'openHsVarMenu'));
     }

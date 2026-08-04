@@ -229,8 +229,6 @@ function effectiveHsState(v) {
     if (v.template.bannerTop)     out.bannerTop     = v.template.bannerTop;
     if (v.template.bannerBottom)  out.bannerBottom  = v.template.bannerBottom;
     if (v.template.templateLogos) out.templateLogos = v.template.templateLogos;
-  } else if (v?.templateId) {
-    out.templateStyle = v.templateId;
   }
   return out;
 }

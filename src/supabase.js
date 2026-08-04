@@ -44,7 +44,7 @@ export async function updateProject(projectId, fields) {
 export async function listProjects() {
   const { data, error } = await supabase
     .from('projects')
-    .select(`id, name, status, updated_at, flag_config(id, flag_id), hole_sign_config(id, template_style)`)
+    .select(`id, name, status, updated_at, created_by, profiles(email, first_name, last_name), flag_config(id, flag_id), hole_sign_config(id, template_style)`)
     .order('updated_at', { ascending: false })
     .limit(50);
   if (error) throw error;
@@ -54,7 +54,7 @@ export async function listProjects() {
 export async function loadProject(projectId) {
   const { data, error } = await supabase
     .from('projects')
-    .select('*')
+    .select('*, profiles(email, first_name, last_name)')
     .eq('id', projectId)
     .single();
   if (error) throw error;
@@ -86,6 +86,10 @@ export async function deleteProject(projectId) {
 
 // ── Logos ──────────────────────────────────────────────────
 export async function uploadLogo(projectId, file) {
+  if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
+    const { rasterizePdfToPng } = await import('./pdf-raster.js');
+    file = await rasterizePdfToPng(file);
+  }
   const ext = file.name.split('.').pop();
   const path = `${projectId}/${Date.now()}.${ext}`;
 

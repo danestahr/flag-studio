@@ -606,6 +606,7 @@ export async function saveDraftInternal() {
       bannerBottom: HS.bannerBottom,
       templateLogos: tplLogos,
       textLayers:    HS.textLayers || [],
+      captionsEdited: HS.captionsEdited,
     },
     variations,
     defaults: HS.defaults,

@@ -36,6 +36,14 @@ async function init() {
       updateProject(pid, { name: e.target.value || null }).catch(() => {});
     });
 
+    const creatorName = [project.profiles?.first_name, project.profiles?.last_name].filter(Boolean).join(' ');
+    const creator = creatorName || project.profiles?.email;
+    const creatorEl = document.getElementById('projectCreatorInfo');
+    if (creatorEl && creator) {
+      creatorEl.textContent = `Created by ${creator}`;
+      creatorEl.style.display = '';
+    }
+
     setStatus('flagStatus', flagCfg, intake);
     setStatus('holeStatus', holeCfg, intake);
 

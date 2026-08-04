@@ -7,7 +7,7 @@ import { logoThumbHtml } from '../media-utils.js';
 
 // ── Zone toolbar ───────────────────────────────────────────
 
-function removeActiveHsLogo() {
+export function removeActiveHsLogo() {
   if (!UI.hsActiveZone) return;
   const v = UI.hsActiveZone.variation;
   v.logoId = null; v.logoSrc = null;
@@ -37,6 +37,8 @@ export function ensureHsToolbar() {
     <div class="dz-tb-sep" id="hsTbFillSep"></div>
     <button class="dz-tb-btn" id="hsTbRemoveBg">Remove BG</button>
     <div class="dz-tb-sep" id="hsTbRemoveBgSep"></div>
+    <button class="dz-tb-btn" id="hsTbFrame" title="Move relative to the template's banner/text frame"></button>
+    <div class="dz-tb-sep" id="hsTbFrameSep"></div>
     <button class="dz-tb-btn" id="hsTbRemove">Remove</button>
     <div class="dz-tb-sep" id="hsTbSep"></div>
     <div style="position:relative">
@@ -96,6 +98,15 @@ export function ensureHsToolbar() {
     btn.innerHTML = origHTML;
     btn.disabled = false;
     hideHsToolbar();
+  });
+
+  document.getElementById('hsTbFrame').addEventListener('click', () => {
+    const v = UI.hsActiveZone?.variation;
+    if (!v) return;
+    v.aboveFrame = !v.aboveFrame;
+    renderVarList();
+    renderVariationPreview();
+    if (UI.hsActiveZone) showHsToolbar(UI.hsActiveZone.dzone);
   });
 
   document.getElementById('hsTbRemove').addEventListener('click', removeActiveHsLogo);
@@ -236,6 +247,17 @@ export function showHsToolbar(dz, openPicker = false) {
   document.getElementById('hsTbRemove').style.display       = hasContent ? '' : 'none';
   document.getElementById('hsTbSep').style.display          = hasContent ? '' : 'none';
   document.getElementById('hsTbReplace').textContent        = hasLogo ? 'Replace ▾' : hasArtboard ? 'Replace design ▾' : hasText ? 'Change ▾' : 'Add logo or text ▾';
+
+  // The frame-order toggle only affects makeHoleSignSvg's logo/sponsor-text
+  // block — not the full-canvas artboard upload, which bypasses it entirely.
+  const showFrameToggle = hasLogo || hasText;
+  document.getElementById('hsTbFrame').style.display    = showFrameToggle ? '' : 'none';
+  document.getElementById('hsTbFrameSep').style.display = showFrameToggle ? '' : 'none';
+  if (showFrameToggle) {
+    document.getElementById('hsTbFrame').innerHTML = v?.aboveFrame
+      ? '<i class="fa-solid fa-arrow-down"></i> Below Template'
+      : '<i class="fa-solid fa-arrow-up"></i> Above Template';
+  }
 
   const picker = document.getElementById('hsLibPicker');
   picker.style.display = openPicker ? 'block' : 'none';
