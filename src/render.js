@@ -98,6 +98,20 @@ export function applyColors(svgEl, colors, skipColors = false, flag = null) {
   });
 }
 
+// The template's decorative frame — border ring + GolfStatus watermark tag —
+// which should default to sitting above added content instead of being
+// covered by it. `Border` (no "zone-" prefix) covers templates like Pennant/
+// Swallow Tail whose border isn't a recolorable zone.
+const FRAME_SELECTOR = '[id="zone-border"], [id="Border"], [id="GolfStatus Tag"]';
+
+// Some templates nest a child rect literally named "Border" inside the
+// "zone-border" group — without keeping only outermost matches, the frame
+// would get split into two separately-moved pieces.
+export function extractFrameElements(root) {
+  const matches = Array.from(root.querySelectorAll(FRAME_SELECTOR));
+  return matches.filter(el => !matches.some(other => other !== el && other.contains(el)));
+}
+
 // Normalise old { zoneId: { id, x, y, w } } assignment maps to the new
 // logos array format so that review/gallery pages work without migration.
 export function normaliseLogos(logosOrAssignment) {
@@ -180,6 +194,23 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
   }
   applyColors(svg, colors, flag.noColors, flag);
 
+  const gst = gsTagOpts ?? { enabled: S.gsTag, mode: S.gsTagMode };
+  if (gst.enabled) {
+    const keyZone = flag.tagKeyZone || 'zone-primary';
+    // Resolve so the tag's auto light/dark pick matches the background it's
+    // actually rendered on, even when that zone fell back to a default color.
+    // Must run before extractFrameElements below — it only sets attributes,
+    // but those need to land on the tag before it's relocated.
+    showGsTagVariant(svg, face, gst.mode, resolveColors(colors, flag)[keyZone]);
+  }
+
+  // The frame (border + GS tag) defaults to painting above added content —
+  // collected now, moved to the top once all default-layer content below it
+  // has been appended. Content layers can opt into sitting above the frame
+  // instead via `layer.aboveFrame`, collected into aboveEls and appended last.
+  const frameEls = extractFrameElements(svg);
+  const aboveEls = [];
+
   const list = normaliseLogos(logos);
   if (zone && list.length) {
     const zoneX = face === 'back' ? vbW - zone.x - zone.w : zone.x;
@@ -204,15 +235,9 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
       img.setAttribute('width', logoW);
       img.setAttribute('height', logoH);
       img.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-      svg.appendChild(img);
+      if (layer.aboveFrame) aboveEls.push(img);
+      else svg.appendChild(img);
     });
-  }
-  const gst = gsTagOpts ?? { enabled: S.gsTag, mode: S.gsTagMode };
-  if (gst.enabled) {
-    const keyZone = flag.tagKeyZone || 'zone-primary';
-    // Resolve so the tag's auto light/dark pick matches the background it's
-    // actually rendered on, even when that zone fell back to a default color.
-    showGsTagVariant(svg, face, gst.mode, resolveColors(colors, flag)[keyZone]);
   }
 
   if (textLayers?.length) {
@@ -270,9 +295,21 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
         tspan.textContent = line;
         t.appendChild(tspan);
       });
-      svg.appendChild(t);
+      if (layer.aboveFrame) aboveEls.push(t);
+      else svg.appendChild(t);
     });
   }
+
+  if (frameEls.length) {
+    const frameHolder = document.createElementNS(ns, 'g');
+    // Elements are moving out of the mirrored `g` wrapper built above (for
+    // face === 'back') — re-apply that same transform here or the frame
+    // loses its mirroring/position.
+    if (face === 'back') frameHolder.setAttribute('transform', `translate(${vbW},0) scale(-1,1)`);
+    frameEls.forEach(el => frameHolder.appendChild(el));
+    svg.appendChild(frameHolder);
+  }
+  aboveEls.forEach(el => svg.appendChild(el));
 
   return svg;
 }

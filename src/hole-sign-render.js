@@ -92,111 +92,111 @@ export function computeTemplateLogoLayout(tl) {
   return { stripH, widths, slotH, slotsRel, gap };
 }
 
-// Wrap the banner's title + sub-text to the band width and return the line
-// breakdown plus the total stacked text height (in sign coords).
-function bannerTextBlock(banner) {
-  const title = banner.topText || {};
-  const sub = banner.subText || {};
-  const hasTitle = !!(title.text && title.text.trim());
-  const hasSub = !!(sub.text && sub.text.trim());
-  const titleBox = fitTextBox(title.w, title.size);
-  const subBox = fitTextBox(sub.w, sub.size);
-  const titleLines = hasTitle ? wrapText(title.text, titleBox.w, title.size) : [];
-  const subLines = hasSub ? wrapText(sub.text, subBox.w, sub.size) : [];
-  const titleLineH = (title.size || 0) * 1.1;
-  const subLineH = (sub.size || 0) * 1.1;
-  const gap = (titleLines.length && subLines.length) ? Math.round((title.size || 0) * 0.2) + (banner.spacing || 0) : 0;
-  const total = titleLines.length * titleLineH + subLines.length * subLineH + gap;
-  return { title, sub, titleLines, subLines, titleLineH, subLineH, gap, total, titleBox, subBox };
+// Free text layers currently docked to a banner (`which` is 'top' | 'bottom'),
+// sorted into stack order. Docking is per-layer (layer.dock/layer.dockOrder),
+// not a fixed slot on the banner itself — see hole-sign-data.js's emptyBanner.
+export function dockedLayers(state, which) {
+  return (state.textLayers || [])
+    .filter(l => l.dock === which)
+    .sort((a, b) => (a.dockOrder ?? 0) - (b.dockOrder ?? 0));
 }
 
-// Vertical breathing room reserved above/below the title+sub text block —
-// shared by bannerEffectiveHeight (total padding) and renderBanner (per-side,
+// Wrap every docked, non-empty layer to its own box width and return the line
+// breakdown plus the total stacked text height (in sign coords). Generalizes
+// the old fixed title+sub pair to N independently-styled layers.
+function dockedTextBlock(state, which) {
+  const banner = which === 'bottom' ? state.bannerBottom : state.bannerTop;
+  const entries = dockedLayers(state, which)
+    .filter(l => l.text && l.text.trim())
+    .map(l => {
+      const box = fitTextBox(l.w, l.size);
+      const lines = wrapText(l.text, box.w, l.size);
+      const lineH = l.size * 1.1;
+      return { layer: l, box, lines, lineH, h: lines.length * lineH };
+    });
+  const gap = banner?.spacing || 0;
+  const total = entries.reduce((s, e) => s + e.h, 0) + Math.max(0, entries.length - 1) * gap;
+  return { entries, gap, total };
+}
+
+// Vertical breathing room reserved above/below the docked text stack — shared
+// by bannerEffectiveHeight (total padding) and dockedLayerPositions (per-side,
 // for top/bottom valign) so they always agree on how much space is set aside.
-function bannerTextVPad(tb) {
-  return Math.round(Math.max(tb.title.size || 0, tb.sub.size || 0) * 0.45);
+function bannerTextVPad(block) {
+  const maxSize = block.entries.reduce((m, e) => Math.max(m, e.layer.size || 0), 0);
+  return Math.round(maxSize * 0.45);
 }
 
-// Top-of-title / top-of-sub y positions (sign coords) for a banner whose
-// title is present, honoring banner.valign — same math as renderBanner uses
-// to draw the actual SVG text, so click-to-edit zones/resize handles (and the
-// "+ Add subtitle" affordance) land exactly where the text really is instead
-// of a naive half-the-box split.
-// `forceSub`: when the sub is empty but is about to be edited (the user just
-// clicked "+ Add subtitle"), reserve a nominal one-line height/gap for it so
-// the forced click-to-edit region has somewhere real to sit — mirrors the
-// oneLine() placeholder sizing used for empty top/bottom text.
-export function bannerTitleSubSplit(banner, rect, forceSub = false) {
-  const tb = bannerTextBlock(banner);
-  const valign = banner.valign || 'center';
-  const vpad = bannerTextVPad(tb);
-  const hasRealSub = tb.subLines.length > 0;
-  const subH = hasRealSub ? tb.subLines.length * tb.subLineH
-    : forceSub ? Math.round((banner.subText?.size || 140) * 1.1 + 40) : 0;
-  const gap = hasRealSub ? tb.gap
-    : (forceSub && subH) ? Math.round((tb.title.size || 0) * 0.2) : 0;
-  const total = tb.titleLines.length * tb.titleLineH + subH + gap;
-  const titleY = valign === 'top' ? rect.y + vpad
-    : valign === 'bottom' ? rect.y + rect.h - vpad - total
-    : rect.y + rect.h / 2 - total / 2;
-  const titleH = tb.titleLines.length * tb.titleLineH;
-  return { titleY, titleH, subY: titleY + titleH + gap, subH };
+// Resolved {x,y,w,h} rect (sign coords) for every currently-docked, non-empty
+// layer in `which`, stacked top-to-bottom in dockOrder, honoring banner.valign.
+// Keyed by layer id so callers can look up a specific layer's computed box.
+export function dockedLayerPositions(state, which) {
+  const rect = getBannerRect(state, which);
+  if (!rect) return {};
+  const banner = which === 'bottom' ? state.bannerBottom : state.bannerTop;
+  const block = dockedTextBlock(state, which);
+  const valign = banner?.valign || 'center';
+  const vpad = bannerTextVPad(block);
+  let y = valign === 'top' ? rect.y + vpad
+    : valign === 'bottom' ? rect.y + rect.h - vpad - block.total
+    : rect.y + rect.h / 2 - block.total / 2;
+  const out = {};
+  block.entries.forEach(e => {
+    out[e.layer.id] = { x: e.box.x, y, w: e.box.w, h: e.h };
+    y += e.h + block.gap;
+  });
+  return out;
 }
 
-// Banner height actually used for layout + render: never shorter than the
-// wrapped text needs (with vertical padding), so text never overflows the band
-// and the band grows automatically as text wraps.
-function bannerEffectiveHeight(banner) {
-  if (!banner || !banner.enabled) return 0;
-  const tb = bannerTextBlock(banner);
-  if (tb.total <= 0) return Math.max(0, banner.height || 0);
-  return Math.max(banner.height || 0, tb.total + bannerTextVPad(tb) * 2);
+// Zone height actually used for layout + render: never shorter than the
+// docked text needs (with vertical padding), so text never overflows and the
+// zone grows automatically as text wraps. A banner's own `height` only sets a
+// *minimum* while its colored background is switched on — with the banner
+// off, the zone tight-fits whatever's docked (or is 0 when nothing is).
+function bannerEffectiveHeight(state, which) {
+  const banner = which === 'bottom' ? state.bannerBottom : state.bannerTop;
+  const block = dockedTextBlock(state, which);
+  if (banner?.enabled) {
+    if (block.total <= 0) return Math.max(0, banner.height || 0);
+    return Math.max(banner.height || 0, block.total + bannerTextVPad(block) * 2);
+  }
+  return block.total > 0 ? Math.round(block.total + bannerTextVPad(block) * 2) : 0;
 }
 
 function computeLayout(state, templateId) {
-  // Each banner band independently reserves height at its fixed edge before any
-  // other content is placed, so the logo zone and text bands shrink to fit.
-  const bTopEff = bannerEffectiveHeight(state.bannerTop);
-  const bBotEff = bannerEffectiveHeight(state.bannerBottom);
-  const bannerTopH = (state.bannerTop?.enabled && bTopEff > 0) ? bTopEff : 0;
-  const bannerBotH = (state.bannerBottom?.enabled && bBotEff > 0) ? bBotEff : 0;
+  // Each top/bottom zone independently reserves height at its fixed edge
+  // before any other content is placed, so the logo zone shrinks to fit —
+  // whether or not the banner's colored background is switched on (see
+  // bannerEffectiveHeight).
+  const bannerTopH = bannerEffectiveHeight(state, 'top');
+  const bannerBotH = bannerEffectiveHeight(state, 'bottom');
 
+  // Both special templates still let their own graphic/logo fill the sign
+  // edge-to-edge (bannerTopH/bannerBotH stay 0 in the returned layout for
+  // full-graphic, so the background image is never inset) — banners and
+  // template-logo images instead paint as an overlay on top of it (see the
+  // frameParts ordering in makeHoleSignSvg). The strip position still shifts
+  // clear of an active zone so the two don't visually collide.
   if (templateId === 'hole-sign-full-graphic') {
-    return { topH: 0, botH: 0,
-             logoY: 0, logoH: HS_H,
-             stripY: 0, stripH: 0, bannerTopH: 0, bannerBotH: 0,
-             topTextX: HS_W / 2, topTextAnchor: 'middle',
-             botTextX: HS_W / 2, botTextAnchor: 'middle' };
+    const tll = computeTemplateLogoLayout(state.templateLogos);
+    const stripH = tll ? tll.stripH : 0;
+    let stripY = bannerTopH + HS_MARGIN;
+    if (state.templateLogos?.vAlign === 'bottom') stripY = HS_H - bannerBotH - HS_MARGIN - stripH;
+    return { logoY: 0, logoH: HS_H, stripY, stripH, bannerTopH: 0, bannerBotH: 0 };
   }
   if (templateId === 'hole-sign-logo-only') {
-    return { topH: 0, botH: 0,
-             logoY: bannerTopH + HS_MARGIN,
-             logoH: Math.max(0, HS_H - bannerTopH - bannerBotH - 2 * HS_MARGIN),
-             stripY: 0, stripH: 0, bannerTopH, bannerBotH,
-             topTextX: HS_W / 2, topTextAnchor: 'middle',
-             botTextX: HS_W / 2, botTextAnchor: 'middle' };
+    const logoY = bannerTopH + HS_MARGIN;
+    const logoH = Math.max(0, HS_H - bannerTopH - bannerBotH - 2 * HS_MARGIN);
+    const tll = computeTemplateLogoLayout(state.templateLogos);
+    const stripH = tll ? tll.stripH : 0;
+    let stripY = logoY;
+    if (state.templateLogos?.vAlign === 'bottom') stripY = HS_H - bannerBotH - HS_MARGIN - stripH;
+    return { logoY, logoH, stripY, stripH, bannerTopH, bannerBotH };
   }
-  const top = state.topText;
-  const bot = state.bottomText;
-  const topBox = fitTextBox(top.w, top.size);
-  const botBox = fitTextBox(bot.w, bot.size);
 
-  // Template logos are free-positioned; text bands are independent of logo placement.
-  const topWrappedLines = (top.text && top.text.trim()) ? wrapText(top.text, topBox.w, top.size) : [];
-  const botWrappedLines = (bot.text && bot.text.trim()) ? wrapText(bot.text, botBox.w, bot.size) : [];
-  const topLines = topWrappedLines.length;
-  const botLines = botWrappedLines.length;
-  const topTextH = topLines ? Math.round(topLines * top.size * 1.1 + 80) : 0;
-  const botTextH = botLines ? Math.round(botLines * bot.size * 1.1 + 80) : 0;
-
-  const topBandH = topTextH;
-  const botBandH = botTextH;
-  const topGap = topBandH > 0 ? HS_GAP : 0;
-  const botGap = botBandH > 0 ? HS_GAP : 0;
-
-  // Sponsor logo zone uses everything between the text bands (after the banner).
-  const logoY = bannerTopH + HS_MARGIN + topBandH + topGap;
-  const logoH = Math.max(0, HS_H - bannerTopH - bannerBotH - 2 * HS_MARGIN - topBandH - topGap - botBandH - botGap);
+  // Sponsor logo zone uses everything between the top/bottom zones.
+  const logoY = bannerTopH + HS_MARGIN;
+  const logoH = Math.max(0, HS_H - bannerTopH - bannerBotH - 2 * HS_MARGIN);
 
   // Default strip Y for template-logo initial placement (slots with no freeX set).
   // Placed at the start of the logo zone; bottom vAlign flips to the bottom edge.
@@ -205,86 +205,31 @@ function computeLayout(state, templateId) {
   const stripH = tll ? tll.stripH : 0;
   let stripY = logoY;
   if (tl?.vAlign === 'bottom') {
-    stripY = HS_H - bannerBotH - HS_MARGIN - botBandH - (botBandH > 0 ? HS_GAP : 0) - stripH;
+    stripY = HS_H - bannerBotH - HS_MARGIN - stripH;
   }
 
-  return { topH: topBandH, botH: botBandH, logoY, logoH, stripY, stripH, bannerTopH, bannerBotH,
-           topTextX: HS_W / 2, topTextAnchor: 'middle', topTextMaxW: topBox.w, topTextBoxX: topBox.x, topWrappedLines,
-           botTextX: HS_W / 2, botTextAnchor: 'middle', botTextMaxW: botBox.w, botTextBoxX: botBox.x, botWrappedLines };
+  return { logoY, logoH, stripY, stripH, bannerTopH, bannerBotH };
 }
 
-// Full-width banner band rect (sign coords), or null when that banner is off.
-// `which` is 'top' | 'bottom'.
+// Full-width top/bottom zone rect (sign coords), or null when nothing is
+// docked there and the banner's colored background is off. `which` is
+// 'top' | 'bottom'. Used both for the banner's own background paint and for
+// docked-layer positioning/hit-testing.
 export function getBannerRect(state, which) {
-  const b = which === 'bottom' ? state.bannerBottom : state.bannerTop;
-  const h = bannerEffectiveHeight(b);
-  if (!b || !b.enabled || !(h > 0)) return null;
+  const h = bannerEffectiveHeight(state, which);
+  if (!(h > 0)) return null;
   const y = which === 'bottom' ? HS_H - h : 0;
   return { x: 0, y, w: HS_W, h };
 }
 
-// Editable text band rects (sign coords) keyed by target: top, bottom,
-// bannerTitle, bannerSub. Used to place inline click-to-edit overlays on the
-// canvas. Only includes a region when that text band actually has space.
-export function getTextRegions(state, templateId, forceText = []) {
-  const tid = templateId || state.templateStyle || 'hole-sign-1';
-  const L = computeLayout(state, tid);
-  const regions = {};
-  if (tid !== 'hole-sign-logo-only') {
-    // While a band is being edited, keep a single-line region even if the text
-    // is momentarily empty, so clearing the text doesn't dismiss the editor.
-    const oneLine = size => Math.round((size || 200) * 1.1 + 80);
-    const topBox = fitTextBox(state.topText.w, state.topText.size);
-    const botBox = fitTextBox(state.bottomText.w, state.bottomText.size);
-    if (L.topH > 0) regions.top = { x: topBox.x, y: L.bannerTopH + HS_MARGIN, w: topBox.w, h: L.topH };
-    else if (forceText.includes('top')) regions.top = { x: topBox.x, y: L.bannerTopH + HS_MARGIN, w: topBox.w, h: oneLine(state.topText.size) };
-    if (L.botH > 0) regions.bottom = { x: botBox.x, y: HS_H - L.bannerBotH - HS_MARGIN - L.botH, w: botBox.w, h: L.botH };
-    else if (forceText.includes('bottom')) { const h = oneLine(state.bottomText.size); regions.bottom = { x: botBox.x, y: HS_H - L.bannerBotH - HS_MARGIN - h, w: botBox.w, h }; }
-  }
-  const brTop = getBannerRect(state, 'top');
-  if (brTop) {
-    const banner = state.bannerTop || {};
-    const hasSub   = !!(banner.subText?.text  || '').trim();
-    const titleBox = fitTextBox(banner.topText?.w, banner.topText?.size);
-    const subBox   = fitTextBox(banner.subText?.w, banner.subText?.size);
-    const forceSub = forceText.includes('bannerTopSub');
-    // The subtitle's own region/handle must not depend on the title still
-    // having text — otherwise momentarily clearing the title (e.g. to retype
-    // it) makes the subtitle's edit zone and spacing handle vanish even
-    // though the subtitle itself keeps rendering (bannerTextBlock doesn't
-    // require a title either).
-    if (hasSub || forceSub) {
-      const { titleY, titleH, subY, subH } = bannerTitleSubSplit(banner, brTop, forceSub);
-      regions.bannerTopTitle = { x: titleBox.x, y: titleY, w: titleBox.w, h: titleH };
-      regions.bannerTopSub   = { x: subBox.x,   y: subY,   w: subBox.w,   h: subH };
-    } else {
-      regions.bannerTopTitle = { x: titleBox.x, y: brTop.y, w: titleBox.w, h: brTop.h };
-    }
-  }
-  const brBot = getBannerRect(state, 'bottom');
-  if (brBot) {
-    const banner = state.bannerBottom || {};
-    const hasSub   = !!(banner.subText?.text  || '').trim();
-    const titleBox = fitTextBox(banner.topText?.w, banner.topText?.size);
-    const subBox   = fitTextBox(banner.subText?.w, banner.subText?.size);
-    const forceSub = forceText.includes('bannerBotSub');
-    if (hasSub || forceSub) {
-      const { titleY, titleH, subY, subH } = bannerTitleSubSplit(banner, brBot, forceSub);
-      regions.bannerBotTitle = { x: titleBox.x, y: titleY, w: titleBox.w, h: titleH };
-      regions.bannerBotSub   = { x: subBox.x,   y: subY,   w: subBox.w,   h: subH };
-    } else {
-      regions.bannerBotTitle = { x: titleBox.x, y: brBot.y, w: titleBox.w, h: brBot.h };
-    }
-  }
-  return regions;
-}
-
 export function getLogoZone(state, templateId) {
   const tid = templateId || state.templateStyle || 'hole-sign-1';
+  // Full-graphic's own image always fills the sign edge-to-edge (see
+  // makeHoleSignSvg) — banners/template logos paint over it as an overlay
+  // rather than carving out space, so this zone is never inset for them.
   if (tid === 'hole-sign-full-graphic') return { x: 0, y: 0, w: HS_W, h: HS_H };
   const { logoY, logoH, stripY, stripH } = computeLayout(state, tid);
   const x = HS_MARGIN, w = HS_W - 2 * HS_MARGIN;
-  if (tid === 'hole-sign-logo-only') return { x, y: logoY, w, h: logoH };
 
   // When the user has manually repositioned template logo slots, give them the
   // full zone — they've chosen the layout and know what they're doing.
@@ -312,7 +257,6 @@ export function getLogoZone(state, templateId) {
 // Slots with freeX/freeY/freeW/freeH use those instead of the computed position.
 export function getTemplateLogoSlots(state, templateId) {
   const tid = templateId || state.templateStyle || 'hole-sign-1';
-  if (tid === 'hole-sign-logo-only' || tid === 'hole-sign-full-graphic') return [];
   const tl = state.templateLogos;
   const tll = computeTemplateLogoLayout(tl);
   if (!tll) return [];
@@ -386,18 +330,19 @@ function renderTemplateLogoSlot(slot, rect, clipId) {
     + borderRect;
 }
 
-// Build SVG markup for a banner band (background + title/sub-text).
-// `position` is 'top' | 'bottom'; hide keys are bannerTopTitle/bannerTopSub/bannerBotTitle/bannerBotSub.
-// Returns an array of SVG string parts, or [] when the banner is disabled.
-function renderBanner(banner, getFamily, hide = [], position = 'top') {
-  const h = bannerEffectiveHeight(banner);
+// Build SVG markup for a banner band's background only (color/image fill).
+// Banner-hosted text is no longer drawn here — it's ordinary free text layers
+// (see dockedLayerPositions) rendered through the normal free-layer loop below.
+// `which` is 'top' | 'bottom'. Returns an array of SVG string parts, or []
+// when the banner is disabled.
+function renderBanner(state, which) {
+  const banner = which === 'bottom' ? state.bannerBottom : state.bannerTop;
+  const h = bannerEffectiveHeight(state, which);
   if (!banner || !banner.enabled || !(h > 0)) return [];
-  const y = position === 'bottom' ? HS_H - h : 0;
+  const y = which === 'bottom' ? HS_H - h : 0;
   const bg = banner.bg || {};
   const parts = [];
-  const clipId = position === 'bottom' ? 'bannerBotClip' : 'bannerTopClip';
-  const titleKey = position === 'bottom' ? 'bannerBotTitle' : 'bannerTopTitle';
-  const subKey   = position === 'bottom' ? 'bannerBotSub'   : 'bannerTopSub';
+  const clipId = which === 'bottom' ? 'bannerBotClip' : 'bannerTopClip';
   parts.push(`<clipPath id="${clipId}"><rect x="0" y="${y}" width="${HS_W}" height="${h}"/></clipPath>`);
   parts.push(`<rect x="0" y="${y}" width="${HS_W}" height="${h}" fill="${escXml(bg.color || '#E5E5E5')}"/>`);
   if (bg.type === 'image' && bg.imageUrl) {
@@ -408,34 +353,6 @@ function renderBanner(banner, getFamily, hide = [], position = 'top') {
     const cy = y + (bg.imageY ?? 50) / 100 * h;
     parts.push(`<image href="${escXml(bg.imageUrl)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"/>`);
   }
-  const alignAttrs = (t, box) => {
-    const a = t.align || 'center';
-    const anchor = a === 'left' ? 'start' : a === 'right' ? 'end' : 'middle';
-    const x = a === 'left' ? box.x : a === 'right' ? box.x + box.w : HS_W / 2;
-    return { x, anchor };
-  };
-  const tb = bannerTextBlock(banner);
-  if (tb.total > 0) {
-    const { title, sub, titleLines, subLines, titleLineH, subLineH, gap, titleBox, subBox } = tb;
-    const valign = banner.valign || 'center';
-    const vpad = bannerTextVPad(tb);
-    let topY = valign === 'top' ? y + vpad
-      : valign === 'bottom' ? y + h - vpad - tb.total
-      : y + h / 2 - tb.total / 2;
-    if (titleLines.length) {
-      if (!hide.includes(titleKey)) {
-        const { x: tx, anchor: ta } = alignAttrs(title, titleBox);
-        const tspans = titleLines.map((line, i) => `<tspan x="${tx}"${i === 0 ? '' : ` dy="${titleLineH}"`}>${escXml(line)}</tspan>`).join('');
-        parts.push(`<text x="${tx}" y="${Math.round(topY + title.size * 0.82)}" text-anchor="${ta}" font-family="${escXml(getFamily(title.font))}" font-size="${title.size}" fill="${escXml(title.color || '#111110')}">${tspans}</text>`);
-      }
-      topY += titleLines.length * titleLineH + gap;
-    }
-    if (subLines.length && !hide.includes(subKey)) {
-      const { x: sx, anchor: sa } = alignAttrs(sub, subBox);
-      const tspans = subLines.map((line, i) => `<tspan x="${sx}"${i === 0 ? '' : ` dy="${subLineH}"`}>${escXml(line)}</tspan>`).join('');
-      parts.push(`<text x="${sx}" y="${Math.round(topY + sub.size * 0.82)}" text-anchor="${sa}" font-family="${escXml(getFamily(sub.font))}" font-size="${sub.size}" fill="${escXml(sub.color || '#111110')}">${tspans}</text>`);
-    }
-  }
   return parts;
 }
 
@@ -444,31 +361,8 @@ export function makeHoleSignSvg(state, variation) {
   // per-variation overrides. Prefer it over variation.templateId which can be a
   // stale value set when the variation was first created.
   const templateId = state.templateStyle || variation?.templateId || 'hole-sign-1';
-  let { topH, botH, logoY, logoH, bannerTopH, bannerBotH, topTextX, topTextAnchor, topTextMaxW, topTextBoxX, botTextX, botTextAnchor, botTextMaxW, botTextBoxX, topWrappedLines, botWrappedLines } = computeLayout(state, templateId);
   const viewBox = `0 0 ${HS_W} ${HS_H}`;
   const bg = state.background;
-  const topText = state.topText;
-  const bottomText = state.bottomText;
-  // Apply explicit text alignment only when the user has deliberately set it
-  // (non-center forces the x position to the text box's own edge — which may
-  // be narrower than the full margin span if the box has been resized).
-  if (topText.align === 'left' || topText.align === 'right') {
-    topTextAnchor = topText.align === 'left' ? 'start' : 'end';
-    topTextX      = topText.align === 'left' ? topTextBoxX : topTextBoxX + topTextMaxW;
-  } else if (topText.align === 'center') {
-    topTextAnchor = 'middle';
-    topTextX      = HS_W / 2;
-  }
-  if (bottomText.align === 'left' || bottomText.align === 'right') {
-    botTextAnchor = bottomText.align === 'left' ? 'start' : 'end';
-    botTextX      = bottomText.align === 'left' ? botTextBoxX : botTextBoxX + botTextMaxW;
-  } else if (bottomText.align === 'center') {
-    botTextAnchor = 'middle';
-    botTextX      = HS_W / 2;
-  }
-  // Text keys to lay out but not draw (e.g. while being edited inline, so the
-  // SVG copy doesn't show around the live editor — avoids the "halo").
-  const hide = state.hideText || [];
 
   const getFamily = (fontId) => {
     const f = HS_FONTS.find(f => f.id === fontId);
@@ -504,41 +398,42 @@ export function makeHoleSignSvg(state, variation) {
     }
   }
 
-  // Banner bands skipped for full-graphic (image owns the entire canvas)
-  if (templateId !== 'hole-sign-full-graphic') {
-    parts.push(...renderBanner(state.bannerTop,    getFamily, hide, 'top'));
-    parts.push(...renderBanner(state.bannerBottom, getFamily, hide, 'bottom'));
-  }
+  // Frame elements (banner bands, static top/bottom text, template logo
+  // slots) default to painting above added content (variation logo/sponsor
+  // text, free text layers) — collected here and pushed after that content
+  // below, unless a given piece of content opts above the frame via its own
+  // `aboveFrame`.
+  const frameParts = [];
+  const aboveParts = [];
 
-  // Top text (standard template only)
-  if (templateId !== 'hole-sign-logo-only' && topH > 0 && topText.text && topText.text.trim() && !hide.includes('top')) {
-    const lines = topWrappedLines?.length ? topWrappedLines : wrapText(topText.text, topTextMaxW, topText.size);
-    const lineH = topText.size * 1.1;
-    const bandCY = bannerTopH + HS_MARGIN + topH / 2;
-    const firstBaseY = bandCY - (lines.length - 1) * lineH / 2 + topText.size * 0.38;
-    const tspans = lines.map((line, i) =>
-      `<tspan x="${topTextX}"${i === 0 ? '' : ` dy="${lineH}"`}>${escXml(line)}</tspan>`
-    ).join('');
-    parts.push(`<text x="${topTextX}" y="${Math.round(firstBaseY)}" text-anchor="${topTextAnchor}" font-family="${escXml(getFamily(topText.font))}" font-size="${topText.size}" fill="${escXml(topText.color || '#111110')}">${tspans}</text>`);
-  }
+  // Banners paint as an overlay on top of full-graphic's full-bleed image
+  // (frameParts push after variationParts below) rather than reserving space.
+  frameParts.push(...renderBanner(state, 'top'));
+  frameParts.push(...renderBanner(state, 'bottom'));
 
-  // Template logos (drawn into the strip carved out by computeLayout)
+  // Template logos (drawn into the strip carved out by computeLayout) — part
+  // of the template itself (set up once, shared by every variation), so they
+  // belong in the frame group: they default to painting above the per-
+  // variation content added below, same as the banner/text blocks.
   const tplSlots = getTemplateLogoSlots(state, templateId);
   if (tplSlots.length && state.templateLogos?.slots) {
     state.templateLogos.slots.forEach((slot, i) => {
       const rect = tplSlots[i];
       if (!rect) return;
-      parts.push(renderTemplateLogoSlot(slot, rect, `tlc${i}`));
+      frameParts.push(renderTemplateLogoSlot(slot, rect, `tlc${i}`));
     });
   }
 
-  // Logo (raster/SVG image) OR sponsor text fallback when no logo
+  // Logo (raster/SVG image) OR sponsor text fallback when no logo — defaults
+  // to painting below the frame (banner/text above); variation.aboveFrame
+  // moves it above instead.
+  const variationParts = [];
   if (variation && variation.logoSrc && templateId === 'hole-sign-full-graphic') {
     const src = variation.logoSrcTight || variation.logoSrc;
     if (isDisplayableImage(src)) {
-      parts.push(`<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`);
+      variationParts.push(`<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`);
     } else {
-      parts.push(filePlaceholderSvg(0, 0, HS_W, HS_H, fileTypeLabel(src)));
+      variationParts.push(filePlaceholderSvg(0, 0, HS_W, HS_H, fileTypeLabel(src)));
     }
   } else if (variation && variation.logoSrc) {
     const src = variation.logoSrcTight || variation.logoSrc;
@@ -556,47 +451,56 @@ export function makeHoleSignSvg(state, variation) {
       const logoImgH = logoW * aspect;
       const cx = lz.x + (ld.x / 100) * lz.w;
       const cy = lz.y + (ld.y / 100) * lz.h;
-      parts.push(`<image href="${escXml(src)}" x="${Math.round(cx - logoW / 2)}" y="${Math.round(cy - logoImgH / 2)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}" preserveAspectRatio="xMidYMid meet"/>`);
+      variationParts.push(`<image href="${escXml(src)}" x="${Math.round(cx - logoW / 2)}" y="${Math.round(cy - logoImgH / 2)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}" preserveAspectRatio="xMidYMid meet"/>`);
     } else {
-      parts.push(filePlaceholderSvg(lz.x, lz.y, lz.w, lz.h, fileTypeLabel(src)));
+      variationParts.push(filePlaceholderSvg(lz.x, lz.y, lz.w, lz.h, fileTypeLabel(src)));
     }
   } else if (variation && variation.sponsorText && variation.sponsorText.text && variation.sponsorText.text.trim()) {
     const st = variation.sponsorText;
     const lz = getLogoZone(state, templateId);
     const cx = lz.x + lz.w / 2;
     const cy = lz.y + lz.h / 2 + st.size * 0.38;
-    parts.push(`<text x="${cx}" y="${Math.round(cy)}" text-anchor="middle" font-family="${escXml(getFamily(st.font))}" font-size="${st.size}" fill="${escXml(st.color || '#111110')}">${escXml(st.text)}</text>`);
+    variationParts.push(`<text x="${cx}" y="${Math.round(cy)}" text-anchor="middle" font-family="${escXml(getFamily(st.font))}" font-size="${st.size}" fill="${escXml(st.color || '#111110')}">${escXml(st.text)}</text>`);
   }
+  if (variation?.aboveFrame) aboveParts.push(...variationParts);
+  else parts.push(...variationParts);
 
-  // Bottom text (standard template only)
-  if (templateId !== 'hole-sign-logo-only' && botH > 0 && bottomText.text && bottomText.text.trim() && !hide.includes('bottom')) {
-    const lines = botWrappedLines?.length ? botWrappedLines : wrapText(bottomText.text, botTextMaxW, bottomText.size);
-    const lineH = bottomText.size * 1.1;
-    const bandCY = HS_H - bannerBotH - HS_MARGIN - botH / 2;
-    const firstBaseY = bandCY - (lines.length - 1) * lineH / 2 + bottomText.size * 0.38;
-    const tspans = lines.map((line, i) =>
-      `<tspan x="${botTextX}"${i === 0 ? '' : ` dy="${lineH}"`}>${escXml(line)}</tspan>`
-    ).join('');
-    parts.push(`<text x="${botTextX}" y="${Math.round(firstBaseY)}" text-anchor="${botTextAnchor}" font-family="${escXml(getFamily(bottomText.font))}" font-size="${bottomText.size}" fill="${escXml(bottomText.color || '#111110')}">${tspans}</text>`);
-  }
-
-  // Free text layers
+  // Free text layers — each defaults to painting below the frame, unless its
+  // own aboveFrame flag says otherwise (see frameParts/aboveParts above).
+  // A layer docked to a banner uses that banner's computed stack position
+  // instead of its own stored x/y/w (see dockedLayerPositions).
   const textLayers = state.textLayers || [];
   const hideTL = state.hideTextLayers || [];
+  const dockPosByWhich = { top: dockedLayerPositions(state, 'top'), bottom: dockedLayerPositions(state, 'bottom') };
   textLayers.forEach(layer => {
     if (!layer.text || !layer.text.trim()) return;
     if (hideTL.includes(layer.id)) return;
-    const lines = wrapText(layer.text, layer.w, layer.size);
+    const dockPos = layer.dock ? dockPosByWhich[layer.dock]?.[layer.id] : null;
+    const effX = dockPos ? dockPos.x : layer.x;
+    const effY = dockPos ? dockPos.y : layer.y;
+    const effW = dockPos ? dockPos.w : layer.w;
+    const lines = wrapText(layer.text, effW, layer.size);
     const lineH = layer.size * 1.1;
     const anchor = layer.align === 'left' ? 'start' : layer.align === 'right' ? 'end' : 'middle';
-    const tx = layer.align === 'left' ? layer.x : layer.align === 'right' ? layer.x + layer.w : layer.x + layer.w / 2;
-    const firstBaseY = layer.y + layer.size * 0.82;
+    const tx = layer.align === 'left' ? effX : layer.align === 'right' ? effX + effW : effX + effW / 2;
+    const firstBaseY = effY + layer.size * 0.82;
     const tspans = lines.map((line, i) =>
       `<tspan x="${tx}"${i === 0 ? '' : ` dy="${lineH}"`}>${escXml(line)}</tspan>`
     ).join('');
-    parts.push(`<text data-tl-id="${layer.id}" x="${tx}" y="${Math.round(firstBaseY)}" text-anchor="${anchor}" font-family="${escXml(getFamily(layer.font))}" font-size="${layer.size}" fill="${escXml(layer.color || '#111110')}">${tspans}</text>`);
+    const markup = `<text data-tl-id="${layer.id}" x="${tx}" y="${Math.round(firstBaseY)}" text-anchor="${anchor}" font-family="${escXml(getFamily(layer.font))}" font-size="${layer.size}" fill="${escXml(layer.color || '#111110')}">${tspans}</text>`;
+    // A docked layer must paint above the frame group (which contains the
+    // banner's own background rect) or it renders invisibly behind it — see
+    // frameParts/aboveParts flush order below.
+    if (layer.aboveFrame || layer.dock) aboveParts.push(markup);
+    else parts.push(markup);
   });
 
+  // Wrapped in an identifiable group so a caller that needs to render the
+  // logo/sponsor-text as a separate interactive DOM overlay (var-canvas.js's
+  // dzone, which can't participate in this SVG's own z-order) can pull the
+  // frame back out into its own overlay layer and still stack correctly.
+  if (frameParts.length) parts.push(`<g class="hs-frame">${frameParts.join('')}</g>`);
+  parts.push(...aboveParts);
   parts.push(`</svg>`);
   return { content: parts.join('\n'), viewBox };
 }

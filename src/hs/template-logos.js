@@ -3,9 +3,23 @@ import { renderStep1, updateStep1Preview } from './design.js';
 import { renderEditor } from './var-editor.js';
 import { renderVariationPreview } from './var-canvas.js';
 import { prepareLogo } from './logo-utils.js';
-import { HS_H, HS_TPL_LOGO_MAX, HS_TPL_LOGO_MIN, HS_W, emptyTemplateLogos, normalizeTplLogoSize } from '../hole-sign-data.js';
+import { HS_H, HS_TPL_LOGO_DEFAULT, HS_TPL_LOGO_MAX, HS_TPL_LOGO_MIN, HS_W, emptyTemplateLogos, normalizeTplLogoSize } from '../hole-sign-data.js';
 import { HS_TPL_LOGO_SAFE_FRAC, escXml, getTemplateLogoSlots, slotWidthForRatio } from '../hole-sign-render.js';
 import { uploadLogo } from '../supabase.js';
+import { logoThumbHtml } from '../media-utils.js';
+
+// Delete/Backspace removes every selected image entirely, unless the user is
+// typing in a text field or editing a text layer (own keydown handling).
+// Highest index first — removeTlSlot() splices the slot out, which shifts
+// every later index down by one, so removing low-to-high would delete the
+// wrong slots for a multi-selection.
+document.addEventListener('keydown', e => {
+  if (!UI.tlSelectedIdxs.size) return;
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (document.activeElement?.closest?.('input, textarea, select, [contenteditable]')) return;
+  e.preventDefault();
+  [...UI.tlSelectedIdxs].sort((a, b) => b - a).forEach(idx => window.removeTlSlot(idx));
+});
 
 // ── Template logo controls ────────────────────────────────
 
@@ -25,7 +39,7 @@ function slotAssignRow(tl, i) {
     <div class="tl-assign-row">
       <span class="tl-assign-label">Slot ${i + 1}</span>
       ${src
-        ? `<img src="${escXml(src)}" class="tl-assign-thumb" alt="">`
+        ? logoThumbHtml(src, '', 'tl-assign-thumb')
         : `<span class="tl-assign-empty">–</span>`}
       <button class="btn sm tl-assign-btn" data-slot="${i}" onclick="openTlSlotPicker(${i})">${src ? 'Replace' : '+ Add logo'}</button>
       ${src ? `<button class="btn sm tl-assign-rm" onclick="removeTlSlot(${i})" title="Remove"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>` : ''}
@@ -34,12 +48,14 @@ function slotAssignRow(tl, i) {
 
 export function renderTemplateLogoControls() {
   const tl = tlSource();
-  const countBtns = [0,1,2,3].map(n => `<button class="hs-tog-btn${tl.count===n?' active':''}" onclick="setTplCount(${n})">${n||'Off'}</button>`).join('');
+  // Count is no longer set via a manual toggle — it grows one at a time via
+  // "+ Images" (Step-1 sidebar) and shrinks via per-image remove/Delete, so
+  // an empty state here is just informational, not an "enable" control.
   if (!tl.count) {
     return `
       <div class="hs-section">
-        <div class="hs-section-title">Template logos <span class="hs-optional">(optional)</span></div>
-        <div class="hs-bg-toggle">${countBtns}</div>
+        <div class="hs-section-title">Template logos</div>
+        <div style="font-size:12px;color:var(--gray-400)">No images added to the template yet.</div>
       </div>`;
   }
   const sz = normalizeTplLogoSize(tl.size);
@@ -48,7 +64,6 @@ export function renderTemplateLogoControls() {
   return `
     <div class="hs-section">
       <div class="hs-section-title">Template logos</div>
-      <div class="tl-row"><div class="tl-row-label">Logos</div><div class="hs-bg-toggle">${countBtns}</div></div>
       <div class="tl-row">
         <div class="tl-row-label">Size</div>
         <div class="tl-size-slider">
@@ -79,8 +94,7 @@ export function renderTemplateLogoControls() {
 }
 
 window.openTlSlotPicker = function (i) {
-  const btn = document.querySelector(`.tl-assign-btn[data-slot="${i}"]`);
-  openTlLibPicker(i, btn || document.body);
+  openTlLibPicker(i);
 };
 
 // The same template-logo controls power Step 1 (project default) and the
@@ -148,14 +162,28 @@ export function ensureTlSlots() {
   if (tl.slots.length > tl.count) tl.slots.length = tl.count;
 }
 
-window.setTplCount = function (n) {
+// Appends one more image, uncapped — mirrors addTextLayer()'s pattern for
+// free text layers. Given a centered default free position/size (rather than
+// running the count-based auto-layout math, which isn't built to gracefully
+// re-flow an unbounded, incrementally-grown list) since free positioning is
+// already fully supported per-slot regardless of how it was created.
+window.addTplImage = function () {
   const tl = tlSource();
-  tl.count = n;
-  ensureTlSlots();
-  UI.tlSelectedIdx = null;
-  closeTlSidePanel();
-  closeTlSlotToolbar();
+  const idx = tl.count;
+  tl.count += 1;
+  const w = HS_TPL_LOGO_DEFAULT * 2, h = HS_TPL_LOGO_DEFAULT;
+  tl.slots[idx] = { freeX: HS_W / 2 - w / 2, freeY: HS_H / 2 - h / 2, freeW: w, freeH: h };
+  tl.customPositions = true;
+  UI.tlSelectedIdxs = new Set([idx]);
   redrawTplStructural();
+  if (HS.editingVarId) {
+    UI.hsVarMenuSlotIdx = idx;
+    window.openHsVarMenu?.('tplSlot');
+  } else {
+    UI.hsMenuSlotIdx = idx;
+    window.openHsMenu?.('tplSlot');
+  }
+  openTlLibPicker(idx);
 };
 window.setTplSize = function (k) {
   const tl = tlSource();
@@ -233,104 +261,88 @@ export function applyTlSlotImgStyle(img, slot) {
   img.style.pointerEvents = 'none';
 }
 
-export function wireTlSlotDragResize(overlay, img, handle, idx) {
-  let mode = null, startX, startY, startTx, startTy, startScale;
-  overlay.addEventListener('pointerdown', e => {
-    if (e.target === handle) return;
-    mode = 'move';
-    overlay.setPointerCapture(e.pointerId);
-    const slot = HS.templateLogos.slots[idx];
-    startX = e.clientX; startY = e.clientY;
-    startTx = slot.tx ?? 50; startTy = slot.ty ?? 50;
-    e.preventDefault();
-  });
-  handle.addEventListener('pointerdown', e => {
-    mode = 'resize';
-    handle.setPointerCapture(e.pointerId);
-    const slot = HS.templateLogos.slots[idx];
-    startX = e.clientX; startY = e.clientY;
-    startScale = slot.scale ?? 100;
-    e.stopPropagation();
-    e.preventDefault();
-  });
-  const SNAP_PCT = 4; // % within which to snap to center on each axis
-  const onMove = e => {
-    // hasPointerCapture guards against a dropped/lost pointerup leaving `mode`
-    // stuck set — without it, a later hover-only pointermove would move/resize
-    // the slot using the stale start point from the previous gesture.
-    if (!mode) return;
-    if (mode === 'move' && !overlay.hasPointerCapture(e.pointerId)) return;
-    if (mode === 'resize' && !handle.hasPointerCapture(e.pointerId)) return;
-    const slot = HS.templateLogos.slots[idx];
-    const rect = overlay.getBoundingClientRect();
-    if (mode === 'move') {
-      const dx = (e.clientX - startX) / rect.width  * 100;
-      const dy = (e.clientY - startY) / rect.height * 100;
-      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) UI.tlJustDragged = true;
-      let nx = startTx + dx;
-      let ny = startTy + dy;
-      const snapX = Math.abs(nx - 50) < SNAP_PCT;
-      const snapY = Math.abs(ny - 50) < SNAP_PCT;
-      if (snapX) nx = 50;
-      if (snapY) ny = 50;
-      overlay.classList.toggle('snap-x', snapX);
-      overlay.classList.toggle('snap-y', snapY);
-      slot.tx = nx;
-      slot.ty = ny;
-      applyTlSlotImgStyle(img, slot);
-    } else if (mode === 'resize') {
-      const dx = (e.clientX - startX) / rect.width * 100 * 2;
-      if (Math.abs(dx) > 0.5) UI.tlJustDragged = true;
-      slot.scale = Math.max(10, Math.min(400, startScale + dx));
-      applyTlSlotImgStyle(img, slot);
-    }
-  };
-  overlay.addEventListener('pointermove', onMove);
-  handle.addEventListener('pointermove', onMove);
-  const onUp = () => {
-    mode = null;
-    overlay.classList.remove('snap-x', 'snap-y');
-    // Reset the drag-flag after the synthetic click would have fired.
-    setTimeout(() => { UI.tlJustDragged = false; }, 0);
-  };
-  overlay.addEventListener('pointerup', onUp);
-  handle.addEventListener('pointerup', onUp);
-  overlay.addEventListener('pointercancel', onUp);
-  handle.addEventListener('pointercancel', onUp);
+// Canvas-level alignment guide lines, shared across every slot's drag (not
+// owned by any one slot) — created lazily on the canvas container and reused
+// across drags; a fresh render clears the whole container anyway.
+function ensureAlignGuides(container) {
+  let v = container.querySelector(':scope > .tl-align-guide-v');
+  let h = container.querySelector(':scope > .tl-align-guide-h');
+  if (!v) { v = document.createElement('div'); v.className = 'tl-align-guide-v'; container.appendChild(v); }
+  if (!h) { h = document.createElement('div'); h.className = 'tl-align-guide-h'; container.appendChild(h); }
+  return { v, h };
+}
+
+// Finds the first candidate whose value is within `tol` of the box's left
+// edge, center, or right edge (same shape used for both axes) and returns
+// the candidate's coordinate plus the box's new position that aligns exactly
+// to it. Returns null if nothing is within tolerance.
+function findAxisSnap(candidates, pos, size, tol) {
+  for (const cand of candidates) {
+    if (Math.abs(pos - cand) < tol)                return { value: cand, newPos: cand };
+    if (Math.abs(pos + size / 2 - cand) < tol)      return { value: cand, newPos: cand - size / 2 };
+    if (Math.abs(pos + size - cand) < tol)          return { value: cand, newPos: cand - size };
+  }
+  return null;
 }
 
 // Drag and resize the slot box itself (sets per-slot freeX/freeY/freeW/freeH).
-// Pointer on slot body → move; pointer on handle → resize.
-// signRect is the slot's current position in sign coords at wire-time.
-export function wireTlSlotFreeDrag(overlay, handle, idx, signRect, onTap) {
-  let mode = null, startClientX, startClientY;
+// Pointer on slot body → move (the whole current multi-selection moves
+// together if this slot is part of one); pointer on a corner handle →
+// resize this slot only, anchored at the opposite corner (matching the
+// text-layer resize feel — grabbing any corner grows the box away from it
+// rather than always from top-left).
+// `handles` is { tl, tr, bl, br } — `allRects` is every slot's current rect
+// in sign coords at wire-time (used both as this slot's own starting rect,
+// allRects[idx], and as alignment targets for the OTHER slots during move).
+// onTap(shiftKey) fires on a no-drag pointerup.
+export function wireTlSlotFreeDrag(overlay, handles, idx, allRects, onTap) {
+  const signRect = allRects[idx] || { x: 0, y: 0, w: 0, h: 0 };
+  let mode = null, activeCorner = null, startClientX, startClientY;
   let startSignX, startSignY, startSignW, startSignH;
+  let groupIndices = [idx], groupStarts = {};
   const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
+  const handleList = Object.values(handles).filter(Boolean);
 
   overlay.addEventListener('pointerdown', e => {
-    if (e.target.closest('.tl-slot-handle,.tl-slot-actions')) return;
+    if (e.target.closest('.tl-slot-handle,.tl-slot-hover-actions')) return;
     if (e.button !== 0) return;
     mode = 'move';
     overlay.setPointerCapture(e.pointerId);
     startClientX = e.clientX; startClientY = e.clientY;
-    const s = tlSource().slots[idx];
-    startSignX = s?.freeX ?? signRect.x;
-    startSignY = s?.freeY ?? signRect.y;
+    // Dragging a slot that's part of the current multi-selection moves the
+    // whole selection together; otherwise it's just this one slot.
+    groupIndices = (UI.tlSelectedIdxs.has(idx) && UI.tlSelectedIdxs.size > 1) ? [...UI.tlSelectedIdxs] : [idx];
+    groupStarts = {};
+    groupIndices.forEach(gIdx => {
+      const gs = tlSource().slots[gIdx];
+      const gRect = allRects[gIdx] || { x: 0, y: 0, w: 0, h: 0 };
+      groupStarts[gIdx] = { x: gs?.freeX ?? gRect.x, y: gs?.freeY ?? gRect.y };
+    });
+    startSignX = groupStarts[idx].x;
+    startSignY = groupStarts[idx].y;
     e.preventDefault();
     e.stopPropagation();
   });
 
-  handle.addEventListener('pointerdown', e => {
-    if (e.button !== 0) return;
-    mode = 'resize';
-    handle.setPointerCapture(e.pointerId);
-    startClientX = e.clientX; startClientY = e.clientY;
-    const s = tlSource().slots[idx];
-    startSignW = s?.freeW ?? signRect.w;
-    startSignH = s?.freeH ?? signRect.h;
-    e.stopPropagation();
-    e.preventDefault();
+  Object.entries(handles).forEach(([corner, handle]) => {
+    if (!handle) return;
+    handle.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      mode = 'resize';
+      activeCorner = corner;
+      handle.setPointerCapture(e.pointerId);
+      startClientX = e.clientX; startClientY = e.clientY;
+      const s = tlSource().slots[idx];
+      startSignX = s?.freeX ?? signRect.x;
+      startSignY = s?.freeY ?? signRect.y;
+      startSignW = s?.freeW ?? signRect.w;
+      startSignH = s?.freeH ?? signRect.h;
+      e.stopPropagation();
+      e.preventDefault();
+    });
   });
+
+  const activeHandle = () => (activeCorner ? handles[activeCorner] : null);
 
   const onMove = e => {
     // hasPointerCapture guards against a dropped/lost pointerup leaving `mode`
@@ -338,88 +350,140 @@ export function wireTlSlotFreeDrag(overlay, handle, idx, signRect, onTap) {
     // the slot using the stale start point from the previous gesture.
     if (!mode) return;
     if (mode === 'move' && !overlay.hasPointerCapture(e.pointerId)) return;
-    if (mode === 'resize' && !handle.hasPointerCapture(e.pointerId)) return;
-    const pr = overlay.parentElement?.getBoundingClientRect();
+    if (mode === 'resize' && !activeHandle()?.hasPointerCapture(e.pointerId)) return;
+    const container = overlay.parentElement;
+    const pr = container?.getBoundingClientRect();
     const scaleX = pr ? pr.width / HS_W : 1;
     const scaleY = pr ? pr.height / HS_H : 1;
     const dxSign = (e.clientX - startClientX) / scaleX;
     const dySign = (e.clientY - startClientY) / scaleY;
-    let s = tlSource().slots[idx];
-    // Ensure we have a mutable object — empty slots are {} but could be null for
-    // legacy data; create one in place so we can store the free position.
-    if (s == null) { tlSource().slots[idx] = {}; s = tlSource().slots[idx]; }
     if (Math.hypot(dxSign, dySign) > 5) UI.tlJustDragged = true;
+
     if (mode === 'move') {
-      s.freeX = startSignX + dxSign;
-      s.freeY = startSignY + dySign;
-      s.freeW = s.freeW ?? signRect.w;
-      s.freeH = s.freeH ?? signRect.h;
-      overlay.style.left = pct(s.freeX, HS_W);
-      overlay.style.top  = pct(s.freeY, HS_H);
+      // Move every slot in the group by the same raw delta first.
+      groupIndices.forEach(gIdx => {
+        let gs = tlSource().slots[gIdx];
+        if (gs == null) { tlSource().slots[gIdx] = {}; gs = tlSource().slots[gIdx]; }
+        const gRect = allRects[gIdx] || signRect;
+        gs.freeW = gs.freeW ?? gRect.w;
+        gs.freeH = gs.freeH ?? gRect.h;
+        gs.freeX = groupStarts[gIdx].x + dxSign;
+        gs.freeY = groupStarts[gIdx].y + dySign;
+      });
+
+      // Alignment snap — based on the primary dragged slot only, against the
+      // sign's own center plus every OTHER (non-group) slot's edges/center,
+      // so the whole group rides along with whatever correction it finds.
+      const s = tlSource().slots[idx];
+      const others = allRects.filter((_, j) => !groupIndices.includes(j));
+      const candX = [HS_W / 2, ...others.flatMap(r => [r.x, r.x + r.w / 2, r.x + r.w])];
+      const candY = [HS_H / 2, ...others.flatMap(r => [r.y, r.y + r.h / 2, r.y + r.h])];
+      const tolX = 5 / scaleX, tolY = 5 / scaleY;
+      const snapX = findAxisSnap(candX, s.freeX, s.freeW, tolX);
+      const snapY = findAxisSnap(candY, s.freeY, s.freeH, tolY);
+      const dSnapX = snapX ? snapX.newPos - s.freeX : 0;
+      const dSnapY = snapY ? snapY.newPos - s.freeY : 0;
+      if (dSnapX || dSnapY) {
+        groupIndices.forEach(gIdx => {
+          const gs = tlSource().slots[gIdx];
+          gs.freeX += dSnapX;
+          gs.freeY += dSnapY;
+        });
+      }
+
+      // Reposition every group member's overlay (siblings looked up by index
+      // since this function only holds a direct reference to its own).
+      groupIndices.forEach(gIdx => {
+        const gs = tlSource().slots[gIdx];
+        const gOverlay = gIdx === idx ? overlay : container?.querySelector(`.tl-slot[data-idx="${gIdx}"]`);
+        if (gOverlay) {
+          gOverlay.style.left = pct(gs.freeX, HS_W);
+          gOverlay.style.top  = pct(gs.freeY, HS_H);
+        }
+      });
+
+      if (container) {
+        const { v, h } = ensureAlignGuides(container);
+        v.style.left = pct(snapX ? snapX.value : 0, HS_W);
+        v.classList.toggle('show', !!snapX);
+        h.style.top = pct(snapY ? snapY.value : 0, HS_H);
+        h.classList.toggle('show', !!snapY);
+      }
     } else {
-      s.freeX = s.freeX ?? signRect.x;
-      s.freeY = s.freeY ?? signRect.y;
+      let s = tlSource().slots[idx];
+      if (s == null) { tlSource().slots[idx] = {}; s = tlSource().slots[idx]; }
+      const isLeft = activeCorner === 'tl' || activeCorner === 'bl';
+      const isTop  = activeCorner === 'tl' || activeCorner === 'tr';
+      const dxEff = isLeft ? -dxSign : dxSign;
       const ratio = startSignW / Math.max(1, startSignH);
-      s.freeW = Math.max(300, startSignW + dxSign);
-      s.freeH = s.freeW / ratio;
+      const newW = Math.max(300, startSignW + dxEff);
+      const newH = newW / ratio;
+      const anchorRight  = startSignX + startSignW;
+      const anchorBottom = startSignY + startSignH;
+      s.freeW = newW;
+      s.freeH = newH;
+      s.freeX = isLeft ? anchorRight  - newW : startSignX;
+      s.freeY = isTop  ? anchorBottom - newH : startSignY;
+      overlay.style.left   = pct(s.freeX, HS_W);
+      overlay.style.top    = pct(s.freeY, HS_H);
       overlay.style.width  = pct(s.freeW, HS_W);
       overlay.style.height = pct(s.freeH, HS_H);
     }
   };
 
   overlay.addEventListener('pointermove', onMove);
-  handle.addEventListener('pointermove', onMove);
+  handleList.forEach(h => h.addEventListener('pointermove', onMove));
 
-  const onUp = () => {
+  const onUp = e => {
     if (!mode) return;
     const wasDrag = UI.tlJustDragged;
     if (wasDrag) tlSource().customPositions = true;
     mode = null;
+    activeCorner = null;
     setTimeout(() => { UI.tlJustDragged = false; }, 0);
+    overlay.parentElement?.querySelector(':scope > .tl-align-guide-v')?.classList.remove('show');
+    overlay.parentElement?.querySelector(':scope > .tl-align-guide-h')?.classList.remove('show');
     // Fire onTap before redrawTplPreview so the overlay is still in the DOM
     // when the picker reads getBoundingClientRect() for positioning.
-    if (!wasDrag && onTap) onTap();
+    if (!wasDrag && onTap) onTap(e.shiftKey);
     redrawTplPreview();
   };
   overlay.addEventListener('pointerup', onUp);
-  handle.addEventListener('pointerup', onUp);
+  handleList.forEach(h => h.addEventListener('pointerup', onUp));
   overlay.addEventListener('pointercancel', onUp);
-  handle.addEventListener('pointercancel', onUp);
+  handleList.forEach(h => h.addEventListener('pointercancel', onUp));
 }
 
-export function openTlLibPicker(idx, anchorEl) {
+// Centered modal (not anchored to whatever was clicked) so it reads as a
+// deliberate "pick a logo" step — used both right after adding a new image
+// and when tapping an empty slot placeholder.
+export function openTlLibPicker(idx) {
   closeTlLibPicker();
-  const picker = document.createElement('div');
-  picker.className = 'tl-lib-picker';
+  const backdrop = document.createElement('div');
+  backdrop.className = 'tl-lib-modal-backdrop';
+  const modal = document.createElement('div');
+  modal.className = 'tl-lib-modal';
   const libHtml = HS.library.length
-    ? HS.library.map(l => `<div class="tl-lp-item" data-lid="${l.id}" title="${escXml(l.name)}"><img src="${l.src}" alt=""></div>`).join('')
+    ? HS.library.map(l => `<div class="tl-lp-item" data-lid="${l.id}" title="${escXml(l.name)}">${logoThumbHtml(l.src)}</div>`).join('')
     : '<div class="tl-lp-empty">No logos uploaded yet</div>';
-  picker.innerHTML = `${libHtml}<div class="tl-lp-upload" id="tlLpUpload">+ Upload image</div><input type="file" id="tlLpFile" accept="image/*,.pdf,.ai,.eps" style="display:none">`;
-  document.body.appendChild(picker);
-  UI.tlPickerEl = picker;
+  modal.innerHTML = `
+    <div class="tl-lib-modal-title">Choose a logo</div>
+    <div class="tl-lib-grid">${libHtml}</div>
+    <div class="tl-lp-upload" id="tlLpUpload">+ Upload image</div>
+    <input type="file" id="tlLpFile" accept="image/*,.pdf,.ai,.eps" style="display:none">`;
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+  UI.tlPickerEl = backdrop;
 
-  const r = anchorEl.getBoundingClientRect();
-  const ph = picker.offsetHeight;
-  const pw = picker.offsetWidth;
-  const vh = window.innerHeight;
-  const vw = window.innerWidth;
-  const gap = 6;
-  const spaceBelow = vh - r.bottom;
-  const placeAbove = spaceBelow < ph + gap && r.top > ph + gap;
-  const top = placeAbove ? (r.top + window.scrollY - ph - gap) : (r.bottom + window.scrollY + gap);
-  const left = Math.max(8, Math.min(r.left + window.scrollX, window.scrollX + vw - pw - 8));
-  picker.style.left = left + 'px';
-  picker.style.top  = top + 'px';
-
-  picker.querySelectorAll('.tl-lp-item').forEach(el => {
+  modal.querySelectorAll('.tl-lp-item').forEach(el => {
     el.addEventListener('click', () => {
       const logo = HS.library.find(l => l.id === el.dataset.lid);
       if (logo) assignTlSlot(idx, logo);
       closeTlLibPicker();
     });
   });
-  const fileInput = picker.querySelector('#tlLpFile');
-  picker.querySelector('#tlLpUpload').addEventListener('click', () => fileInput.click());
+  const fileInput = modal.querySelector('#tlLpFile');
+  modal.querySelector('#tlLpUpload').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', async e => {
     const file = e.target.files[0]; e.target.value = '';
     if (!file) return;
@@ -431,15 +495,10 @@ export function openTlLibPicker(idx, anchorEl) {
     closeTlLibPicker();
   });
 
-  setTimeout(() => {
-    const close = ev => {
-      if (!ev.target.closest('.tl-lib-picker')) {
-        closeTlLibPicker();
-        document.removeEventListener('click', close);
-      }
-    };
-    document.addEventListener('click', close);
-  }, 0);
+  // Click on the backdrop itself (not the modal or its contents) closes it.
+  backdrop.addEventListener('click', e => {
+    if (e.target === backdrop) closeTlLibPicker();
+  });
 }
 
 export function closeTlLibPicker() {
@@ -461,8 +520,7 @@ export function openTlSlotToolbar(idx, anchorEl) {
     const act = e.target.dataset?.act;
     if (!act) return;
     closeTlSlotToolbar();
-    const liveAnchor = document.querySelector(`.tl-slot[data-idx="${idx}"]`) || anchorEl;
-    if (act === 'replace')   openTlLibPicker(idx, liveAnchor);
+    if (act === 'replace')   openTlLibPicker(idx);
     if (act === 'finetune')  openTlSidePanel(idx);
     if (act === 'remove')    removeTlSlot(idx);
   });
@@ -480,7 +538,7 @@ export function openTlSlotToolbar(idx, anchorEl) {
 
   setTimeout(() => {
     const close = ev => {
-      if (!ev.target.closest('#tlSlotToolbar') && !ev.target.closest('.tl-slot') && !ev.target.closest('.tl-lib-picker') && !ev.target.closest('#tlSidePanel')) {
+      if (!ev.target.closest('#tlSlotToolbar') && !ev.target.closest('.tl-slot') && !ev.target.closest('.tl-lib-modal-backdrop') && !ev.target.closest('#tlSidePanel')) {
         closeTlSlotToolbar();
         document.removeEventListener('click', close);
       }
@@ -516,7 +574,7 @@ export function assignTlSlot(idx, logo) {
     ...freePos,
   };
   tl.slots[idx] = slot;
-  UI.tlSelectedIdx = idx;
+  UI.tlSelectedIdxs = new Set([idx]);
   prepareLogo(slot, logo.src).then(() => redrawTplPreview()).catch(() => {});
   redrawTplPreview();
 }
@@ -653,15 +711,37 @@ window.resetTlSlot = function (idx) {
   redrawTplPreview();
   openTlSidePanel(idx);
 };
+// Removes the whole image component — not just its logo — since each image
+// is now its own individually-added item (see addTplImage()), not a fixed
+// slot that should stick around empty. Splicing shifts every later index
+// down by one, so selection and any open per-slot panel are re-indexed too.
 window.removeTlSlot = function (idx) {
-  const s = tlSource().slots[idx];
-  // Keep the slot's position so the empty placeholder stays in place.
-  tlSource().slots[idx] = s?.freeX != null
-    ? { freeX: s.freeX, freeY: s.freeY, freeW: s.freeW, freeH: s.freeH }
-    : {};
-  UI.tlSelectedIdx = null;
+  const tl = tlSource();
+  tl.slots.splice(idx, 1);
+  tl.count = Math.max(0, tl.count - 1);
+
+  const reindexed = new Set();
+  UI.tlSelectedIdxs.forEach(i => {
+    if (i === idx) return;
+    reindexed.add(i > idx ? i - 1 : i);
+  });
+  UI.tlSelectedIdxs = reindexed;
+
+  // If the removed slot was the one open in the per-slot panel, fall back to
+  // the group panel instead of showing stale/wrong slot content; otherwise
+  // shift the shown index down to match the splice.
+  const shiftIdx = cur => (cur == null ? cur : cur === idx ? null : cur > idx ? cur - 1 : cur);
+  if (HS.editingVarId) {
+    UI.hsVarMenuSlotIdx = shiftIdx(UI.hsVarMenuSlotIdx);
+    if (UI.hsVarMenu === 'tplSlot' && UI.hsVarMenuSlotIdx == null) UI.hsVarMenu = 'logos';
+  } else {
+    UI.hsMenuSlotIdx = shiftIdx(UI.hsMenuSlotIdx);
+    if (UI.hsMenu === 'tplSlot' && UI.hsMenuSlotIdx == null) UI.hsMenu = 'logos';
+  }
+
   closeTlSidePanel();
-  redrawTplPreview();
+  closeTlSlotToolbar();
+  redrawTplStructural();
 };
 window.setTlSlotBgMode = function (idx, mode) {
   const slot = activeSlot(idx); if (!slot) return;

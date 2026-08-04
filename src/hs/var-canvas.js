@@ -3,10 +3,10 @@ import { HS_H, HS_W } from '../hole-sign-data.js';
 import { getEffectiveState, getEffectiveVariation } from './state.js';
 import { getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
 import { hideHsToolbar, prepareLogo, applyFillToVariation } from './logo-utils.js';
-import { isDisplayableImage, fileTypeLabel } from '../media-utils.js';
 import { stripSlotImages, paintTplSlotOverlays, paintTextLayerOverlays } from './design.js';
-import { wireBannerHeightHandles, wireBannerSpacingHandles, wireCanvasTextEditing, wireElementDrag, wireQuickAddHover } from './banner.js';
-import { showHsToolbar } from './var-toolbar.js';
+import { createImageBox } from '../image-box.js';
+import { wireBannerHeightHandles, wireBannerSpacingHandles, wireCanvasTextEditing, wireElementDrag } from './banner.js';
+import { removeActiveHsLogo, showHsToolbar } from './var-toolbar.js';
 import { renderVarList, buildLibStrip } from './variations.js';
 import { uploadLogo } from '../supabase.js';
 import { renderCanvasPanel } from '../canvas-panel.js';
@@ -24,13 +24,7 @@ function rescaleEditorInput(previewId) {
     const kind = input.closest('.canvas-edit-zone')?.dataset?.kind;
     if (!kind) return;
     const src = (HS.editingVarId && HS.editingDraft) ? HS.editingDraft : HS;
-    const t = kind === 'top'            ? src.topText
-            : kind === 'bottom'         ? src.bottomText
-            : kind === 'bannerTopTitle' ? src.bannerTop?.topText
-            : kind === 'bannerTopSub'   ? src.bannerTop?.subText
-            : kind === 'bannerBotTitle' ? src.bannerBottom?.topText
-            : kind === 'bannerBotSub'   ? src.bannerBottom?.subText
-            : null;
+    const t = kind === 'top' ? src.topText : kind === 'bottom' ? src.bottomText : null;
     if (!t) return;
     input.style.fontSize = Math.max(9, Math.round((t.size || 200) * sc)) + 'px';
   });
@@ -81,121 +75,10 @@ export function initHsStep1Canvas(container) {
     setZoom: v => { UI.hsStep1Zoom = v; },
     onApply: () => { if (UI.canvasEdit) rescaleEditorInput('hsStep1Preview'); },
     canvasContentHtml: '<div class="hs-sign-thumb" id="hsStep1Preview"></div>',
-    description: "Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed sign.",
   });
 }
 
 export function applyHsStep1Zoom(pct) { hsStep1Canvas?.apply(pct); }
-
-// ── Logo position helper ───────────────────────────────────
-
-export function positionWrap(wrap, ld) {
-  wrap.style.left   = ld.x + '%';
-  wrap.style.top    = ld.y + '%';
-  wrap.style.width  = ld.w + '%';
-  wrap.style.height = 'auto';
-}
-
-// ── Logo drag/resize interaction ───────────────────────────
-
-// The logo's x/y are stored as % of its zone box, but the zone is now just a
-// placement suggestion, not a hard boundary — a logo should be draggable
-// anywhere across the whole sign canvas. #hsSignPreview's own overflow:hidden
-// clips it once it bleeds past the canvas/bleed edge. Convert the canvas
-// bounds into that zone-relative % space.
-function canvasBoundsInZonePct(dz) {
-  const dzRect = dz.getBoundingClientRect();
-  const containerRect = document.getElementById('hsSignPreview').getBoundingClientRect();
-  return {
-    minX: (containerRect.left - dzRect.left) / dzRect.width  * 100,
-    maxX: (containerRect.right - dzRect.left) / dzRect.width  * 100,
-    minY: (containerRect.top  - dzRect.top)  / dzRect.height * 100,
-    maxY: (containerRect.bottom - dzRect.top) / dzRect.height * 100,
-  };
-}
-
-export function setupHsInteraction(dz, wrap, handle, variation) {
-  let mode = null;
-  let startPX, startPY, startX, startY, rStartX, rStartW, dzRect;
-
-  wrap.addEventListener('pointerdown', e => {
-    if (e.target === handle) return;
-    mode = 'move';
-    dzRect = dz.getBoundingClientRect();
-    dz.classList.add('dz-adjusting');
-    wrap.setPointerCapture(e.pointerId);
-    startPX = e.clientX; startPY = e.clientY;
-    startX  = parseFloat(wrap.style.left);
-    startY  = parseFloat(wrap.style.top);
-    e.preventDefault();
-  });
-
-  handle.addEventListener('pointerdown', e => {
-    mode = 'resize';
-    dzRect = dz.getBoundingClientRect();
-    dz.classList.add('dz-adjusting');
-    handle.setPointerCapture(e.pointerId);
-    rStartX = e.clientX;
-    rStartW = parseFloat(wrap.style.width);
-    e.stopPropagation();
-    e.preventDefault();
-  });
-
-  wrap.addEventListener('pointermove', e => {
-    // hasPointerCapture guards against a dropped/lost pointerup leaving `mode`
-    // stuck set — without it, a later hover-only pointermove would move/resize
-    // the logo using the stale start point from the previous gesture.
-    if (!mode) return;
-    if (mode === 'move' && !wrap.hasPointerCapture(e.pointerId)) return;
-    if (mode === 'resize' && !handle.hasPointerCapture(e.pointerId)) return;
-    const ld = variation.logoData || { x: 50, y: 50, w: 90 };
-    if (mode === 'move') {
-      const dx = (e.clientX - startPX) / dzRect.width  * 100;
-      const dy = (e.clientY - startPY) / dzRect.height * 100;
-      const bounds = canvasBoundsInZonePct(dz);
-      let nx = Math.max(bounds.minX, Math.min(bounds.maxX, startX + dx));
-      let ny = Math.max(bounds.minY, Math.min(bounds.maxY, startY + dy));
-      const snapX = 5 / dzRect.width  * 100;
-      const snapY = 5 / dzRect.height * 100;
-      const snapH = Math.abs(nx - 50) < snapX;
-      const snapV = Math.abs(ny - 50) < snapY;
-      if (snapH) nx = 50;
-      if (snapV) ny = 50;
-      dz.classList.toggle('snap-h', snapH);
-      dz.classList.toggle('snap-v', snapV);
-      ld.x = nx; ld.y = ny;
-      variation.logoData = ld;
-      positionWrap(wrap, ld);
-    } else if (mode === 'resize') {
-      const delta = (e.clientX - rStartX) / dzRect.width * 100 * 2;
-      const nw = Math.max(10, rStartW + delta);
-      const ld2 = variation.logoData || { x: 50, y: 50, w: 90 };
-      ld2.w = nw;
-      variation.logoData = ld2;
-      positionWrap(wrap, ld2);
-    }
-  });
-
-  handle.addEventListener('pointermove', e => {
-    if (mode !== 'resize' || !handle.hasPointerCapture(e.pointerId)) return;
-    const ld = variation.logoData || { x: 50, y: 50, w: 90 };
-    const delta = (e.clientX - rStartX) / dzRect.width * 100 * 2;
-    ld.w = Math.max(10, rStartW + delta);
-    variation.logoData = ld;
-    positionWrap(wrap, ld);
-  });
-
-  const onUp = () => {
-    if (!mode) return;
-    mode = null;
-    dz.classList.remove('dz-adjusting', 'snap-h', 'snap-v');
-    renderVarList();
-  };
-  wrap.addEventListener('pointerup', onUp);
-  handle.addEventListener('pointerup', onUp);
-  wrap.addEventListener('pointercancel', onUp);
-  handle.addEventListener('pointercancel', onUp);
-}
 
 // ── Variation preview ──────────────────────────────────────
 
@@ -276,6 +159,25 @@ export function renderVariationPreview() {
     preview.appendChild(bgSvgEl);
   }
 
+  // Standard templates place the logo as a DOM overlay (dzone/.dz-logo-wrap
+  // below) so it's draggable — that overlay can't participate in the SVG's
+  // own paint order, so it always rendered above literally everything baked
+  // into bgSvgEl, including the frame (banner/text/template logo slots),
+  // which defaults to sitting above content there. Pull the frame back out
+  // into its own z-indexed overlay (reusing the same .dz-frame-overlay /
+  // .above-frame rules the flag canvas uses) so the DOM logo stacks with it
+  // correctly instead of always winning.
+  if (!isFullGraphic && bgSvgEl) {
+    const frameGroup = bgSvgEl.querySelector('.hs-frame');
+    if (frameGroup) {
+      const frameSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      frameSvg.setAttribute('viewBox', `0 0 ${HS_W} ${HS_H}`);
+      frameSvg.setAttribute('class', 'dz-frame-overlay');
+      frameSvg.appendChild(frameGroup);
+      preview.appendChild(frameSvg);
+    }
+  }
+
   if (!HS.activeVarId) {
     const ph = document.createElement('div');
     ph.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:13px;color:rgba(255,255,255,.6);';
@@ -308,7 +210,6 @@ export function renderVariationPreview() {
       wireCanvasTextEditing(preview);
       wireBannerHeightHandles(preview);
       wireBannerSpacingHandles(preview);
-      wireQuickAddHover(preview);
     }
     return;
   }
@@ -337,41 +238,49 @@ export function renderVariationPreview() {
     const gv = document.createElement('div'); gv.className = 'dz-guide-v'; dzone.appendChild(gv);
 
     if (hasLogo) {
-      const ld = variation.logoData || { x: 50, y: 50, w: 90 };
-      const wrap = document.createElement('div');
-      wrap.className = 'dz-logo-wrap';
-      positionWrap(wrap, ld);
-
+      if (!variation.logoData) variation.logoData = { x: 50, y: 50, w: 90 };
       const displaySrc = variation.logoSrcTight || variation.logoSrc;
-      if (isDisplayableImage(displaySrc)) {
-        const img = document.createElement('img');
-        img.className = 'placed-img';
-        img.src = displaySrc;
-        img.alt = variation.name;
-        img.draggable = false;
-        wrap.appendChild(img);
-      } else {
-        const badge = document.createElement('div');
-        badge.className = 'placed-file-badge';
-        badge.textContent = fileTypeLabel(displaySrc);
-        wrap.appendChild(badge);
-      }
 
-      const handle = document.createElement('div');
-      handle.className = 'dz-resize';
-      wrap.appendChild(handle);
-
-      dzone.appendChild(wrap);
-      setupHsInteraction(dzone, wrap, handle, variation);
-
-      wrap.addEventListener('click', e => {
-        e.stopPropagation();
-        if (UI.hsActiveZone?.dzone === dzone) { hideHsToolbar(); return; }
-        if (UI.hsActiveZone) UI.hsActiveZone.dzone.classList.remove('selected');
-        UI.hsActiveZone = { dzone, variation };
-        dzone.classList.add('selected');
-        showHsToolbar(dzone);
+      let wrap;
+      wrap = createImageBox(dzone, preview, variation.logoData, {
+        src: displaySrc,
+        alt: variation.name,
+        aboveFrame: variation.aboveFrame,
+        onCommit: () => renderVarList(),
+        onClick: () => {
+          if (UI.hsActiveZone?.dzone === dzone) { hideHsToolbar(); return; }
+          if (UI.hsActiveZone) {
+            UI.hsActiveZone.dzone.classList.remove('selected');
+            UI.hsActiveZone.wrap?.classList.remove('selected');
+          }
+          UI.hsActiveZone = { dzone, wrap, variation };
+          dzone.classList.add('selected');
+          // The purple "selected" outline lives on the image box itself
+          // (.dz-logo-wrap.selected) — dzone's own .selected only tints its
+          // background, so without this the wrap never shows anything but
+          // its blue :hover outline, i.e. it looked permanently "unselected".
+          wrap.classList.add('selected');
+          showHsToolbar(dzone);
+        },
+        // Hover shortcuts — jump straight to the same toolbar+picker (swap) or
+        // removal (remove) a plain click would reach, without the
+        // intermediate select-then-click-Replace step.
+        onSwap: () => {
+          if (UI.hsActiveZone) {
+            UI.hsActiveZone.dzone.classList.remove('selected');
+            UI.hsActiveZone.wrap?.classList.remove('selected');
+          }
+          UI.hsActiveZone = { dzone, wrap, variation };
+          dzone.classList.add('selected');
+          wrap.classList.add('selected');
+          showHsToolbar(dzone, true);
+        },
+        onRemove: () => {
+          UI.hsActiveZone = { dzone, wrap, variation };
+          removeActiveHsLogo();
+        },
       });
+      dzone.appendChild(wrap);
     } else {
       dzone.style.cursor = 'pointer';
       dzone.addEventListener('click', e => {
@@ -439,7 +348,6 @@ export function renderVariationPreview() {
     wireCanvasTextEditing(preview);
     wireBannerHeightHandles(preview);
     wireBannerSpacingHandles(preview);
-    wireQuickAddHover(preview);
   }
 }
 

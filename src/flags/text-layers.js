@@ -59,6 +59,10 @@ function openFlagTlToolbar(id, anchorEl, textLayers, onChange) {
       <i class="fa-solid fa-align-right" aria-hidden="true"></i>
     </button>
     <div class="hs-tl-tb-sep"></div>
+    <button class="hs-tl-tb-btn" id="flagTlFrameToggle" title="Move relative to the template's border/tag frame">
+      ${layer.aboveFrame ? '<i class="fa-solid fa-arrow-down"></i> Below Template' : '<i class="fa-solid fa-arrow-up"></i> Above Template'}
+    </button>
+    <div class="hs-tl-tb-sep"></div>
     <button class="hs-tl-tb-btn hs-tl-tb-delete" title="Remove">Remove</button>`;
 
   document.body.appendChild(tb);
@@ -112,6 +116,18 @@ function openFlagTlToolbar(id, anchorEl, textLayers, onChange) {
       if (div) div.style.textAlign = l.align;
       onChange();
     });
+  });
+
+  const frameToggleBtn = tb.querySelector('#flagTlFrameToggle');
+  frameToggleBtn.addEventListener('click', () => {
+    const l = textLayers.find(x => x.id === id); if (!l) return;
+    l.aboveFrame = !l.aboveFrame;
+    const overlay = getOverlay();
+    if (overlay) overlay.classList.toggle('above-frame', l.aboveFrame);
+    frameToggleBtn.innerHTML = l.aboveFrame
+      ? '<i class="fa-solid fa-arrow-down"></i> Below Template'
+      : '<i class="fa-solid fa-arrow-up"></i> Above Template';
+    onChange();
   });
 
   tb.querySelector('.hs-tl-tb-delete').addEventListener('click', () => {
@@ -276,7 +292,7 @@ export function renderFlagTextOverlaysStatic(wrapId, textLayers, mirror = false)
     const align = mirror ? (layer.align === 'left' ? 'right' : layer.align === 'right' ? 'left' : layer.align) : layer.align;
 
     const overlay = document.createElement('div');
-    overlay.className = 'hs-tl-overlay flag-tl-overlay';
+    overlay.className = 'hs-tl-overlay flag-tl-overlay' + (layer.aboveFrame ? ' above-frame' : '');
     overlay.dataset.tlId = layer.id;
     overlay.style.cssText = `position:absolute;left:${x}%;top:${layer.y}%;width:${layer.w}%;pointer-events:none;`;
 
@@ -330,7 +346,7 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
     const isActive = _activeFlagTlId === layer.id;
 
     const overlay = document.createElement('div');
-    overlay.className = 'hs-tl-overlay flag-tl-overlay' + (isActive ? ' selected' : '');
+    overlay.className = 'hs-tl-overlay flag-tl-overlay' + (isActive ? ' selected' : '') + (layer.aboveFrame ? ' above-frame' : '');
     overlay.dataset.tlId = layer.id;
     overlay.style.cssText = `position:absolute;left:${layer.x}%;top:${layer.y}%;width:${layer.w}%;`;
 

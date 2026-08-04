@@ -8,6 +8,8 @@ import { esc } from './dom-utils.js';
 const MIN_ZOOM = 40;
 const MAX_ZOOM = 400;
 const MIN_HEIGHT = 240;
+// Breathing room left below the viewport-height-fitted canvas so it stops
+// short of the browser's bottom edge instead of touching it flush.
 const BELOW_MARGIN = 24;
 
 // Resize listeners are process-global (one per scrollId, however many times
@@ -18,8 +20,14 @@ const wiredResize = new Set();
 
 function fitCanvas(scroll, wrap, aspect, pct) {
   if (!scroll || !wrap) return;
-  const top = scroll.getBoundingClientRect().top;
-  const availH = Math.max(MIN_HEIGHT, Math.round(window.innerHeight - top - BELOW_MARGIN));
+  // Budget off the whole panel's bottom edge, not just canvas-scroll's own —
+  // otherwise the footer (zoom controls / bleed hint) that follows the scroll
+  // area inside the panel eats into BELOW_MARGIN and pushes the panel itself
+  // past the viewport instead of leaving breathing room below it.
+  const panel = scroll.closest('.var-canvas-panel') || scroll;
+  const panelTop = panel.getBoundingClientRect().top;
+  const chromeHeight = panel.offsetHeight - scroll.offsetHeight;
+  const availH = Math.max(MIN_HEIGHT, Math.round(window.innerHeight - panelTop - chromeHeight - BELOW_MARGIN));
   scroll.style.height = availH + 'px';
   const cw = scroll.clientWidth, ch = scroll.clientHeight;
   if (!cw || !ch) return;
@@ -28,6 +36,35 @@ function fitCanvas(scroll, wrap, aspect, pct) {
   const k = (pct || 100) / 100;
   wrap.style.width  = Math.round(w * k) + 'px';
   wrap.style.height = Math.round(h * k) + 'px';
+}
+
+// Keeps a side panel (e.g. the variations list) sized to roughly fill the
+// remaining viewport height, using the same live-measured math as fitCanvas
+// above rather than CSS position:sticky + a vh-based height — a sticky panel
+// with a viewport-relative height overflows the viewport whenever its actual
+// (pre-stick) position sits lower than the offset that height assumes, which
+// is exactly what happened once a sticky header sat above it too.
+const wiredPanelResize = new Set();
+
+export function fitSidePanel(panelId, minHeight = MIN_HEIGHT) {
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  const top = panel.getBoundingClientRect().top;
+  panel.style.height = Math.max(minHeight, Math.round(window.innerHeight - top - BELOW_MARGIN)) + 'px';
+
+  if (!wiredPanelResize.has(panelId)) {
+    wiredPanelResize.add(panelId);
+    let raf = null;
+    window.addEventListener('resize', () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => fitSidePanel(panelId, minHeight));
+    });
+    // Web fonts swapping in after this initial measurement can reflow the
+    // header above this panel (different line-wrap/metrics), shifting `top`
+    // out from under it with nothing left to trigger a re-measure — redo it
+    // once fonts have actually settled.
+    document.fonts?.ready.then(() => fitSidePanel(panelId, minHeight));
+  }
 }
 
 export function createCanvasPanel({
@@ -89,10 +126,19 @@ export function createCanvasPanel({
         if (raf) cancelAnimationFrame(raf);
         raf = requestAnimationFrame(refit);
       });
+      // Web fonts swapping in after the initial refit below can reflow
+      // surrounding chrome and shift this panel's top offset — redo it once
+      // fonts have actually settled.
+      document.fonts?.ready.then(refit);
     }
   }
 
   wireOnce();
+  // Nothing else forces an initial fit — without this the canvas would sit
+  // at its natural (unconstrained) CSS size until the first resize/zoom
+  // interaction, which is exactly what showed up as a clipped-looking canvas
+  // on first load.
+  refit();
   return { apply, setZoom: setZoomClamped, refit };
 }
 

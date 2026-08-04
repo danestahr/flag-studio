@@ -17,8 +17,9 @@ import {
 import { initDropZones, renderDropZones, hideZoneToolbar } from './drop-zones.js';
 import { eyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
 import { esc } from '../dom-utils.js';
+import { logoThumbHtml } from '../media-utils.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
-import { renderCanvasPanel } from '../canvas-panel.js';
+import { renderCanvasPanel, fitSidePanel } from '../canvas-panel.js';
 
 let isDirty = false;
 let _baseZoom = 100;
@@ -124,6 +125,7 @@ window.pickFlag = function (id) {
   renderP1Colors();
   checkStep1();
   syncSidebar();
+  fitSidePanel('p1ControlsCol');
   markDirty();
 };
 
@@ -134,8 +136,9 @@ window.pickFlag = function (id) {
 function p1ZonePickerHtml(zid, hex) {
   const swatch = hex
     ? `<input type="color" id="p1cn-${zid}" value="${hex}" oninput="p1CSync('${zid}',this.value)" onchange="p1CApply('${zid}')">`
-    : `<div class="csw" onclick="document.getElementById('p1cn-${zid}').click()"></div>
-       <input type="color" id="p1cn-${zid}" value="#1A4A2E" oninput="p1CSync('${zid}',this.value)" onchange="p1CApply('${zid}')" style="position:absolute;opacity:0;width:0;height:0">`;
+    : `<div class="csw">
+       <input type="color" id="p1cn-${zid}" value="#1A4A2E" oninput="p1CSync('${zid}',this.value)" onchange="p1CApply('${zid}')" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:none;padding:0">
+     </div>`;
   return `<div class="ve-custom-row">
       ${swatch}
       <input type="text" class="hexin" id="p1ch-${zid}" value="${hex || ''}" maxlength="7" placeholder="#000000" oninput="p1CSyncN('${zid}',this.value)" onkeydown="if(event.key==='Enter')p1CApply('${zid}')">
@@ -195,6 +198,7 @@ window.toggleGsTag = function (checked) {
   if (text) text.textContent = checked ? 'On' : 'Off';
   refreshFlagPreviews();
   refreshColorPrev();
+  fitSidePanel('p1ControlsCol');
   markDirty();
 };
 
@@ -261,8 +265,9 @@ function s2ZonePickerHtml(zid) {
   const hex = S.colors[zid];
   const swatch = hex
     ? `<input type="color" id="cn-${zid}" value="${hex}" oninput="cSync('${zid}',this.value)" onchange="cApply('${zid}')">`
-    : `<div class="csw" onclick="document.getElementById('cn-${zid}').click()"></div>
-       <input type="color" id="cn-${zid}" value="#1A4A2E" oninput="cSync('${zid}',this.value)" onchange="cApply('${zid}')" style="position:absolute;opacity:0;width:0;height:0">`;
+    : `<div class="csw">
+       <input type="color" id="cn-${zid}" value="#1A4A2E" oninput="cSync('${zid}',this.value)" onchange="cApply('${zid}')" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:none;padding:0">
+     </div>`;
   return `<div class="ve-custom-row">
       ${swatch}
       <input type="text" class="hexin" id="ch-${zid}" value="${hex || ''}" maxlength="7" placeholder="#000000" oninput="cSyncN('${zid}',this.value)" onkeydown="if(event.key==='Enter')cApply('${zid}')">
@@ -417,7 +422,7 @@ function renderLib() {
   g.innerHTML = S.library.map(l => `
     <div class="lib-item ${l.uploading ? 'uploading' : ''}" id="li-${l.id}" draggable="${!l.uploading}"
       ondragstart="dragStart(event,'${l.id}')" ondragend="dragEnd('${l.id}')">
-      <img src="${l.src}" alt="${l.name}">
+      ${logoThumbHtml(l.src, l.name)}
       <div class="lib-item-name">${l.uploading ? '<i class="fa-solid fa-upload" aria-hidden="true"></i> uploading…' : l.name}</div>
       ${l.uploading ? '' : `<button class="lib-del" onclick="delLogo('${l.id}')"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>`}
     </div>`).join('');
@@ -490,7 +495,8 @@ function renderCustomerSection(intake) {
   if (!el) return;
   const fmt = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
   const addr = [intake.address_line1, intake.address_line2, intake.city, intake.state_province, intake.postal_code, intake.country].filter(Boolean).join(', ');
-  const colors = Array.isArray(intake.flag_colors) ? intake.flag_colors : [];
+  // flag_colors is either a legacy bare array (old orders) or { zones, gsTag, gsTagMode } (see order.js)
+  const colors = Array.isArray(intake.flag_colors) ? intake.flag_colors : (intake.flag_colors?.zones || []);
   el.innerHTML = `
     <div class="sdivider"></div>
     <div class="cs-wrap">
@@ -572,6 +578,7 @@ await loadAllFlags(FLAGS);
 renderFlagGrid();
 renderP1Colors();
 syncGsTagUI();
+fitSidePanel('p1ControlsCol');
 
 const _urlProject = new URLSearchParams(window.location.search).get('project');
 if (_urlProject) {
@@ -602,9 +609,23 @@ if (_urlProject) {
       if (flag?.logoZoneSets) flag.logoZones = flag.logoZoneSets[S.logoLayout] || flag.logoZones;
     } else if (intake) {
       if (intake.flag_style) S.flagId = intake.flag_style;
-      const colors = Array.isArray(intake.flag_colors) ? intake.flag_colors : [];
-      if (colors[0]?.hex) S.colors['zone-primary'] = colors[0].hex;
-      if (colors[1]?.hex) S.colors['zone-secondary'] = colors[1].hex;
+      // flag_colors is either a legacy bare array (old orders, positional
+      // primary/secondary only) or { zones: [{zone,hex,...}], gsTag, gsTagMode }
+      // as written by the order intake form — zone-tagged so it doesn't
+      // depend on array position, and it also carries the GS tag choice.
+      const fc = intake.flag_colors;
+      const colors = Array.isArray(fc) ? fc : (fc?.zones || []);
+      const byZone = Object.fromEntries(colors.filter(c => c?.zone).map(c => [c.zone, c]));
+      const primary = byZone['zone-primary'] || colors[0];
+      const secondary = byZone['zone-secondary'] || colors[1];
+      const border = byZone['zone-border'];
+      if (primary?.hex) S.colors['zone-primary'] = primary.hex;
+      if (secondary?.hex) S.colors['zone-secondary'] = secondary.hex;
+      if (border?.hex) S.colors['zone-border'] = border.hex;
+      if (fc && !Array.isArray(fc)) {
+        if (typeof fc.gsTag === 'boolean') S.gsTag = fc.gsTag;
+        if (fc.gsTagMode) S.gsTagMode = fc.gsTagMode;
+      }
     }
     setSidebarProjectName(S.projectName, S.projectId);
     if (!S.flagId) S.flagId = 'plain';

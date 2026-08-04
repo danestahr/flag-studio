@@ -20,7 +20,7 @@ import { esc } from '../dom-utils.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 import { renderLogoTray } from '../logo-tray.js';
 import { renderVariationList, refreshVariationThumbs } from '../variation-list.js';
-import { renderCanvasPanel } from '../canvas-panel.js';
+import { renderCanvasPanel, fitSidePanel } from '../canvas-panel.js';
 
 let isDirty = false;
 let activeFace = 'front';
@@ -305,8 +305,10 @@ const flagCanvas = renderCanvasPanel(document.getElementById('flagCanvasPanel'),
     <div class="flag-wrap" id="varWrap">
       <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
     </div>`,
-  description: "Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.",
+  description: "Drag from library into a zone. Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.",
 });
+
+fitSidePanel('varListPanel');
 
 const varThumbId = v => 'vt-' + v.id;
 const paintVarThumb = (el, v) => renderInto(el, v.logos || [], 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
@@ -697,6 +699,12 @@ function renderBackMirrorPreview(v, varFlag, varColors, gsTagOpts) {
   const svg = makeSvg(v.logos, '100%', '100%', 'back', true, varFlag, varColors, [], gsTagOpts);
   const old = document.getElementById('varSvg');
   if (!svg) { if (old) old.remove(); return; }
+  // makeSvg leaves the grey bleed guide in its original (pre-frame) position,
+  // so the border zone — which deliberately paints past the trim line, with
+  // no gap once printed and cut — ends up covering it. Promote it back to
+  // the top here, matching the guide's z-order in the editable front view.
+  const bleedEl = svg.querySelector('[id="Bleed"], [id="bleed"]');
+  if (bleedEl) svg.appendChild(bleedEl);
   svg.id = 'varSvg';
   svg.classList.add('bsvg');
   svg.style.cssText = 'display:block;width:100%;height:100%';
