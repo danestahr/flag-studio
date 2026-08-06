@@ -106,7 +106,12 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
   let dragging = false, startPX, startPY, startX, startY;
 
   wrap.addEventListener('pointerdown', e => {
-    if (isCorner(e.target)) return;
+    // Also skip the hover-only swap/remove buttons — capturing the pointer
+    // here would redirect their eventual `click` event's target to `wrap`
+    // itself (per the Pointer Events spec, capture redirects associated
+    // mouse events too), so the button's own click listener never runs and
+    // this component's generic onClick fires in its place instead.
+    if (isCorner(e.target) || e.target.closest('.dz-logo-hover-actions')) return;
     dragging = true;
     zone.classList.add('dz-adjusting');
     wrap.setPointerCapture(e.pointerId);
