@@ -182,7 +182,8 @@ function computeLayout(state, templateId) {
     const stripH = tll ? tll.stripH : 0;
     let stripY = bannerTopH + HS_MARGIN;
     if (state.templateLogos?.vAlign === 'bottom') stripY = HS_H - bannerBotH - HS_MARGIN - stripH;
-    return { logoY: 0, logoH: HS_H, stripY, stripH, bannerTopH: 0, bannerBotH: 0 };
+    return { topH: 0, botH: 0, logoY: 0, logoH: HS_H, stripY, stripH, bannerTopH: 0, bannerBotH: 0,
+             topTextX: HS_W / 2, topTextAnchor: 'middle', botTextX: HS_W / 2, botTextAnchor: 'middle' };
   }
   if (templateId === 'hole-sign-logo-only') {
     const logoY = bannerTopH + HS_MARGIN;
@@ -191,12 +192,28 @@ function computeLayout(state, templateId) {
     const stripH = tll ? tll.stripH : 0;
     let stripY = logoY;
     if (state.templateLogos?.vAlign === 'bottom') stripY = HS_H - bannerBotH - HS_MARGIN - stripH;
-    return { logoY, logoH, stripY, stripH, bannerTopH, bannerBotH };
+    return { topH: 0, botH: 0, logoY, logoH, stripY, stripH, bannerTopH, bannerBotH,
+             topTextX: HS_W / 2, topTextAnchor: 'middle', botTextX: HS_W / 2, botTextAnchor: 'middle' };
   }
 
+  // Plain top/bottom sponsor captions (state.topText/bottomText) are
+  // independent of any banner — they stack just inside it (or from the sign
+  // edge, when that banner is off) and carve their own space out of the
+  // sponsor logo zone, same as a banner does.
+  const top = state.topText;
+  const bot = state.bottomText;
+  const topBox = fitTextBox(top.w, top.size);
+  const botBox = fitTextBox(bot.w, bot.size);
+  const topWrappedLines = (top.text && top.text.trim()) ? wrapText(top.text, topBox.w, top.size) : [];
+  const botWrappedLines = (bot.text && bot.text.trim()) ? wrapText(bot.text, botBox.w, bot.size) : [];
+  const topH = topWrappedLines.length ? Math.round(topWrappedLines.length * top.size * 1.1 + 80) : 0;
+  const botH = botWrappedLines.length ? Math.round(botWrappedLines.length * bot.size * 1.1 + 80) : 0;
+  const topGap = topH > 0 ? HS_GAP : 0;
+  const botGap = botH > 0 ? HS_GAP : 0;
+
   // Sponsor logo zone uses everything between the top/bottom zones.
-  const logoY = bannerTopH + HS_MARGIN;
-  const logoH = Math.max(0, HS_H - bannerTopH - bannerBotH - 2 * HS_MARGIN);
+  const logoY = bannerTopH + HS_MARGIN + topH + topGap;
+  const logoH = Math.max(0, HS_H - bannerTopH - bannerBotH - 2 * HS_MARGIN - topH - topGap - botH - botGap);
 
   // Default strip Y for template-logo initial placement (slots with no freeX set).
   // Placed at the start of the logo zone; bottom vAlign flips to the bottom edge.
@@ -205,10 +222,12 @@ function computeLayout(state, templateId) {
   const stripH = tll ? tll.stripH : 0;
   let stripY = logoY;
   if (tl?.vAlign === 'bottom') {
-    stripY = HS_H - bannerBotH - HS_MARGIN - stripH;
+    stripY = HS_H - bannerBotH - HS_MARGIN - botH - botGap - stripH;
   }
 
-  return { logoY, logoH, stripY, stripH, bannerTopH, bannerBotH };
+  return { topH, botH, logoY, logoH, stripY, stripH, bannerTopH, bannerBotH,
+           topTextX: HS_W / 2, topTextAnchor: 'middle', topTextMaxW: topBox.w, topTextBoxX: topBox.x, topWrappedLines,
+           botTextX: HS_W / 2, botTextAnchor: 'middle', botTextMaxW: botBox.w, botTextBoxX: botBox.x, botWrappedLines };
 }
 
 // Full-width top/bottom zone rect (sign coords), or null when nothing is
@@ -220,6 +239,27 @@ export function getBannerRect(state, which) {
   if (!(h > 0)) return null;
   const y = which === 'bottom' ? HS_H - h : 0;
   return { x: 0, y, w: HS_W, h };
+}
+
+// Editable text band rects (sign coords) for the plain top/bottom sponsor
+// captions — used to place inline click-to-edit overlays on the canvas.
+// Banner captions are ordinary docked free text layers now (see
+// dockedLayerPositions) and use the free-text-layer overlay instead, so this
+// only ever returns `top`/`bottom` keys. Only includes a region when that
+// band actually has space, unless forceText says it's being edited right now.
+export function getTextRegions(state, templateId, forceText = []) {
+  const tid = templateId || state.templateStyle || 'hole-sign-1';
+  const regions = {};
+  if (tid === 'hole-sign-logo-only') return regions;
+  const L = computeLayout(state, tid);
+  const oneLine = size => Math.round((size || 200) * 1.1 + 80);
+  const topBox = fitTextBox(state.topText.w, state.topText.size);
+  const botBox = fitTextBox(state.bottomText.w, state.bottomText.size);
+  if (L.topH > 0) regions.top = { x: topBox.x, y: L.bannerTopH + HS_MARGIN, w: topBox.w, h: L.topH };
+  else if (forceText.includes('top')) regions.top = { x: topBox.x, y: L.bannerTopH + HS_MARGIN, w: topBox.w, h: oneLine(state.topText.size) };
+  if (L.botH > 0) regions.bottom = { x: botBox.x, y: HS_H - L.bannerBotH - HS_MARGIN - L.botH, w: botBox.w, h: L.botH };
+  else if (forceText.includes('bottom')) { const h = oneLine(state.bottomText.size); regions.bottom = { x: botBox.x, y: HS_H - L.bannerBotH - HS_MARGIN - h, w: botBox.w, h }; }
+  return regions;
 }
 
 export function getLogoZone(state, templateId) {
@@ -361,8 +401,32 @@ export function makeHoleSignSvg(state, variation) {
   // per-variation overrides. Prefer it over variation.templateId which can be a
   // stale value set when the variation was first created.
   const templateId = state.templateStyle || variation?.templateId || 'hole-sign-1';
+  let { topH, botH, bannerTopH, bannerBotH, topTextX, topTextAnchor, topTextMaxW, topTextBoxX,
+        botTextX, botTextAnchor, botTextMaxW, botTextBoxX, topWrappedLines, botWrappedLines } = computeLayout(state, templateId);
   const viewBox = `0 0 ${HS_W} ${HS_H}`;
   const bg = state.background;
+  const topText = state.topText;
+  const bottomText = state.bottomText;
+  // Apply explicit text alignment only when the user has deliberately set it
+  // (non-center forces the x position to the text box's own edge — which may
+  // be narrower than the full margin span if the box has been resized).
+  if (topText.align === 'left' || topText.align === 'right') {
+    topTextAnchor = topText.align === 'left' ? 'start' : 'end';
+    topTextX      = topText.align === 'left' ? topTextBoxX : topTextBoxX + topTextMaxW;
+  } else if (topText.align === 'center') {
+    topTextAnchor = 'middle';
+    topTextX      = HS_W / 2;
+  }
+  if (bottomText.align === 'left' || bottomText.align === 'right') {
+    botTextAnchor = bottomText.align === 'left' ? 'start' : 'end';
+    botTextX      = bottomText.align === 'left' ? botTextBoxX : botTextBoxX + botTextMaxW;
+  } else if (bottomText.align === 'center') {
+    botTextAnchor = 'middle';
+    botTextX      = HS_W / 2;
+  }
+  // Text keys to lay out but not draw (e.g. while being edited inline, so the
+  // SVG copy doesn't show around the live editor — avoids the "halo").
+  const hide = state.hideText || [];
 
   const getFamily = (fontId) => {
     const f = HS_FONTS.find(f => f.id === fontId);
@@ -410,6 +474,30 @@ export function makeHoleSignSvg(state, variation) {
   // (frameParts push after variationParts below) rather than reserving space.
   frameParts.push(...renderBanner(state, 'top'));
   frameParts.push(...renderBanner(state, 'bottom'));
+
+  // Plain top/bottom sponsor captions — independent of any banner, always
+  // drawn in their own reserved band (see computeLayout). Hidden while being
+  // edited inline (state.hideText) so the live DOM editor is the only visual.
+  if (templateId !== 'hole-sign-logo-only' && topH > 0 && topText.text && topText.text.trim() && !hide.includes('top')) {
+    const lines = topWrappedLines?.length ? topWrappedLines : wrapText(topText.text, topTextMaxW, topText.size);
+    const lineH = topText.size * 1.1;
+    const bandCY = bannerTopH + HS_MARGIN + topH / 2;
+    const firstBaseY = bandCY - (lines.length - 1) * lineH / 2 + topText.size * 0.38;
+    const tspans = lines.map((line, i) =>
+      `<tspan x="${topTextX}"${i === 0 ? '' : ` dy="${lineH}"`}>${escXml(line)}</tspan>`
+    ).join('');
+    frameParts.push(`<text x="${topTextX}" y="${Math.round(firstBaseY)}" text-anchor="${topTextAnchor}" font-family="${escXml(getFamily(topText.font))}" font-size="${topText.size}" fill="${escXml(topText.color || '#111110')}">${tspans}</text>`);
+  }
+  if (templateId !== 'hole-sign-logo-only' && botH > 0 && bottomText.text && bottomText.text.trim() && !hide.includes('bottom')) {
+    const lines = botWrappedLines?.length ? botWrappedLines : wrapText(bottomText.text, botTextMaxW, bottomText.size);
+    const lineH = bottomText.size * 1.1;
+    const bandCY = HS_H - bannerBotH - HS_MARGIN - botH / 2;
+    const firstBaseY = bandCY - (lines.length - 1) * lineH / 2 + bottomText.size * 0.38;
+    const tspans = lines.map((line, i) =>
+      `<tspan x="${botTextX}"${i === 0 ? '' : ` dy="${lineH}"`}>${escXml(line)}</tspan>`
+    ).join('');
+    frameParts.push(`<text x="${botTextX}" y="${Math.round(firstBaseY)}" text-anchor="${botTextAnchor}" font-family="${escXml(getFamily(bottomText.font))}" font-size="${bottomText.size}" fill="${escXml(bottomText.color || '#111110')}">${tspans}</text>`);
+  }
 
   // Template logos (drawn into the strip carved out by computeLayout) — part
   // of the template itself (set up once, shared by every variation), so they
