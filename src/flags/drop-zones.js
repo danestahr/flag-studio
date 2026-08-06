@@ -121,7 +121,11 @@ function renderLibPicker() {
       const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
       const lid = el.dataset.lid;
       if (isAdd) {
-        logos.push({ id: 'pl-' + Date.now(), logoId: lid, x: 50, y: 50, w: 75 });
+        // Default new logos above the frame (border + GS tag): the border can be
+        // set to match the flag's primary color, which makes it fully opaque but
+        // visually invisible — a logo left below it silently loses whatever part
+        // falls under the border band, reading as an inexplicable crop.
+        logos.push({ id: 'pl-' + Date.now(), logoId: lid, x: 50, y: 50, w: 75, aboveFrame: true });
       } else if (singleId) {
         const l = logos.find(l => l.id === singleId);
         if (l) l.logoId = lid;
@@ -283,7 +287,7 @@ function ensureToolbar() {
       const logo = await uploadLogo(S.projectId, file);
       S.library.push(logo);
       if (_addActive) {
-        logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75 });
+        logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75, aboveFrame: true });
       } else if (_selectedIds.size === 1) {
         const l = logos.find(l => l.id === [..._selectedIds][0]);
         if (l) l.logoId = logo.id;
@@ -526,7 +530,7 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
       if (file) {
         try {
           const logo = await uploadDroppedFile(file);
-          ctx.logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75 });
+          ctx.logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75, aboveFrame: true });
           renderDropZones(ctx.wrapId, ctx.svgId, ctx.logos, ctx.face, ctx.onChange, ctx.flagOverride, ctx.colorsOverride, ctx.gsTagOpts);
           ctx.onChange();
         } catch (err) { console.error('Logo upload failed', err); }
@@ -535,7 +539,7 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
 
       const dragId = _dragLogoId;
       if (!dragId) return;
-      ctx.logos.push({ id: 'pl-' + Date.now(), logoId: dragId, x: 50, y: 50, w: 75 });
+      ctx.logos.push({ id: 'pl-' + Date.now(), logoId: dragId, x: 50, y: 50, w: 75, aboveFrame: true });
       setDragLogoId(null);
       renderDropZones(ctx.wrapId, ctx.svgId, ctx.logos, ctx.face, ctx.onChange, ctx.flagOverride, ctx.colorsOverride, ctx.gsTagOpts);
       ctx.onChange();
