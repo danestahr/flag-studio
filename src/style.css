@@ -256,7 +256,12 @@ input[type=file] { display:none; }
 .dz-frame-overlay { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:5; }
 .dz-logo-wrap.above-frame, .flag-tl-overlay.above-frame { z-index:10; }
 /* ── Drop zones ──────────────────────────────────────────── */
-.dzone { position:absolute; border:none; border-radius:6px; cursor:default; transition:background .15s; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; overflow:hidden; }
+/* overflow is visible, not hidden: the zone rect is just a placement
+   suggestion (see render.js), and a placed logo (.dz-logo-wrap, a child of
+   this box) routinely gets scaled/dragged past its own zone's edges — it
+   should only ever be clipped by the flag canvas itself (.flag-wrap), same
+   as the final render. */
+.dzone { position:absolute; border:none; border-radius:6px; cursor:default; transition:background .15s; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; overflow:visible; }
 .dzone.has-logo { background:transparent; }
 .dzone.selected { background:rgba(255,255,255,.06); }
 /* When one zone is active, make all others invisible and non-interactive */
