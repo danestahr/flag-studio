@@ -22,6 +22,35 @@ export async function getSession() {
   return session;
 }
 
+// first_name/last_name land in raw_user_meta_data immediately at signup (even
+// before email confirmation), and the handle_new_user trigger copies them into
+// profiles from there — see supabase/migrations for the trigger definition.
+export async function signUp(email, password, { firstName, lastName } = {}) {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { data: { first_name: firstName, last_name: lastName } },
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function resetPasswordForEmail(email) {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/reset-password.html`,
+  });
+  if (error) throw error;
+}
+
+// Revokes every other active session on success, so a password reset actually
+// invalidates a potentially-compromised existing session rather than leaving
+// it live alongside the new password.
+export async function updatePassword(newPassword) {
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw error;
+  await supabase.auth.signOut({ scope: 'others' });
+}
+
 // ── Projects ──────────────────────────────────────────────
 export async function createProject(name = '') {
   const { data, error } = await supabase

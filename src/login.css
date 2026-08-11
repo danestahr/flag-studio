@@ -136,3 +136,23 @@ body {
 
 .login-btn:hover { background: var(--accent-hover); }
 .login-btn:disabled { opacity: .55; cursor: default; }
+
+.login-notice {
+  font-size: 13px;
+  color: var(--gray-700);
+  background: var(--gray-50);
+  border-radius: 6px;
+  padding: 8px 12px;
+  line-height: 1.4;
+}
+
+.login-alt-link {
+  font-size: 13px;
+  color: var(--gray-600);
+  text-align: center;
+}
+
+.login-alt-link a {
+  color: var(--accent);
+  font-weight: 500;
+}

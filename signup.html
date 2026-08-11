@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sign in · Studio</title>
+  <title>Sign up · Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
@@ -18,26 +18,38 @@
       <span>Studio</span>
     </div>
 
-    <h1 class="login-heading">Sign in</h1>
+    <h1 class="login-heading">Create your account</h1>
 
-    <form id="loginForm" class="login-form" novalidate>
+    <form id="signupForm" class="login-form" novalidate>
+      <div class="field">
+        <label for="firstName">First name</label>
+        <input id="firstName" type="text" autocomplete="given-name" required>
+      </div>
+      <div class="field">
+        <label for="lastName">Last name</label>
+        <input id="lastName" type="text" autocomplete="family-name" required>
+      </div>
       <div class="field">
         <label for="email">Email</label>
         <input id="email" type="email" autocomplete="email" placeholder="you@example.com" required>
       </div>
       <div class="field">
         <label for="password">Password</label>
-        <input id="password" type="password" autocomplete="current-password" placeholder="••••••••" required>
+        <input id="password" type="password" autocomplete="new-password" placeholder="At least 10 characters" required minlength="10">
       </div>
-      <p id="loginError" class="login-error" style="display:none"></p>
-      <button type="submit" class="login-btn" id="loginBtn">Sign in</button>
+      <div class="field">
+        <label for="confirmPassword">Confirm password</label>
+        <input id="confirmPassword" type="password" autocomplete="new-password" required minlength="10">
+      </div>
+      <p id="signupError" class="login-error" style="display:none"></p>
+      <p id="signupNotice" class="login-notice" style="display:none"></p>
+      <button type="submit" class="login-btn" id="signupBtn">Create account</button>
     </form>
 
-    <p class="login-alt-link"><a href="/reset-password-request.html">Forgot password?</a></p>
-    <p class="login-alt-link">Don't have an account? <a href="/signup.html">Sign up</a></p>
+    <p class="login-alt-link">Already have an account? <a href="/login.html">Sign in</a></p>
   </div>
 </div>
 
-<script type="module" src="/src/login.js"></script>
+<script type="module" src="/src/signup.js"></script>
 </body>
 </html>

@@ -11,6 +11,9 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         login: resolve(__dirname, 'login.html'),
+        signup: resolve(__dirname, 'signup.html'),
+        'reset-password-request': resolve(__dirname, 'reset-password-request.html'),
+        'reset-password': resolve(__dirname, 'reset-password.html'),
         project: resolve(__dirname, 'project.html'),
 flags: resolve(__dirname, 'flags.html'),
         'flags-variations': resolve(__dirname, 'flags-variations.html'),

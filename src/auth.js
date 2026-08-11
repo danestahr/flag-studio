@@ -1,4 +1,4 @@
-import { getSession, signOut } from './supabase.js';
+import { getSession, signOut, supabase } from './supabase.js';
 
 export async function requireAuth() {
   const session = await getSession();
@@ -8,7 +8,22 @@ export async function requireAuth() {
     await new Promise(() => {}); // halt execution while redirecting
   }
   injectSignOutButton();
+  watchForSignOut();
   return session;
+}
+
+// Opt-in, only reached via requireAuth() — order.js/review.js never call
+// requireAuth() and so never attach this, since both must keep working with
+// no session at all. Catches this tab getting signed out from elsewhere: a
+// sign-out in another tab (supabase-js broadcasts auth state across tabs), or
+// this session getting revoked by a password reset's signOut({scope:'others'})
+// on another device.
+function watchForSignOut() {
+  supabase.auth.onAuthStateChange((event) => {
+    if (event === 'SIGNED_OUT') {
+      window.location.href = '/login.html';
+    }
+  });
 }
 
 function injectSignOutButton() {
