@@ -51,6 +51,15 @@ export async function updatePassword(newPassword) {
   await supabase.auth.signOut({ scope: 'others' });
 }
 
+// Attaches ownership of any project whose order was submitted anonymously
+// under this account's own (confirmed) email — see claim_my_projects() in
+// supabase/migrations. No-op, returns [] if nothing matches.
+export async function claimMyProjects() {
+  const { data, error } = await supabase.rpc('claim_my_projects');
+  if (error) throw error;
+  return data || [];
+}
+
 // ── Projects ──────────────────────────────────────────────
 export async function createProject(name = '') {
   const { data, error } = await supabase

@@ -1,4 +1,4 @@
-import { getSession, signOut, supabase } from './supabase.js';
+import { getSession, signOut, supabase, claimMyProjects } from './supabase.js';
 
 export async function requireAuth() {
   const session = await getSession();
@@ -9,6 +9,10 @@ export async function requireAuth() {
   }
   injectSignOutButton();
   watchForSignOut();
+  // Best-effort: attach any anonymously-submitted orders under this account's
+  // own email. Never blocks page load on failure - this is a background
+  // reconciliation, not a critical path.
+  claimMyProjects().catch((err) => console.error('claimMyProjects failed', err));
   return session;
 }
 
