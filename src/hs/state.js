@@ -53,6 +53,7 @@ export const UI = {
   fontCssCache: null,        // cached embedded-font @font-face CSS
   activeTextLayerId: null,   // id of the currently selected text layer overlay
   editingTextLayerId: null,  // id of the text layer currently being edited inline
+  isStaffOrAdmin: false,     // gates the "Email PDF sheet link" action in export.js
 };
 
 

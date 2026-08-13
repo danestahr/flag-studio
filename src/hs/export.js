@@ -1,7 +1,10 @@
 import { HS, UI, getEffectiveState, getEffectiveVariation } from './state.js';
 import { HS_H, HS_W, emptyTemplateLogos } from '../hole-sign-data.js';
 import { escXml, makeHoleSignSvg, renderHoleSignInto } from '../hole-sign-render.js';
-import { generateShareToken, loadEventName, saveHoleSignConfig, updateProject } from '../supabase.js';
+import {
+  generateShareToken, loadEventName, saveHoleSignConfig, updateProject,
+  loadOrderIntake, uploadPrintSheet, sendPrintSheetReady,
+} from '../supabase.js';
 import { PDFDocument, PDFName, PDFOperator, PDFString, rgb } from 'pdf-lib';
 import JSZip from 'jszip';
 import { dl, slug, sanitizeFilename } from '../dom-utils.js';
@@ -43,6 +46,10 @@ export function renderGallery() {
           <button class="btn sm primary" id="hsExpPrintBtn" style="width:100%;justify-content:center" onclick="downloadHsPrint()"><i class="fa-solid fa-download" aria-hidden="true"></i> Download print sheets (zip)</button>
           <div id="hsExpPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px;margin-top:6px"></div>
         </div>
+        <div class="share-section" id="hsEmailPrintSheetSection" style="display:${UI.isStaffOrAdmin ? '' : 'none'}">
+          <div class="rc-title">Email PDF sheet link</div>
+          <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openEmailPrintSheetModal()">Email PDF sheet link <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+        </div>
         <div class="share-section">
           <div class="rc-title">Share</div>
           <button class="btn sm primary" onclick="generateHsShareLink()">Generate share link</button>
@@ -55,6 +62,8 @@ export function renderGallery() {
       </div>
     </div>
 `;
+
+  ensureEmailPrintSheetModal();
 
   // Build gallery grid
   const grid = document.getElementById('hsGalleryGrid');
@@ -81,6 +90,80 @@ export function renderGallery() {
     selectHsGallery(HS.variations[0].id);
   }
 }
+
+// The gallery panel (unlike flags-gallery.html) is built entirely from JS,
+// so there's no static modal markup to add to - inject it once into the
+// body the first time the gallery renders.
+function ensureEmailPrintSheetModal() {
+  if (document.getElementById('hsEmailPrintSheetModalOverlay')) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'share-modal-overlay';
+  overlay.id = 'hsEmailPrintSheetModalOverlay';
+  overlay.style.display = 'none';
+  overlay.setAttribute('onclick', 'closeEmailPrintSheetModal(event)');
+  overlay.innerHTML = `
+    <div class="share-modal">
+      <div class="share-modal-header">
+        <span class="share-modal-title">Email PDF sheet link</span>
+        <button class="share-modal-close" onclick="closeEmailPrintSheetModal()" aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>
+      <div class="share-modal-body">
+        <p style="font-size:13px;color:var(--gray-500);line-height:1.5;margin:0 0 1rem">This renders the full print-quality PDF sheets, uploads them privately, and emails a download link that expires in 7 days — not the customer-facing share link above.</p>
+        <p class="share-modal-label">Send to</p>
+        <input class="share-email-input" id="hsEmailPrintSheetEmailInput" type="email" placeholder="vendor@example.com">
+        <div id="hsEmailPrintSheetStatus" style="font-size:13px;color:var(--gray-400);min-height:16px;margin-top:6px"></div>
+        <button class="btn sm primary" style="width:100%;justify-content:center;margin-top:8px" onclick="sendHsPrintSheetEmail()">Send link</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+window.openEmailPrintSheetModal = async function () {
+  if (!HS.projectId) { alert('Save your project first.'); return; }
+  const emailInput = document.getElementById('hsEmailPrintSheetEmailInput');
+  emailInput.value = '';
+  loadOrderIntake(HS.projectId).then(intake => { if (intake?.contact_email) emailInput.value = intake.contact_email; }).catch(() => {});
+  document.getElementById('hsEmailPrintSheetStatus').textContent = '';
+  document.getElementById('hsEmailPrintSheetModalOverlay').style.display = 'flex';
+};
+
+window.closeEmailPrintSheetModal = function (e) {
+  if (e && e.target !== document.getElementById('hsEmailPrintSheetModalOverlay')) return;
+  document.getElementById('hsEmailPrintSheetModalOverlay').style.display = 'none';
+};
+
+window.sendHsPrintSheetEmail = async function () {
+  const email = document.getElementById('hsEmailPrintSheetEmailInput').value.trim();
+  const status = document.getElementById('hsEmailPrintSheetStatus');
+  if (!email) { status.textContent = 'Enter an email address.'; return; }
+  const btn = document.querySelector('#hsEmailPrintSheetModalOverlay .btn.primary');
+  if (btn) btn.disabled = true;
+  const setStatus = msg => { status.textContent = msg; };
+  try {
+    const intake = await loadOrderIntake(HS.projectId).catch(() => null);
+    const { zipBlob } = await buildHsPrintZip(setStatus);
+    setStatus('Uploading…');
+    const storagePath = await uploadPrintSheet(HS.projectId, 'hole-signs', zipBlob);
+    setStatus('Sending…');
+    await sendPrintSheetReady({
+      projectId: HS.projectId,
+      storagePath,
+      recipientEmail: email,
+      recipientName: intake?.contact_name || '',
+      eventName: intake?.event_name || HS.projectName || 'your event',
+      productType: 'hole-signs',
+    });
+    status.style.color = 'var(--green, #2d9d5c)';
+    status.textContent = 'Link sent!';
+    setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 3000);
+  } catch (err) {
+    console.error('sendHsPrintSheetEmail failed', err);
+    status.style.color = 'var(--red, #c0392b)';
+    status.textContent = `Failed to send: ${err.message || err}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
 
 window.selectHsGallery = function (id) {
   document.querySelectorAll('.hs-gallery-item').forEach(el => el.classList.remove('selected'));
@@ -299,24 +382,21 @@ export function endLayer(page) {
   page.pushOperators(PDFOperator.of('EMC'));
 }
 
-window.downloadHsPrint = async function () {
-  if (!HS.variations.length) { alert('No variations to export.'); return; }
+// Builds the print-ready zip (front/back PDF per sheet) without triggering
+// any download or DOM side effect - shared by the local "Download print
+// sheets" button and the "Email PDF sheet link" flow, so the actual
+// rendering only lives in one place.
+export async function buildHsPrintZip(setStatus = () => {}) {
+  if (!HS.variations.length) throw new Error('No variations to export.');
 
-  const btn = document.getElementById('hsExpPrintBtn');
-  const status = document.getElementById('hsExpPrintStatus');
-  const origLabel = btn?.innerHTML;
-  if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
-  const setStatus = msg => { if (status) status.textContent = msg; };
-
-  try {
-    // Build flat sequence: variation repeated by its qty.
-    const sequence = [];
+  // Build flat sequence: variation repeated by its qty.
+  const sequence = [];
     HS.variations.forEach(v => {
       const qty = Math.max(1, parseInt(v.qty, 10) || 1);
       for (let i = 0; i < qty; i++) sequence.push(v);
     });
     const total = sequence.length;
-    if (!total) { alert('No signs to print (set Qty on variations).'); return; }
+    if (!total) throw new Error('No signs to print (set Qty on variations).');
     const sheets = Math.ceil(total / HS_PRINT.perSheet);
 
     setStatus(`Rendering ${total} sign${total === 1 ? '' : 's'} across ${sheets} sheet${sheets === 1 ? '' : 's'}…`);
@@ -441,8 +521,20 @@ window.downloadHsPrint = async function () {
       zip.file(`sheet-${num}-back.pdf`,  backBytes);
     }
 
-    setStatus('Zipping…');
-    const zipBlob = await zip.generateAsync({ type: 'blob' });
+  setStatus('Zipping…');
+  const zipBlob = await zip.generateAsync({ type: 'blob' });
+  return { zipBlob, total, sheets };
+}
+
+window.downloadHsPrint = async function () {
+  const btn = document.getElementById('hsExpPrintBtn');
+  const status = document.getElementById('hsExpPrintStatus');
+  const origLabel = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
+  const setStatus = msg => { if (status) status.textContent = msg; };
+
+  try {
+    const { zipBlob, total, sheets } = await buildHsPrintZip(setStatus);
     const eventName = await loadEventName(HS.projectId).catch(() => null);
     dl(URL.createObjectURL(zipBlob), `HoleSigns_${sanitizeFilename(eventName || HS.projectName || 'Export')}.zip`);
     setStatus(`Done — ${total} signs on ${sheets} sheet${sheets === 1 ? '' : 's'} (${sheets * 2} files).`);

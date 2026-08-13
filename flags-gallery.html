@@ -40,6 +40,11 @@
               <div id="shareStatus" style="font-size:13px;color:var(--gray-400);min-height:16px"></div>
               <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openShareModal()">Share for review <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
             </div>
+            <div class="share-section" id="emailPrintSheetSection" style="display:none">
+              <div class="rc-title">Email PDF sheet link</div>
+              <div id="emailPrintSheetIdleStatus" style="font-size:13px;color:var(--gray-400);min-height:16px"></div>
+              <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openEmailPrintSheetModal()">Email PDF sheet link <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+            </div>
           </div>
         </div>
       </div>
@@ -67,6 +72,23 @@
       <input class="share-email-input" id="shareEmailInput" type="email" placeholder="customer@email.com">
       <div id="shareNotifyStatus" style="font-size:13px;color:var(--gray-400);min-height:16px;margin-top:6px"></div>
       <button class="btn sm primary" style="width:100%;justify-content:center;margin-top:8px" onclick="notifyCustomer()">Send notification</button>
+    </div>
+  </div>
+</div>
+
+<!-- Email print sheet modal (staff/admin only) -->
+<div class="share-modal-overlay" id="emailPrintSheetModalOverlay" style="display:none" onclick="closeEmailPrintSheetModal(event)">
+  <div class="share-modal">
+    <div class="share-modal-header">
+      <span class="share-modal-title">Email PDF sheet link</span>
+      <button class="share-modal-close" onclick="closeEmailPrintSheetModal()" aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+    </div>
+    <div class="share-modal-body">
+      <p style="font-size:13px;color:var(--gray-500);line-height:1.5;margin:0 0 1rem">This renders the full print-quality PDF sheet, uploads it privately, and emails a download link that expires in 7 days — not the customer-facing review link above.</p>
+      <p class="share-modal-label">Send to</p>
+      <input class="share-email-input" id="emailPrintSheetEmailInput" type="email" placeholder="vendor@example.com">
+      <div id="emailPrintSheetStatus" style="font-size:13px;color:var(--gray-400);min-height:16px;margin-top:6px"></div>
+      <button class="btn sm primary" style="width:100%;justify-content:center;margin-top:8px" onclick="sendPrintSheetEmail()">Send link</button>
     </div>
   </div>
 </div>

@@ -1,10 +1,10 @@
 import '../style.css';
 import '../icons.js';
-import { requireAuth } from '../auth.js';
+import { requireAuth, isStaffOrAdmin } from '../auth.js';
 import JSZip from 'jszip';
 import { pngBlobToPdfBlob as pngToPdfPt } from '../pdf-utils.js';
 
-await requireAuth();
+const session = await requireAuth();
 
 import { S } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
@@ -14,6 +14,7 @@ import {
   loadProject, loadFlagConfig, loadLogosForProject,
   generateShareToken, getFeedback, supabase,
   loadOrderIntake, loadEventName, sendProofReady, sendPrestigeOrder,
+  uploadPrintSheet, sendPrintSheetReady,
 } from '../supabase.js';
 import { buildOrderSummaryPdf } from '../orderSummaryPdf.js';
 import { esc, dl, slug, sanitizeFilename } from '../dom-utils.js';
@@ -368,14 +369,16 @@ async function buildPrintZip(setStatus = () => {}) {
     zip.file(`${safe}/${safe}-back.pdf`,  await pngBlobToPdfBlob(backPng,  bW, bH));
   }
   setStatus('Adding logos…');
-  for (const logo of S.library || []) {
+  // Independent fetches - parallelizing is a pure latency win over the old
+  // one-at-a-time loop, since each logo download doesn't depend on the last.
+  await Promise.all((S.library || []).map(async logo => {
     try {
       const res = await fetch(logo.src);
-      if (!res.ok) continue;
+      if (!res.ok) return;
       const ext = (logo.storagePath || logo.src).split('.').pop().split('?')[0] || 'png';
       zip.file(`Logos/${logo.name}.${ext}`, await res.arrayBuffer());
     } catch { /* skip on error */ }
-  }
+  }));
   setStatus('Building order summary…');
   const colorEntries = getVarColorEntries(null);
   setStatus('Rendering variation thumbnails…');
@@ -492,6 +495,56 @@ window.notifyCustomer = async function () {
   }
 };
 
+// ── Email PDF sheet link (staff/admin only) ─────────────────
+
+window.openEmailPrintSheetModal = async function () {
+  if (!S.projectId) { alert('Save your project first.'); return; }
+  const emailInput = document.getElementById('emailPrintSheetEmailInput');
+  emailInput.value = '';
+  loadOrderIntake(S.projectId).then(intake => { if (intake?.contact_email) emailInput.value = intake.contact_email; }).catch(() => {});
+  document.getElementById('emailPrintSheetStatus').textContent = '';
+  document.getElementById('emailPrintSheetModalOverlay').style.display = 'flex';
+};
+
+window.closeEmailPrintSheetModal = function (e) {
+  if (e && e.target !== document.getElementById('emailPrintSheetModalOverlay')) return;
+  document.getElementById('emailPrintSheetModalOverlay').style.display = 'none';
+};
+
+window.sendPrintSheetEmail = async function () {
+  const email = document.getElementById('emailPrintSheetEmailInput').value.trim();
+  const status = document.getElementById('emailPrintSheetStatus');
+  if (!email) { status.textContent = 'Enter an email address.'; return; }
+  const btn = document.querySelector('#emailPrintSheetModalOverlay .btn.primary');
+  if (btn) btn.disabled = true;
+  const setStatus = msg => { status.textContent = msg; };
+  try {
+    const intake = await loadOrderIntake(S.projectId).catch(() => null);
+    setStatus('Rendering print sheet…');
+    const { zipBlob } = await buildPrintZip(setStatus);
+    setStatus('Uploading…');
+    const storagePath = await uploadPrintSheet(S.projectId, 'flags', zipBlob);
+    setStatus('Sending…');
+    await sendPrintSheetReady({
+      projectId: S.projectId,
+      storagePath,
+      recipientEmail: email,
+      recipientName: intake?.contact_name || '',
+      eventName: intake?.event_name || S.projectName || 'your event',
+      productType: 'flags',
+    });
+    status.style.color = 'var(--green, #2d9d5c)';
+    status.textContent = 'Link sent!';
+    setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 3000);
+  } catch (err) {
+    console.error('sendPrintSheetEmail failed', err);
+    status.style.color = 'var(--red, #c0392b)';
+    status.textContent = `Failed to send: ${err.message || err}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+
 // ── Init ──────────────────────────────────────────────────
 
 renderSidebar(document.getElementById('sidebar'), {
@@ -553,6 +606,11 @@ try {
     }
   }
   setSidebarProjectName(S.projectName, S.projectId);
+
+  isStaffOrAdmin(session).then(canEmail => {
+    const section = document.getElementById('emailPrintSheetSection');
+    if (section) section.style.display = canEmail ? '' : 'none';
+  });
 
   setupGallery();
 } catch (err) {

@@ -48,6 +48,12 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 .btn.primary:hover { background:var(--accent-hover); border-color:var(--accent-hover); }
 .btn.sm { height:30px; font-size:12px; padding:0 11px; }
 
+.project-search { height:34px; padding:0 12px; border-radius:8px; border:1.5px solid var(--gray-200); background:var(--white); font-family:inherit; font-size:13px; color:var(--black); outline:none; width:220px; transition:border-color .15s; }
+.project-search::placeholder { color:var(--gray-400); }
+.project-search:focus { border-color:var(--accent); }
+
+.load-more-wrap { display:flex; justify-content:center; margin-top:1rem; }
+
 /* Projects list */
 .drafts-grid { display:flex; flex-direction:column; gap:10px; }
 .draft-card { background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--r); padding:.9rem 1.25rem; color:var(--black); display:flex; align-items:center; gap:1.25rem; transition:border-color .15s; }

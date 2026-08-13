@@ -1,4 +1,4 @@
-import { getSession, signOut, supabase, claimMyProjects } from './supabase.js';
+import { getSession, signOut, supabase, claimMyProjects, getMyRole } from './supabase.js';
 
 export async function requireAuth() {
   const session = await getSession();
@@ -14,6 +14,20 @@ export async function requireAuth() {
   // reconciliation, not a critical path.
   claimMyProjects().catch((err) => console.error('claimMyProjects failed', err));
   return session;
+}
+
+// UI-convenience gate only - the real boundary is DB-level (RLS / this
+// project's storage policies), never this check alone. Callers use it to
+// hide/show privileged actions (e.g. emailing a print-ready file link), not
+// to decide whether an operation is actually allowed.
+export async function isStaffOrAdmin(session) {
+  if (!session) return false;
+  try {
+    const role = await getMyRole(session.user.id);
+    return role === 'staff' || role === 'admin';
+  } catch {
+    return false;
+  }
 }
 
 // Opt-in, only reached via requireAuth() — order.js/review.js never call

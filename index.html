@@ -22,9 +22,13 @@
   <div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem">
       <div class="section-title" style="margin-bottom:0">Projects</div>
-      <button class="btn primary sm" onclick="newProject()">+ New project</button>
+      <div style="display:flex;align-items:center;gap:.6rem">
+        <input type="search" id="projectSearch" class="project-search" placeholder="Search projects…">
+        <button class="btn primary sm" onclick="newProject()">+ New project</button>
+      </div>
     </div>
     <div id="projectsList"><div class="drafts-empty">Loading…</div></div>
+    <div id="loadMoreWrap"></div>
   </div>
 </div>
 

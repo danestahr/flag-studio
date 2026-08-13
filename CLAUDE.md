@@ -55,14 +55,13 @@ Key: `getEffectiveState(variation)` merges global `HS` → variation override �
 - `order_intakes` — order form submissions
 - `variation_feedback` — customer feedback on proofs (realtime subscribed in editors)
 
-Storage buckets: `flag-logos` (logo uploads), `renders` (production export files).
+Storage buckets: `flag-logos` (logo uploads, public), `renders` (legacy, holds a few historical objects — not written to by any current code path), `print-sheets` (admin-generated print-ready PDFs, private — signed URLs only, 7-day expiry).
 
-Edge functions: `send-order-confirmation`, `send-proof-ready` (email), `render-flags`, `render-hole-signs` (print export — see memory for layout math).
+Edge functions: `send-order-confirmation`, `send-proof-ready`, `send-print-sheet-ready` (email, SendGrid), `send-prestige-order` (internal), `sweep-abandoned-drafts` (daily cron — see memory for abandoned-draft cleanup).
 
 ## Rendering
 
-- **Client-side**: `render.js` (flags), `hole-sign-render.js` (hole signs) — for previews
-- **Server-side edge functions**: duplicate the rendering logic for print-quality output. Keep them in sync when changing rendering logic.
+- **100% client-side**: `render.js` (flags), `hole-sign-render.js` (hole signs) handle previews; the export-time rasterization in `src/flags/gallery.js` (`rasterizeForPrint`/`buildPrintZip`) and `src/hs/export.js` (`buildHsPrintZip`) handles print-quality PDF sheets. There is no server-side rendering pipeline — `send-print-sheet-ready` only emails a link to an already-rendered file the client uploaded; it never renders anything itself.
 - Flag SVG templates live in `public/flags/*.svg`. Zones are `<g id="logo-placement">` children; colors are CSS custom properties injected via `<style>`.
 
 ## Conventions

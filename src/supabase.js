@@ -79,14 +79,52 @@ export async function updateProject(projectId, fields) {
   if (error) throw error;
 }
 
-export async function listProjects() {
+export async function getMyRole(userId) {
   const { data, error } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', userId)
+    .single();
+  if (error) throw error;
+  return data.role;
+}
+
+// Keyset pagination on (updated_at, id) rather than offset - offset pagination
+// is unstable once projects are edited between page loads, since every save
+// bumps updated_at. Pass back the cursor from the previous page's last row to
+// get the next one; a null nextCursor means there's nothing more to load.
+//
+// Customers are explicitly scoped to their own rows here rather than relying
+// solely on the "projects select" RLS policy - that policy's anon/review.html
+// branch (`share_token is not null`) is intentionally broad enough that an
+// unscoped select as an authenticated customer would also return every other
+// customer's ever-shared project. Staff/admin stay unscoped (RLS already
+// grants them everything via is_staff_or_admin()).
+export async function listProjects({ userId, role, cursor = null, pageSize = 30, q = '' } = {}) {
+  let query = supabase
     .from('projects')
     .select(`id, name, status, updated_at, created_by, profiles(email, first_name, last_name), flag_config(id, flag_id), hole_sign_config(id, template_style)`)
     .order('updated_at', { ascending: false })
-    .limit(50);
+    .order('id', { ascending: false })
+    .limit(pageSize);
+
+  if (role !== 'staff' && role !== 'admin') {
+    query = query.eq('created_by', userId);
+  }
+  if (q) {
+    const escaped = q.replace(/[%_\\]/g, (m) => `\\${m}`);
+    query = query.ilike('name', `%${escaped}%`);
+  }
+  if (cursor) {
+    query = query.or(`updated_at.lt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.lt.${cursor.id})`);
+  }
+
+  const { data, error } = await query;
   if (error) throw error;
-  return data;
+
+  const last = data[data.length - 1];
+  const nextCursor = data.length === pageSize ? { updatedAt: last.updated_at, id: last.id } : null;
+  return { projects: data, nextCursor };
 }
 
 export async function loadProject(projectId) {
@@ -99,27 +137,19 @@ export async function loadProject(projectId) {
   return data;
 }
 
+// The DB side is one atomic statement (delete_project() RPC - the projects
+// row plus every child row via cascade, in a single transaction). Storage
+// cleanup runs after and only on success: an orphaned storage object from a
+// failed cleanup call is harmless, but cleaning up storage before the DB
+// delete risks orphaning DB rows that point at files which no longer exist.
 export async function deleteProject(projectId) {
-  const { data: logos, error: logoListErr } = await supabase
-    .from('project_logos')
-    .select('storage_path')
-    .eq('project_id', projectId);
-  if (logoListErr) throw logoListErr;
+  const { data: logoPaths, error } = await supabase.rpc('delete_project', { target_project_id: projectId });
+  if (error) throw error;
 
-  if (logos?.length) {
-    const { error: storageErr } = await supabase.storage
-      .from('flag-logos')
-      .remove(logos.map(l => l.storage_path));
+  if (logoPaths?.length) {
+    const { error: storageErr } = await supabase.storage.from('flag-logos').remove(logoPaths);
     if (storageErr) throw storageErr;
   }
-
-  for (const table of ['variation_feedback', 'order_intakes', 'flag_config', 'hole_sign_config', 'project_logos']) {
-    const { error } = await supabase.from(table).delete().eq('project_id', projectId);
-    if (error) throw error;
-  }
-
-  const { error } = await supabase.from('projects').delete().eq('id', projectId);
-  if (error) throw error;
 }
 
 // ── Logos ──────────────────────────────────────────────────
@@ -399,6 +429,43 @@ export async function sendPrestigeOrder(projectId, projectName, zipBlob) {
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Prestige send failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+// ── Print sheet email (staff/admin only) ────────────────────
+const PRINT_SHEETS_BUCKET = 'print-sheets';
+
+export async function uploadPrintSheet(projectId, productType, blob) {
+  const path = `${projectId}/${productType}-${Date.now()}.zip`;
+  const { error } = await supabase.storage
+    .from(PRINT_SHEETS_BUCKET)
+    .upload(path, blob, { upsert: false, contentType: 'application/zip' });
+  if (error) throw error; // a non-staff caller sees a clear RLS-denied error here
+  return path;
+}
+
+// Unlike callEdgeFunction() (always anon-key auth, fine for the token-gated
+// send-proof-ready/send-order-confirmation), this carries the caller's real
+// identity - the edge function re-derives role from this token itself and
+// never trusts the client's own isStaffOrAdmin() check. Fails closed rather
+// than falling back to the anon key like sendPrestigeOrder() does, since
+// this is a privileged action with no legitimate anonymous caller.
+export async function sendPrintSheetReady(payload) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Not signed in');
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/send-print-sheet-ready`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Print sheet email failed (${res.status}): ${text}`);
   }
   return res.json();
 }
