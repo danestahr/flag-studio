@@ -191,12 +191,40 @@ export async function deleteProject(projectId) {
   }
 }
 
+// Print-quality ceiling for a logo placed on a flag/sign — comfortably above
+// anything a print placement needs, but caps unbounded phone-camera-photo
+// uploads (5000px+ on a side) that would otherwise be stored and re-fetched
+// at full size on every gallery render and print export.
+const MAX_LOGO_DIM = 3000;
+
+// SVG stays vector (never rasterize it); GIF is skipped so an animated
+// upload doesn't get flattened to its first frame.
+async function downscaleRasterIfNeeded(file) {
+  if (!/^image\//.test(file.type) || file.type === 'image/svg+xml' || file.type === 'image/gif') return file;
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) return file;
+  const { width, height } = bitmap;
+  if (Math.max(width, height) <= MAX_LOGO_DIM) { bitmap.close?.(); return file; }
+
+  const scale = MAX_LOGO_DIM / Math.max(width, height);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) return file;
+  return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.png', { type: 'image/png' });
+}
+
 // ── Logos ──────────────────────────────────────────────────
 export async function uploadLogo(projectId, file) {
   if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
     const { rasterizePdfToPng } = await import('./pdf-raster.js');
     file = await rasterizePdfToPng(file);
   }
+  file = await downscaleRasterIfNeeded(file);
   const ext = file.name.split('.').pop();
   const path = `${projectId}/${Date.now()}.${ext}`;
 
