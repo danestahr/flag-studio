@@ -17,7 +17,7 @@ import {
   uploadPrintSheet, sendPrintSheetReady,
 } from '../supabase.js';
 import { buildOrderSummaryPdf } from '../orderSummaryPdf.js';
-import { esc, dl, slug, sanitizeFilename } from '../dom-utils.js';
+import { esc, dl, slug, sanitizeFilename, mapWithConcurrency } from '../dom-utils.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 
 let feedbackChannel = null;
@@ -366,21 +366,32 @@ window.expAllPDF = async function () {
   }
 };
 
+// How many variations to rasterize at once during print export. Purely a
+// wall-clock lever — the zip is only assembled once at the end regardless
+// (see mapWithConcurrency in dom-utils.js), so this doesn't change peak
+// memory, just how many renders overlap while producing it.
+const PRINT_EXPORT_CONCURRENCY = 4;
+
 async function buildPrintZip(setStatus = () => {}) {
   const zip = new JSZip();
   const flag = getFlag();
-  for (let i = 0; i < S.variations.length; i++) {
-    const v = S.variations[i];
-    setStatus(`Rendering ${i + 1} of ${S.variations.length}: ${v.name}…`);
+  const total = S.variations.length;
+  let rendered = 0;
+  await mapWithConcurrency(S.variations, PRINT_EXPORT_CONCURRENCY, async (v, i) => {
     const frontLogos = v.logos || v.assignment || [];
     const backLogos  = S.sameLogoOnBothSides ? frontLogos : (v.backLogos || v.backAssignment || []);
     const backTextLayers = S.sameLogoOnBothSides ? (v.textLayers || []) : (v.backTextLayers || []);
     const { blob: frontPng, vbW: fW, vbH: fH } = await rasterizeForPrint(frontLogos, 'front', false, v.textLayers || [], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v));
     const { blob: backPng,  vbW: bW, vbH: bH } = await rasterizeForPrint(backLogos,  'back', S.sameLogoOnBothSides, backTextLayers, getVarFlag(v), getVarColors(v), getVarGsTagOpts(v));
     const safe = slug(v.name) || 'variation-' + (i + 1);
-    zip.file(`${safe}/${safe}-front.pdf`, await pngBlobToPdfBlob(frontPng, fW, fH));
-    zip.file(`${safe}/${safe}-back.pdf`,  await pngBlobToPdfBlob(backPng,  bW, bH));
-  }
+    const [frontPdf, backPdf] = await Promise.all([
+      pngBlobToPdfBlob(frontPng, fW, fH),
+      pngBlobToPdfBlob(backPng, bW, bH),
+    ]);
+    zip.file(`${safe}/${safe}-front.pdf`, frontPdf);
+    zip.file(`${safe}/${safe}-back.pdf`,  backPdf);
+    setStatus(`Rendering ${++rendered} of ${total}: ${v.name}…`);
+  });
   setStatus('Adding logos…');
   // Independent fetches - parallelizing is a pure latency win over the old
   // one-at-a-time loop, since each logo download doesn't depend on the last.
@@ -395,8 +406,7 @@ async function buildPrintZip(setStatus = () => {}) {
   setStatus('Building order summary…');
   const colorEntries = getVarColorEntries(null);
   setStatus('Rendering variation thumbnails…');
-  const variationImages = [];
-  for (const v of S.variations) {
+  const variationImages = await mapWithConcurrency(S.variations, PRINT_EXPORT_CONCURRENCY, async v => {
     const frontLogos = v.logos || v.assignment || [];
     const backLogos  = S.sameLogoOnBothSides ? frontLogos : (v.backLogos || v.backAssignment || []);
     const backTextLayers = S.sameLogoOnBothSides ? (v.textLayers || []) : (v.backTextLayers || []);
@@ -404,12 +414,12 @@ async function buildPrintZip(setStatus = () => {}) {
       rasterizeThumbnail(frontLogos, 'front', false, v.textLayers || [], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v)).catch(() => null),
       rasterizeThumbnail(backLogos, 'back', S.sameLogoOnBothSides, backTextLayers, getVarFlag(v), getVarColors(v), getVarGsTagOpts(v)).catch(() => null),
     ]);
-    variationImages.push({
+    return {
       name: v.name, frontPng, backPng,
       flagName: getVarFlag(v)?.name || v.flagId || S.flagId || '',
       colorEntries: getVarColorEntries(v),
-    });
-  }
+    };
+  });
   const summaryPdf = await buildOrderSummaryPdf({
     projectId: S.projectId, productType: 'flags', colorEntries,
     templateName: flag?.name || S.flagId, variationCount: S.variations.length, variationImages,

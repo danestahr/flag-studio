@@ -7,7 +7,7 @@ import {
 } from '../supabase.js';
 import { PDFDocument, PDFName, PDFOperator, PDFString, rgb } from 'pdf-lib';
 import JSZip from 'jszip';
-import { dl, slug, sanitizeFilename } from '../dom-utils.js';
+import { dl, slug, sanitizeFilename, mapWithConcurrency } from '../dom-utils.js';
 import { pngBlobToPdfBlob } from '../pdf-utils.js';
 import { saveDraftInternal } from './draft.js';
 
@@ -383,6 +383,11 @@ export function endLayer(page) {
   page.pushOperators(PDFOperator.of('EMC'));
 }
 
+// How many unique variations to rasterize/rotate at once during print
+// export — a wall-clock lever only, doesn't change peak memory (see
+// mapWithConcurrency in dom-utils.js).
+const HS_EXPORT_CONCURRENCY = 4;
+
 // Builds the print-ready zip (front/back PDF per sheet) without triggering
 // any download or DOM side effect - shared by the local "Download print
 // sheets" button and the "Email PDF sheet link" flow, so the actual
@@ -403,20 +408,28 @@ export async function buildHsPrintZip(setStatus = () => {}) {
     setStatus(`Rendering ${total} sign${total === 1 ? '' : 's'} across ${sheets} sheet${sheets === 1 ? '' : 's'}…`);
 
     // Render each unique variation once at native size, then re-use across cells.
-    const nativeBySig = new Map();
+    // Rendered/rotated with bounded concurrency (see mapWithConcurrency) — a
+    // wall-clock win for large orders since the zip is only assembled once at
+    // the end regardless, so this doesn't change peak memory.
     const sigOf = v => v.id;
-    for (let i = 0; i < sequence.length; i++) {
-      const v = sequence[i];
-      if (nativeBySig.has(sigOf(v))) continue;
-      setStatus(`Rendering variation ${nativeBySig.size + 1}/${HS.variations.length}: ${v.name}…`);
-      nativeBySig.set(sigOf(v), await rasterizeSignNative(v));
-    }
+    const seenSigs = new Set();
+    const uniqueVariations = sequence.filter(v => {
+      if (seenSigs.has(sigOf(v))) return false;
+      seenSigs.add(sigOf(v));
+      return true;
+    });
+
+    let renderedCount = 0;
+    const nativeCanvases = await mapWithConcurrency(uniqueVariations, HS_EXPORT_CONCURRENCY, async v => {
+      const canvas = await rasterizeSignNative(v);
+      setStatus(`Rendering variation ${++renderedCount}/${uniqueVariations.length}: ${v.name}…`);
+      return canvas;
+    });
+    const nativeBySig = new Map(uniqueVariations.map((v, i) => [sigOf(v), nativeCanvases[i]]));
 
     // Pre-compute rotated PNG once per variation (same orientation for both sides).
-    const rotated = new Map();
-    for (const [sig, canvas] of nativeBySig) {
-      rotated.set(sig, await buildRotatedSignPng(canvas));
-    }
+    const rotatedPngs = await mapWithConcurrency(uniqueVariations, HS_EXPORT_CONCURRENCY, (v, i) => buildRotatedSignPng(nativeCanvases[i]));
+    const rotated = new Map(uniqueVariations.map((v, i) => [sigOf(v), rotatedPngs[i]]));
 
     // Build the PDFs.
     const ptW = HS_PRINT.sheetWIn * 72;
