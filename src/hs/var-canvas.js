@@ -4,7 +4,7 @@ import { getEffectiveState, getEffectiveVariation } from './state.js';
 import { getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
 import { hideHsToolbar, prepareLogo, applyFillToVariation } from './logo-utils.js';
 import { stripSlotImages, paintTplSlotOverlays, paintTextLayerOverlays } from './design.js';
-import { createImageBox } from '../image-box.js';
+import { createImageBox, refreshImageBoxClips, refreshTextLayerClips, refreshTlSlotClips } from '../image-box.js';
 import { wireBannerHeightHandles, wireBannerSpacingHandles, wireCanvasTextEditing, wireElementDrag } from './banner.js';
 import { removeActiveHsLogo, showHsToolbar } from './var-toolbar.js';
 import { renderVarList, buildLibStrip } from './variations.js';
@@ -48,7 +48,11 @@ export function initHsVarCanvas(container) {
     aspect: HS_W / HS_H,
     getZoom: () => UI.hsZoom,
     setZoom: v => { UI.hsZoom = v; },
-    onApply: () => { if (UI.canvasEdit) rescaleEditorInput('hsSignPreview'); },
+    onApply: () => {
+      if (UI.canvasEdit) rescaleEditorInput('hsSignPreview');
+      const preview = document.getElementById('hsSignPreview');
+      if (preview) { refreshImageBoxClips(preview); refreshTextLayerClips(preview); refreshTlSlotClips(preview); }
+    },
     headerName: '—',
     headerNameId: 'hsActiveVarName',
     canvasContentHtml: '<div class="hs-sign-preview" id="hsSignPreview"></div>',
@@ -73,7 +77,11 @@ export function initHsStep1Canvas(container) {
     aspect: HS_W / HS_H,
     getZoom: () => UI.hsStep1Zoom,
     setZoom: v => { UI.hsStep1Zoom = v; },
-    onApply: () => { if (UI.canvasEdit) rescaleEditorInput('hsStep1Preview'); },
+    onApply: () => {
+      if (UI.canvasEdit) rescaleEditorInput('hsStep1Preview');
+      const preview = document.getElementById('hsStep1Preview');
+      if (preview) { refreshImageBoxClips(preview); refreshTextLayerClips(preview); refreshTlSlotClips(preview); }
+    },
     canvasContentHtml: '<div class="hs-sign-thumb" id="hsStep1Preview"></div>',
   });
 }
@@ -176,6 +184,36 @@ export function renderVariationPreview() {
       frameSvg.appendChild(frameGroup);
       preview.appendChild(frameSvg);
     }
+
+    // Same problem one layer down: the background color and image are two
+    // separate paint steps within makeHoleSignSvg's own output (color always
+    // absolute-back, image on top of it), but here they're baked into the
+    // same bgSvgEl — a single DOM element can't let a *third* thing (a
+    // variation logo's .dz-logo-ghost, sent "Below Background") slot in
+    // between them. Pull ONLY the color group out into its own overlay
+    // (.dz-bg-color-layer, z-index:-3) and the image group into its own
+    // overlay above it (.dz-bg-image-overlay, z-index:-1, straddling the
+    // ghost at z-index:-2) — leaving bgSvgEl itself (still holding every
+    // other non-frame piece: free text layers, docked banner captions,
+    // sponsor fallback text) at its normal stacking position, so an uploaded
+    // background image doesn't paint over it the way dragging the whole
+    // bgSvgEl down with the color layer used to.
+    const colorGroup = bgSvgEl.querySelector('.hs-bg-color');
+    if (colorGroup) {
+      const colorSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      colorSvg.setAttribute('viewBox', `0 0 ${HS_W} ${HS_H}`);
+      colorSvg.setAttribute('class', 'dz-bg-color-layer');
+      colorSvg.appendChild(colorGroup);
+      preview.insertBefore(colorSvg, bgSvgEl);
+    }
+    const imageGroup = bgSvgEl.querySelector('.hs-bg-image');
+    if (imageGroup) {
+      const imageSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      imageSvg.setAttribute('viewBox', `0 0 ${HS_W} ${HS_H}`);
+      imageSvg.setAttribute('class', 'dz-bg-image-overlay');
+      imageSvg.appendChild(imageGroup);
+      preview.appendChild(imageSvg);
+    }
   }
 
   if (!HS.activeVarId) {
@@ -200,7 +238,11 @@ export function renderVariationPreview() {
     abZone.addEventListener('click', e => {
       e.stopPropagation();
       if (UI.hsActiveZone?.dzone === abZone) { hideHsToolbar(); UI.hsActiveZone = null; return; }
-      UI.hsActiveZone = { dzone: abZone, variation };
+      // Store the real persisted variation, not the getEffectiveVariation()
+      // copy — toolbar actions (e.g. aboveFrame toggle) mutate this object
+      // in place, and mutating the copy's primitive fields would silently
+      // never reach HS.variations.
+      UI.hsActiveZone = { dzone: abZone, variation: activeVar };
       showHsToolbar(abZone);
     });
     preview.appendChild(abZone);
@@ -228,14 +270,13 @@ export function renderVariationPreview() {
       e.stopPropagation();
       if (UI.hsActiveZone?.dzone === dzone) { hideHsToolbar(); return; }
       if (UI.hsActiveZone) UI.hsActiveZone.dzone.classList.remove('selected');
-      UI.hsActiveZone = { dzone, variation };
+      // Store the real persisted variation — see comment above for why.
+      UI.hsActiveZone = { dzone, variation: activeVar };
       showHsToolbar(dzone, !variation.logoSrc);
     });
   } else {
     const hasLogo = !!variation.logoSrc;
     dzone.className = 'dzone' + (hasLogo ? ' has-logo' : ' hs-logo-placeholder');
-    const gh = document.createElement('div'); gh.className = 'dz-guide-h'; dzone.appendChild(gh);
-    const gv = document.createElement('div'); gv.className = 'dz-guide-v'; dzone.appendChild(gv);
 
     if (hasLogo) {
       if (!variation.logoData) variation.logoData = { x: 50, y: 50, w: 90 };
@@ -246,6 +287,7 @@ export function renderVariationPreview() {
         src: displaySrc,
         alt: variation.name,
         aboveFrame: variation.aboveFrame,
+        belowBackground: variation.belowBackground,
         onCommit: () => renderVarList(),
         onClick: () => {
           if (UI.hsActiveZone?.dzone === dzone) { hideHsToolbar(); return; }
@@ -253,7 +295,8 @@ export function renderVariationPreview() {
             UI.hsActiveZone.dzone.classList.remove('selected');
             UI.hsActiveZone.wrap?.classList.remove('selected');
           }
-          UI.hsActiveZone = { dzone, wrap, variation };
+          // Store the real persisted variation — see comment above for why.
+          UI.hsActiveZone = { dzone, wrap, variation: activeVar };
           dzone.classList.add('selected');
           // The purple "selected" outline lives on the image box itself
           // (.dz-logo-wrap.selected) — dzone's own .selected only tints its
@@ -270,13 +313,13 @@ export function renderVariationPreview() {
             UI.hsActiveZone.dzone.classList.remove('selected');
             UI.hsActiveZone.wrap?.classList.remove('selected');
           }
-          UI.hsActiveZone = { dzone, wrap, variation };
+          UI.hsActiveZone = { dzone, wrap, variation: activeVar };
           dzone.classList.add('selected');
           wrap.classList.add('selected');
           showHsToolbar(dzone, true);
         },
         onRemove: () => {
-          UI.hsActiveZone = { dzone, wrap, variation };
+          UI.hsActiveZone = { dzone, wrap, variation: activeVar };
           removeActiveHsLogo();
         },
       });
@@ -287,7 +330,8 @@ export function renderVariationPreview() {
         e.stopPropagation();
         if (UI.hsActiveZone?.dzone === dzone) { hideHsToolbar(); return; }
         if (UI.hsActiveZone) UI.hsActiveZone.dzone.classList.remove('selected');
-        UI.hsActiveZone = { dzone, variation };
+        // Store the real persisted variation — see comment above for why.
+        UI.hsActiveZone = { dzone, variation: activeVar };
         dzone.classList.add('selected');
         // If the variation already has sponsor text, go straight to editing it.
         if (activeVar?.sponsorText?.text) {

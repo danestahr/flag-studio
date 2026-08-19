@@ -7,7 +7,7 @@ export async function requireAuth() {
     window.location.href = `/login.html?next=${encodeURIComponent(returnTo)}`;
     await new Promise(() => {}); // halt execution while redirecting
   }
-  injectSignOutButton();
+  injectHeaderActions(session);
   watchForSignOut();
   // Best-effort: attach any anonymously-submitted orders under this account's
   // own email. Never blocks page load on failure - this is a background
@@ -44,9 +44,24 @@ function watchForSignOut() {
   });
 }
 
-function injectSignOutButton() {
+// Header only ever had the logo/back-link group as its one child (CSS pushes
+// it left, everything else right via justify-content:space-between) — a
+// second bare child would land mid-header instead of alongside it, so both
+// the avatar link and sign-out button share one wrapper.
+function injectHeaderActions(session) {
   const header = document.querySelector('header');
-  if (!header || header.querySelector('.sign-out-btn')) return;
+  if (!header || header.querySelector('.header-actions')) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'header-actions';
+  wrap.style.cssText = 'display:flex;align-items:center;gap:14px';
+
+  const avatar = document.createElement('a');
+  avatar.className = 'account-avatar';
+  avatar.href = '/profile.html';
+  avatar.title = 'Your profile';
+  avatar.textContent = (session.user.email || '?').slice(0, 2).toUpperCase();
+  wrap.appendChild(avatar);
 
   const btn = document.createElement('button');
   btn.className = 'sign-out-btn';
@@ -55,5 +70,7 @@ function injectSignOutButton() {
     await signOut();
     window.location.href = '/login.html';
   });
-  header.appendChild(btn);
+  wrap.appendChild(btn);
+
+  header.appendChild(wrap);
 }

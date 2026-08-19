@@ -5,6 +5,18 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// review.html's anon reviewer flow needs its own client: the "projects
+// select" / "project_logos select" / "variation_feedback select+insert" RLS
+// policies check this header against the row's real share_token (see
+// supabase/migrations/20260818000000_share_token_value_check.sql) rather
+// than just trusting any share-token-bearing request, so every review-page
+// call must carry it.
+export function createReviewClient(token) {
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { 'x-share-token': token } },
+  });
+}
+
 // ── Auth ──────────────────────────────────────────────────
 export async function signIn(email, password) {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -58,6 +70,33 @@ export async function claimMyProjects() {
   const { data, error } = await supabase.rpc('claim_my_projects');
   if (error) throw error;
   return data || [];
+}
+
+// ── Profile ───────────────────────────────────────────────
+export async function getMyProfile(userId) {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('first_name, last_name')
+    .eq('id', userId)
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateMyProfile(userId, { firstName, lastName }) {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ first_name: firstName || null, last_name: lastName || null, updated_at: new Date().toISOString() })
+    .eq('id', userId);
+  if (error) throw error;
+}
+
+// Supabase emails the new address a confirmation link before the change
+// actually takes effect — auth.users.email (and profiles.email, kept in sync
+// by trigger) stay on the old address until that link is clicked.
+export async function updateMyEmail(newEmail) {
+  const { error } = await supabase.auth.updateUser({ email: newEmail });
+  if (error) throw error;
 }
 
 // ── Projects ──────────────────────────────────────────────
@@ -180,8 +219,8 @@ export async function uploadLogo(projectId, file) {
   return { id: data.id, name: data.name, src: publicUrl, storagePath: path };
 }
 
-export async function loadLogosForProject(projectId) {
-  const { data, error } = await supabase
+export async function loadLogosForProject(projectId, client = supabase) {
+  const { data, error } = await client
     .from('project_logos')
     .select('id, name, public_url, storage_path')
     .eq('project_id', projectId);
@@ -305,8 +344,8 @@ export async function generateShareToken(projectId) {
   return token;
 }
 
-export async function getProjectByToken(token) {
-  const { data: project, error } = await supabase
+export async function getProjectByToken(token, client = supabase) {
+  const { data: project, error } = await client
     .from('projects')
     .select('*')
     .eq('share_token', token)
@@ -314,8 +353,8 @@ export async function getProjectByToken(token) {
   if (error) throw error;
 
   const [{ data: flagCfg }, { data: holeCfg }] = await Promise.all([
-    supabase.from('flag_config').select('*').eq('project_id', project.id).maybeSingle(),
-    supabase.from('hole_sign_config').select('*').eq('project_id', project.id).maybeSingle(),
+    client.from('flag_config').select('*').eq('project_id', project.id).maybeSingle(),
+    client.from('hole_sign_config').select('*').eq('project_id', project.id).maybeSingle(),
   ]);
 
   return { ...project, flagConfig: flagCfg || null, holeSignConfig: holeCfg || null };
@@ -353,8 +392,8 @@ export async function upsertCustomerInfo(projectId, info) {
 }
 
 // ── Feedback ───────────────────────────────────────────────
-export async function submitFeedback(projectId, productType, feedbackItems) {
-  const { error } = await supabase
+export async function submitFeedback(projectId, productType, feedbackItems, client = supabase) {
+  const { error } = await client
     .from('variation_feedback')
     .upsert(
       feedbackItems.map(f => ({ project_id: projectId, product_type: productType, resolved: false, ...f })),
@@ -375,8 +414,8 @@ export async function resolveFeedback(projectId, productType, variationId = null
   if (error) throw error;
 }
 
-export async function getFeedback(projectId, productType = 'flags') {
-  const { data, error } = await supabase
+export async function getFeedback(projectId, productType = 'flags', client = supabase) {
+  const { data, error } = await client
     .from('variation_feedback')
     .select('*')
     .eq('project_id', projectId)

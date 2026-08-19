@@ -115,21 +115,31 @@ function setupGallery() {
 
 const FLAG_DPI = 300;
 
-// Fetch Google Fonts CSS and inline all font files as base64 data URIs so that
-// text renders correctly when SVG is drawn to canvas via a blob URL (which runs
-// in a sandboxed context without access to the page's loaded @font-face rules).
+// Fetch Google Fonts + Adobe Fonts (Typekit) CSS and inline all font files as
+// base64 data URIs so that text renders correctly when SVG is drawn to canvas
+// via a blob URL (which runs in a sandboxed context without access to the
+// page's loaded @font-face rules).
 let _fontStyleCache = null;
 async function buildFontStyle() {
   if (_fontStyleCache !== null) return _fontStyleCache;
-  const link = document.querySelector('link[href*="fonts.googleapis.com"]');
-  if (!link) { _fontStyleCache = ''; return ''; }
+  const links = document.querySelectorAll('link[rel="stylesheet"][href*="fonts.googleapis.com"], link[rel="stylesheet"][href*="use.typekit.net"]');
+  if (!links.length) { _fontStyleCache = ''; return ''; }
   try {
-    const cssRes = await fetch(link.href);
-    if (!cssRes.ok) { _fontStyleCache = ''; return ''; }
-    let css = await cssRes.text();
-    const urlPattern = /url\((['"]?)(https?:\/\/[^'")]+)\1\)/g;
-    const urls = [...new Set([...css.matchAll(urlPattern)].map(m => m[2]))];
-    for (const url of urls) {
+    const cssParts = await Promise.all([...links].map(async link => {
+      try {
+        const res = await fetch(link.href);
+        return res.ok ? await res.text() : '';
+      } catch { return ''; }
+    }));
+    let css = cssParts.join('\n');
+    // Google's CSS uses unquoted url()s; Typekit's uses quoted url()s with a
+    // format() hint and no file extension — capture both, keyed by format.
+    const urlPattern = /url\((['"]?)(https?:\/\/[^'")]+)\1\)(?:\s*format\((['"]?)([\w-]+)\3\))?/g;
+    const matches = new Map();
+    for (const m of css.matchAll(urlPattern)) {
+      if (!matches.has(m[2])) matches.set(m[2], m[4]);
+    }
+    for (const [url, format] of matches) {
       try {
         const res = await fetch(url);
         if (!res.ok) continue;
@@ -137,7 +147,10 @@ async function buildFontStyle() {
         const bytes = new Uint8Array(buf);
         let binary = '';
         for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        const mime = url.includes('.woff2') ? 'font/woff2' : url.includes('.woff') ? 'font/woff' : 'font/truetype';
+        const f = (format || '').toLowerCase();
+        const mime = f.includes('woff2') ? 'font/woff2' : f === 'woff' ? 'font/woff'
+          : f.includes('opentype') || f.includes('truetype') ? 'font/otf'
+          : url.includes('.woff2') ? 'font/woff2' : url.includes('.woff') ? 'font/woff' : 'font/truetype';
         css = css.replaceAll(url, `data:${mime};base64,${btoa(binary)}`);
       } catch { /* skip this URL */ }
     }

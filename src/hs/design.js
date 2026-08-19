@@ -5,32 +5,29 @@ import { clearDockHighlight, getDockedSiblings, hitTestDockZone, renderBannerSec
 import { applyTlSlotImgStyle, openTlLibPicker, openTlSidePanel, redrawTplPreview, renderTemplateLogoControls, renderTplSlotBody, snapTlSlotsToDefaults, tlSource, wireTlSlotFreeDrag } from './template-logos.js';
 import { applyHsStep1Zoom, initHsStep1Canvas } from './var-canvas.js';
 import { cropSvgToArtwork } from './logo-utils.js';
-import { saveDraftInternal } from './export.js';
+import { saveDraftInternal } from './draft.js';
 import { HS_DEFAULT_TEMPLATES, HS_FONTS, HS_H, HS_TEMPLATES, HS_W, emptyBanner, emptyTemplateLogos, migrateBannerCaptions } from '../hole-sign-data.js';
 import { dockedLayerPositions, dockedLayers, escXml, getBannerRect, getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
 import { wrapText } from '../text-utils.js';
 import { uploadLogo } from '../supabase.js';
 import { fileTypeLabel, isDisplayableImage } from '../media-utils.js';
+import { clipToCanvas } from '../image-box.js';
+import { findAxisSnap, hideAlignGuides, setAlignGuide } from '../align-guides.js';
 
+// Color and image are independent layers, not exclusive alternatives — color
+// is always painted (defaults to white) as the absolute-back layer, and an
+// image, if set, paints on top of it (see makeHoleSignSvg in
+// hole-sign-render.js). A variation logo can be sent "Below Background" to
+// sit between the two, showing through any transparency in the image.
 export function buildBackgroundSection() {
   const bg = HS.background;
-  let bgControls;
-  if (bg.type === 'color') {
-    bgControls = `
-      <div class="color-row">
-        <input type="color" class="hs-color-swatch" id="hsBgSwatch" value="${bg.color}"
-          oninput="setBgColor(this.value)">
-        <input type="text" class="hexin" style="flex:1" maxlength="7" value="${bg.color}"
-          oninput="setBgColorHex(this.value)" placeholder="#000000">
-        ${eyedropperBtn('hsBgSwatch')}
-      </div>`;
-  } else if (bg.imageUrl) {
-    const overlayColor = bg.overlayColor || '#000000';
-    const overlayOp = bg.overlayOpacity ?? 50;
-    const overlayOn = bg.overlayEnabled !== false;
-    const imgOp = bg.imageOpacity ?? 100;
-    const blendModes = ['normal','multiply','screen','overlay','darken','lighten','color-dodge','color-burn','hard-light','soft-light','difference','color','luminosity'];
-    bgControls = `
+  const color = bg.color || '#FFFFFF';
+  const overlayColor = bg.overlayColor || '#000000';
+  const overlayOp = bg.overlayOpacity ?? 50;
+  const overlayOn = bg.overlayEnabled !== false;
+  const imgOp = bg.imageOpacity ?? 100;
+  const blendModes = ['normal','multiply','screen','overlay','darken','lighten','color-dodge','color-burn','hard-light','soft-light','difference','color','luminosity'];
+  const imageControls = bg.imageUrl ? `
       <div class="hs-bg-img-row" style="margin-top:4px">
         <img src="${bg.imageUrl}" style="width:60px;height:40px;object-fit:cover;border-radius:6px;border:1px solid var(--gray-100)">
         <button class="btn sm" onclick="removeBgImage()">Remove image</button>
@@ -68,22 +65,24 @@ export function buildBackgroundSection() {
         <select class="hs-editor-select" style="flex:1" onchange="setBgOverlayBlend(this.value)">
           ${blendModes.map(m => `<option value="${m}"${(bg.overlayBlend || 'normal') === m ? ' selected' : ''}>${m.charAt(0).toUpperCase() + m.slice(1).replace(/-/g,' ')}</option>`).join('')}
         </select>
-      </div>` : ''}`;
-  } else {
-    bgControls = `
+      </div>` : ''}` : `
       <div style="margin-top:4px">
         <button class="btn sm" onclick="document.getElementById('hsBgFile').click()">Upload image</button>
         <input type="file" id="hsBgFile" accept="image/*" style="display:none" onchange="handleBgImageUpload(event)">
       </div>`;
-  }
   return `
     <div class="hs-section">
       <div class="hs-section-title">Background</div>
-      <div class="hs-bg-toggle">
-        <button class="hs-tog-btn${bg.type === 'color' ? ' active' : ''}" onclick="setBgType('color')">Color</button>
-        <button class="hs-tog-btn${bg.type === 'image' ? ' active' : ''}" onclick="setBgType('image')">Image</button>
+      <div class="tl-row-label" style="font-size:12px;font-weight:600;color:var(--black)">Color</div>
+      <div class="color-row">
+        <input type="color" class="hs-color-swatch" id="hsBgSwatch" value="${color}"
+          oninput="setBgColor(this.value)">
+        <input type="text" class="hexin" style="flex:1" maxlength="7" value="${color}"
+          oninput="setBgColorHex(this.value)" placeholder="#000000">
+        ${eyedropperBtn('hsBgSwatch')}
       </div>
-      ${bgControls}
+      <div class="tl-row-label" style="font-size:12px;font-weight:600;color:var(--black);margin-top:14px">Image</div>
+      ${imageControls}
     </div>`;
 }
 
@@ -171,9 +170,7 @@ export function renderDesignMenuList(activeTmpl) {
   const rows = [];
   rows.push(menuRow('template', 'Template', escXml(activeTmpl.name)));
   const bg = HS.background;
-  const bgHint = bg.type === 'color'
-    ? `<span class="hs-menu-swatch" style="background:${escXml(bg.color)}"></span>`
-    : (bg.imageUrl ? 'Image' : 'No image');
+  const bgHint = `<span class="hs-menu-swatch" style="background:${escXml(bg.color || '#FFFFFF')}"></span>${bg.imageUrl ? ' + Image' : ''}`;
   rows.push(menuRow('background', 'Background', bgHint));
 
   // A banner already on shows as a normal drill-in row (hint "On") so it can
@@ -357,11 +354,6 @@ export function renderStep1() {
     if (el) renderHoleSignInto(el, t, { templateId: t.templateStyle });
   });
 }
-
-window.setBgType = function (type) {
-  HS.background.type = type;
-  renderStep1();
-};
 
 window.setBgColor = function (val) {
   HS.background.color = val;
@@ -823,6 +815,9 @@ export function paintTplSlotOverlays(parentEl, state) {
         slotVisual.alt = '';
         slotVisual.draggable = false;
         slotVisual.className = 'tl-slot-img';
+        // Natural size (and so rendered size, since it can be scaled to fit)
+        // isn't known until load — clipping any earlier uses a stale rect.
+        slotVisual.addEventListener('load', () => clipToCanvas(slotVisual, parentEl));
       } else {
         slotVisual = document.createElement('div');
         slotVisual.className = 'tl-slot-img tl-slot-file-badge';
@@ -889,6 +884,10 @@ export function paintTplSlotOverlays(parentEl, state) {
     });
 
     parentEl.appendChild(overlay);
+    if (slot?.logoSrc) {
+      const visual = overlay.querySelector('.tl-slot-img');
+      if (visual) requestAnimationFrame(() => clipToCanvas(visual, parentEl));
+    }
   });
 }
 
@@ -924,14 +923,6 @@ function getSnapTargets(state) {
   };
 }
 
-function snapNearest(val, snaps, threshold) {
-  let best = val, bestDist = threshold;
-  for (const s of snaps) {
-    const d = Math.abs(val - s);
-    if (d < bestDist) { best = s; bestDist = d; }
-  }
-  return best;
-}
 
 export function paintTextLayerOverlays(parentEl, state) {
   parentEl.querySelectorAll('.hs-tl-overlay').forEach(el => el.remove());
@@ -1007,6 +998,7 @@ export function paintTextLayerOverlays(parentEl, state) {
         overlay.style.left  = pct(layer.x, HS_W);
         overlay.style.width = pct(newW, HS_W);
       }
+      clipToCanvas(textDiv, parentEl);
     });
     lh.addEventListener('pointerup', () => {
       document.body.style.cursor = '';
@@ -1040,6 +1032,7 @@ export function paintTextLayerOverlays(parentEl, state) {
         layer.w = newW;
         overlay.style.width = pct(newW, HS_W);
       }
+      clipToCanvas(textDiv, parentEl);
     });
     rh.addEventListener('pointerup', () => {
       document.body.style.cursor = '';
@@ -1091,6 +1084,7 @@ export function paintTextLayerOverlays(parentEl, state) {
         const val    = document.getElementById('hsTlSizeVal');
         if (slider) slider.value = newSize;
         if (val) val.textContent = newSize;
+        clipToCanvas(textDiv, parentEl);
       });
       ch.addEventListener('pointerup', () => {
         document.body.style.cursor = '';
@@ -1159,11 +1153,16 @@ export function paintTextLayerOverlays(parentEl, state) {
         // overlap — an explicit "pull this out precisely" escape hatch, so
         // undock immediately if it was docked.
         if (dockHit) { dockHit = null; layer.dock = null; clearDockHighlight(parentEl); }
-        nx = snapNearest(nx, xSnaps, 200);
-        ny = snapNearest(ny, ySnaps, 200);
+        const snapX = findAxisSnap(xSnaps, nx, 0, 200);
+        const snapY = findAxisSnap(ySnaps, ny, 0, 200);
+        if (snapX) nx = snapX.newPos;
+        if (snapY) ny = snapY.newPos;
+        setAlignGuide(parentEl, 'v', !!snapX, snapX && pct(snapX.value, HS_W));
+        setAlignGuide(parentEl, 'h', !!snapY, snapY && pct(snapY.value, HS_H));
         layer.x = nx; layer.y = ny;
         overlay.style.left = pct(nx, HS_W);
         overlay.style.top  = pct(ny, HS_H);
+        clipToCanvas(textDiv, parentEl);
         return;
       }
 
@@ -1176,6 +1175,7 @@ export function paintTextLayerOverlays(parentEl, state) {
       const hit = hitTestDockZone(state, cx, cy, dockHit);
 
       if (hit) {
+        hideAlignGuides(parentEl);
         showDockHighlight(parentEl, state, hit);
         const siblings = getDockedSiblings(state, hit, layer.id);
         const positions = dockedLayerPositions(state, hit);
@@ -1204,19 +1204,35 @@ export function paintTextLayerOverlays(parentEl, state) {
         siblings.forEach(sib => {
           const r = freshPositions[sib.id];
           const el = parentEl.querySelector(`.hs-tl-overlay[data-tl-id="${sib.id}"]`);
-          if (el && r) { el.style.left = pct(r.x, HS_W); el.style.top = pct(r.y, HS_H); el.style.width = pct(r.w, HS_W); }
+          if (el && r) {
+            el.style.left = pct(r.x, HS_W); el.style.top = pct(r.y, HS_H); el.style.width = pct(r.w, HS_W);
+            const sibContent = el.querySelector('.hs-tl-content');
+            if (sibContent) clipToCanvas(sibContent, parentEl);
+          }
         });
       } else {
         if (dockHit) { dockHit = null; layer.dock = null; clearDockHighlight(parentEl); }
+        // Same box-center snap-to-canvas-center that logos and template-logo
+        // slots already default to — matches image dragging, which snaps by
+        // default too, unlike this default (non-Shift) path previously.
+        const tolX = 5 / sx, tolY = 5 / sy;
+        const snapX = findAxisSnap([HS_W / 2], cx, 0, tolX);
+        const snapY = findAxisSnap([HS_H / 2], cy, 0, tolY);
+        if (snapX) nx += snapX.newPos - cx;
+        if (snapY) ny += snapY.newPos - cy;
+        setAlignGuide(parentEl, 'v', !!snapX, '50%');
+        setAlignGuide(parentEl, 'h', !!snapY, '50%');
         layer.x = nx; layer.y = ny;
         overlay.style.left = pct(nx, HS_W);
         overlay.style.top  = pct(ny, HS_H);
       }
+      clipToCanvas(textDiv, parentEl);
     });
 
     overlay.addEventListener('pointerup', () => {
       document.body.style.cursor = '';
       clearDockHighlight(parentEl);
+      hideAlignGuides(parentEl);
       if (didDrag) {
         if (HS.editingVarId) window._hsRenderVariationPreview?.();
         else updateStep1Preview();
@@ -1229,5 +1245,6 @@ export function paintTextLayerOverlays(parentEl, state) {
     });
 
     parentEl.appendChild(overlay);
+    requestAnimationFrame(() => clipToCanvas(textDiv, parentEl));
   });
 }

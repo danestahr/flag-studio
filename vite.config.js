@@ -15,6 +15,7 @@ export default defineConfig({
         'reset-password-request': resolve(__dirname, 'reset-password-request.html'),
         'reset-password': resolve(__dirname, 'reset-password.html'),
         project: resolve(__dirname, 'project.html'),
+        profile: resolve(__dirname, 'profile.html'),
 flags: resolve(__dirname, 'flags.html'),
         'flags-variations': resolve(__dirname, 'flags-variations.html'),
         'flags-gallery': resolve(__dirname, 'flags-gallery.html'),

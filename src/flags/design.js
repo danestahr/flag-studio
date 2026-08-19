@@ -20,6 +20,7 @@ import { esc } from '../dom-utils.js';
 import { logoThumbHtml } from '../media-utils.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 import { renderCanvasPanel, fitSidePanel } from '../canvas-panel.js';
+import { refreshImageBoxClips } from '../image-box.js';
 
 let isDirty = false;
 let _baseZoom = 100;
@@ -465,6 +466,10 @@ function setupLibrary() {
     getZoom: () => _baseZoom,
     setZoom: v => { _baseZoom = v; },
     headerName: 'Base assignment',
+    onApply: () => {
+      const wrap = document.getElementById('baseWrap');
+      if (wrap) refreshImageBoxClips(wrap);
+    },
     canvasContentHtml: '<div class="flag-wrap" id="baseWrap"><svg class="bsvg" id="baseSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg></div>',
     description: "Drag from library into a zone. Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.",
   });

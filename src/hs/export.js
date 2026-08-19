@@ -1,14 +1,15 @@
 import { HS, UI, getEffectiveState, getEffectiveVariation } from './state.js';
-import { HS_H, HS_W, emptyTemplateLogos } from '../hole-sign-data.js';
+import { HS_H, HS_W } from '../hole-sign-data.js';
 import { escXml, makeHoleSignSvg, renderHoleSignInto } from '../hole-sign-render.js';
 import {
-  generateShareToken, loadEventName, saveHoleSignConfig, updateProject,
+  generateShareToken, loadEventName,
   loadOrderIntake, uploadPrintSheet, sendPrintSheetReady,
 } from '../supabase.js';
 import { PDFDocument, PDFName, PDFOperator, PDFString, rgb } from 'pdf-lib';
 import JSZip from 'jszip';
 import { dl, slug, sanitizeFilename } from '../dom-utils.js';
 import { pngBlobToPdfBlob } from '../pdf-utils.js';
+import { saveDraftInternal } from './draft.js';
 
 // ── Step 3: Gallery ─────────────────────────────────────────
 export function renderGallery() {
@@ -567,18 +568,31 @@ export async function hsInlineHrefs(svgEl) {
   }));
 }
 
-// Fetch the Google Fonts CSS and inline each woff2 url() as a base64 data URI.
-// This is required because <img src=blob:svg> can't see the host document's
-// @font-face rules — without inlining, DM Sans / DM Serif Display fall back to
-// generic serif/sans-serif when rasterized.
+// Fetch the Google Fonts + Adobe Fonts (Typekit) CSS and inline each font file
+// as a base64 data URI. This is required because <img src=blob:svg> can't see
+// the host document's @font-face rules — without inlining, DM Sans / DM Serif
+// Display / Meatball fall back to generic serif/sans-serif when rasterized.
+const FONT_CSS_URLS = [
+  'https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap',
+  'https://use.typekit.net/ouu2gxk.css',
+];
+
 export async function getEmbeddedFontCss() {
   if (UI.fontCssCache !== null) return UI.fontCssCache;
   try {
-    const cssUrl = 'https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap';
-    const res = await fetch(cssUrl);
-    let css = await res.text();
-    const urls = [...new Set([...css.matchAll(/url\((https:\/\/[^)]+\.woff2)\)/g)].map(m => m[1]))];
-    const replacements = await Promise.all(urls.map(async url => {
+    const cssParts = await Promise.all(FONT_CSS_URLS.map(async url => {
+      const res = await fetch(url);
+      return res.ok ? await res.text() : '';
+    }));
+    let css = cssParts.join('\n');
+    // Google's CSS uses unquoted url()s; Typekit's uses quoted url()s with a
+    // format() hint and no file extension — capture both, keyed by format.
+    const urlPattern = /url\((['"]?)([^'")]+)\1\)(?:\s*format\((['"]?)([\w-]+)\3\))?/g;
+    const matches = new Map();
+    for (const m of css.matchAll(urlPattern)) {
+      if (!matches.has(m[2])) matches.set(m[2], m[4]);
+    }
+    const replacements = await Promise.all([...matches].map(async ([url, format]) => {
       try {
         const r = await fetch(url);
         if (!r.ok) return null;
@@ -586,7 +600,11 @@ export async function getEmbeddedFontCss() {
         const bytes = new Uint8Array(buf);
         let bin = '';
         for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        return { url, dataUri: `data:font/woff2;base64,${btoa(bin)}` };
+        const f = (format || '').toLowerCase();
+        const mime = f.includes('woff2') ? 'font/woff2' : f === 'woff' ? 'font/woff'
+          : f.includes('opentype') || f.includes('truetype') ? 'font/otf'
+          : url.includes('.woff2') ? 'font/woff2' : url.includes('.woff') ? 'font/woff' : 'font/truetype';
+        return { url, dataUri: `data:${mime};base64,${btoa(bin)}` };
       } catch (err) { console.warn('Font fetch failed:', url, err); return null; }
     }));
     for (const rep of replacements) {
@@ -673,49 +691,5 @@ window.copyHsShareLink = function () {
   if (status) { status.textContent = 'Copied!'; setTimeout(() => { status.textContent = ''; }, 2000); }
 };
 
-// ── Save ───────────────────────────────────────────────────
-export async function saveDraftInternal() {
-  if (!HS.projectId) return;
-  // Strip blob: URLs from logoSrcTight before persisting — they're regenerable
-  // from logoArtworkBounds + logoSrc on load and would otherwise be dead refs.
-  const variations = HS.variations.map(v => {
-    const { logoSrcTight, ...rest } = v;
-    return rest;
-  });
-  // Strip blob URLs from template-logo slots before persisting; they're regenerable
-  // from logoArtworkBounds + logoSrc on load.
-  const tplLogos = HS.templateLogos ? {
-    ...HS.templateLogos,
-    slots: (HS.templateLogos.slots || []).map(({ logoSrcTight, ...rest }) => rest),
-  } : emptyTemplateLogos();
-  await saveHoleSignConfig(HS.projectId, {
-    templateStyle: HS.templateStyle,
-    colors: {
-      background: HS.background,
-      topText:    HS.topText,
-      bottomText: HS.bottomText,
-      bannerTop:    HS.bannerTop,
-      bannerBottom: HS.bannerBottom,
-      templateLogos: tplLogos,
-      textLayers:    HS.textLayers || [],
-      captionsEdited: HS.captionsEdited,
-    },
-    variations,
-    defaults: HS.defaults,
-  });
-  if (HS.projectName) {
-    await updateProject(HS.projectId, { name: HS.projectName });
-  }
-}
-
-window.saveDraft = async function () {
-  const btn = document.getElementById('saveDraftBtn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  try {
-    await saveDraftInternal();
-    if (btn) { btn.textContent = 'Saved!'; setTimeout(() => { btn.textContent = 'Save draft'; btn.disabled = false; }, 2000); }
-  } catch (err) {
-    console.error(err);
-    if (btn) { btn.textContent = 'Save failed'; setTimeout(() => { btn.textContent = 'Save draft'; btn.disabled = false; }, 2000); }
-  }
-};
+// saveDraftInternal / window.saveDraft moved to ./draft.js so steps 1-2
+// don't have to load pdf-lib/jszip just to autosave.

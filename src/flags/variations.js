@@ -21,6 +21,7 @@ import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 import { renderLogoTray } from '../logo-tray.js';
 import { renderVariationList, refreshVariationThumbs } from '../variation-list.js';
 import { renderCanvasPanel, fitSidePanel } from '../canvas-panel.js';
+import { refreshImageBoxClips } from '../image-box.js';
 
 let isDirty = false;
 let activeFace = 'front';
@@ -301,6 +302,10 @@ const flagCanvas = renderCanvasPanel(document.getElementById('flagCanvasPanel'),
   sameSidesRowId: 'sameSidesRow',
   sameSidesCheckId: 'sameSidesCheck',
   onToggleSameSides: checked => window.toggleSameSides(checked),
+  onApply: () => {
+    const wrap = document.getElementById('varWrap');
+    if (wrap) refreshImageBoxClips(wrap);
+  },
   canvasContentHtml: `
     <div class="flag-wrap" id="varWrap">
       <svg class="bsvg" id="varSvg" viewBox="0 0 1000 750" preserveAspectRatio="xMidYMid meet"></svg>
@@ -692,19 +697,16 @@ function renderBackMirrorPreview(v, varFlag, varColors, gsTagOpts) {
   if (!wrap) return;
   // Stale drop-zone context (from the last editable render) would otherwise
   // still accept drags onto this read-only mirror — block it explicitly.
+  // .dz-frame-overlay is renderDropZones' separate <svg> holding the front's
+  // border + GS tag (unmirrored, at the front's position) — left in place,
+  // it stays layered on top of this mirrored back render.
   wrap._dzReadonly = true;
-  wrap.querySelectorAll('.dzone, .dz-badge').forEach(d => d.remove());
+  wrap.querySelectorAll('.dzone, .dz-badge, .dz-frame-overlay').forEach(d => d.remove());
   const [vbW, vbH] = (varFlag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
   wrap.style.aspectRatio = vbW + ' / ' + vbH;
   const svg = makeSvg(v.logos, '100%', '100%', 'back', true, varFlag, varColors, [], gsTagOpts);
   const old = document.getElementById('varSvg');
   if (!svg) { if (old) old.remove(); return; }
-  // makeSvg leaves the grey bleed guide in its original (pre-frame) position,
-  // so the border zone — which deliberately paints past the trim line, with
-  // no gap once printed and cut — ends up covering it. Promote it back to
-  // the top here, matching the guide's z-order in the editable front view.
-  const bleedEl = svg.querySelector('[id="Bleed"], [id="bleed"]');
-  if (bleedEl) svg.appendChild(bleedEl);
   svg.id = 'varSvg';
   svg.classList.add('bsvg');
   svg.style.cssText = 'display:block;width:100%;height:100%';

@@ -128,6 +128,26 @@ export function getEffectiveVariation(v) {
   return v;
 }
 
+// A variation's logo/sponsor-text content stacks against the rest of the sign
+// on a 3-tier axis: below the background, below the template frame (banners/
+// text/template logos — the default), or above the frame. Stored as two
+// booleans (`belowBackground`/`aboveFrame`, mutually exclusive) rather than
+// one enum so old saved variations with only `aboveFrame` set keep working
+// without a migration.
+export const HS_LAYER_ORDER = ['below-bg', 'below-frame', 'above-frame'];
+export const HS_LAYER_LABELS = { 'below-bg': 'Below Background', 'below-frame': 'Below Template', 'above-frame': 'Above Template' };
+
+export function getVariationLayer(v) {
+  if (v?.belowBackground) return 'below-bg';
+  if (v?.aboveFrame) return 'above-frame';
+  return 'below-frame';
+}
+
+export function setVariationLayer(v, layer) {
+  v.belowBackground = layer === 'below-bg';
+  v.aboveFrame = layer === 'above-frame';
+}
+
 // Font picker as a dropdown (scales as more fonts are added). `onchange` is the
 // inline handler body receiving `this.value`.
 export function fontSelect(onchange, current) {

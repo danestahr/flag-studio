@@ -439,26 +439,37 @@ export function makeHoleSignSvg(state, variation) {
 
   // Collect SVG defs (filters, etc.) emitted before any element that uses them.
   const svgDefs = [];
-  if (bg.type === 'image' && bg.imageUrl && bg.imageGreyscale) {
+  if (bg.imageUrl && bg.imageGreyscale) {
     svgDefs.push(`<filter id="hsBgGrey"><feColorMatrix type="saturate" values="0"/></filter>`);
   }
   if (svgDefs.length) parts.push(`<defs>${svgDefs.join('')}</defs>`);
 
-  // Background: only apply the stored color when type is 'color'; image mode
-  // uses a white base so the color isn't inadvertently visible through a
-  // partially transparent image.
-  const bgFill = bg.type === 'image' ? '#FFFFFF' : (bg.color || '#FFFFFF');
-  parts.push(`<rect x="0" y="0" width="${HS_W}" height="${HS_H}" fill="${escXml(bgFill)}"/>`);
-  if (bg.type === 'image' && bg.imageUrl) {
+  // Background is built into its own buckets (instead of pushed straight
+  // into `parts`) so belowBgParts — computed further down, once we know
+  // whether the variation opted below the background — can still be spliced
+  // in between them. bgInsertIndex marks where "after defs, before
+  // everything else" is.
+  const bgInsertIndex = parts.length;
+  // The color layer is always present (defaults to white) and always the
+  // absolute-bottommost thing on the sign — it never gets skipped just
+  // because an image is also set, so there's never a "hole" all the way
+  // through to whatever's behind the canvas itself.
+  const bgColorParts = [`<rect x="0" y="0" width="${HS_W}" height="${HS_H}" fill="${escXml(bg.color || '#FFFFFF')}"/>`];
+  // The image layer is independent of the color layer and paints no base
+  // rect of its own — transparent/semi-transparent pixels in the uploaded
+  // PNG show through to whatever is stacked between it and the color (e.g.
+  // a variation logo sent "Below Background"), or to the color itself.
+  const bgImageParts = [];
+  if (bg.imageUrl) {
     const imgOp = (bg.imageOpacity ?? 100) / 100;
     const filterAttr = bg.imageGreyscale ? ` filter="url(#hsBgGrey)"` : '';
     const opacityAttr = imgOp < 1 ? ` opacity="${imgOp.toFixed(3)}"` : '';
-    parts.push(`<image href="${escXml(bg.imageUrl)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid slice"${filterAttr}${opacityAttr}/>`);
+    bgImageParts.push(`<image href="${escXml(bg.imageUrl)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid slice"${filterAttr}${opacityAttr}/>`);
     const overlayAlpha = (bg.overlayEnabled !== false) ? (bg.overlayOpacity ?? 50) / 100 : 0;
     if (overlayAlpha > 0) {
       const blend = bg.overlayBlend || 'normal';
       const blendStyle = blend !== 'normal' ? ` style="mix-blend-mode:${escXml(blend)}"` : '';
-      parts.push(`<rect x="0" y="0" width="${HS_W}" height="${HS_H}" fill="${escXml(bg.overlayColor || '#000000')}" fill-opacity="${overlayAlpha.toFixed(3)}"${blendStyle}/>`);
+      bgImageParts.push(`<rect x="0" y="0" width="${HS_W}" height="${HS_H}" fill="${escXml(bg.overlayColor || '#000000')}" fill-opacity="${overlayAlpha.toFixed(3)}"${blendStyle}/>`);
     }
   }
 
@@ -469,6 +480,7 @@ export function makeHoleSignSvg(state, variation) {
   // `aboveFrame`.
   const frameParts = [];
   const aboveParts = [];
+  const belowBgParts = [];
 
   // Banners paint as an overlay on top of full-graphic's full-bleed image
   // (frameParts push after variationParts below) rather than reserving space.
@@ -550,7 +562,8 @@ export function makeHoleSignSvg(state, variation) {
     const cy = lz.y + lz.h / 2 + st.size * 0.38;
     variationParts.push(`<text x="${cx}" y="${Math.round(cy)}" text-anchor="middle" font-family="${escXml(getFamily(st.font))}" font-size="${st.size}" fill="${escXml(st.color || '#111110')}">${escXml(st.text)}</text>`);
   }
-  if (variation?.aboveFrame) aboveParts.push(...variationParts);
+  if (variation?.belowBackground) belowBgParts.push(...variationParts);
+  else if (variation?.aboveFrame) aboveParts.push(...variationParts);
   else parts.push(...variationParts);
 
   // Free text layers — each defaults to painting below the frame, unless its
@@ -589,6 +602,20 @@ export function makeHoleSignSvg(state, variation) {
   // frame back out into its own overlay layer and still stack correctly.
   if (frameParts.length) parts.push(`<g class="hs-frame">${frameParts.join('')}</g>`);
   parts.push(...aboveParts);
+  // Insert last so belowBgParts (only known once the variation/text-layer
+  // loops above have classified their content) still lands in between the
+  // two background layers: color (absolute back) → below-background logo →
+  // image (so its transparency can show that logo, or the color, through).
+  // The color and image layers are each wrapped in their own group (mirroring
+  // .hs-frame above) so a caller needing a separate DOM overlay for either —
+  // var-canvas.js, whose logo/ghost is a DOM element that can't slot in
+  // between two pieces of one SVG's own paint order — can pull just that one
+  // piece out into its own z-indexed layer, leaving everything else (free
+  // text layers, docked captions, sponsor fallback) at its normal stacking
+  // position instead of dragging it down with the color layer.
+  const bgColorGroup = [`<g class="hs-bg-color">${bgColorParts.join('')}</g>`];
+  const bgImageGroup = bgImageParts.length ? [`<g class="hs-bg-image">${bgImageParts.join('')}</g>`] : [];
+  parts.splice(bgInsertIndex, 0, ...bgColorGroup, ...belowBgParts, ...bgImageGroup);
   parts.push(`</svg>`);
   return { content: parts.join('\n'), viewBox };
 }

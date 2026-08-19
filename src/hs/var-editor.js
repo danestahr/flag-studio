@@ -1,7 +1,7 @@
 import { HS, UI, alignBtns, eyedropperBtn, fontSelect, mergeBanner, getEffectiveState, syncAlignBtns } from './state.js';
 import { textLayerSource } from './text-layers.js';
 import { cloneTemplateLogos, loadCustomTemplates, menuRow } from './design.js';
-import { saveDraftInternal } from './export.js';
+import { saveDraftInternal } from './draft.js';
 import { renderBannerSection } from './banner.js';
 import { closeTlSlotToolbar, renderTemplateLogoControls, renderTplSlotBody } from './template-logos.js';
 import { cropSvgToArtwork } from './logo-utils.js';
@@ -198,13 +198,6 @@ window.setDraftTmpl = function (key) {
   renderVariationPreview();
 };
 
-window.setDraftBgType = function (type) {
-  if (!HS.editingDraft) return;
-  HS.editingDraft.background = { ...HS.editingDraft.background, type };
-  renderEditor();
-  renderVariationPreview();
-};
-
 window.setDraftBgColor = function (color) {
   if (!HS.editingDraft) return;
   HS.editingDraft.background = { ...HS.editingDraft.background, color };
@@ -377,25 +370,17 @@ export function buildVarTemplateSection(d, customs) {
     </div>`;
 }
 
+// Color and image are independent layers, not exclusive alternatives — see
+// the comment on buildBackgroundSection() in design.js.
 export function buildVarBackgroundSection(d) {
   const bg = d.background;
-  let bgControls;
-  if (bg.type === 'color') {
-    bgControls = `
-      <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-        <input type="color" class="hs-color-swatch" id="hsDraftBgSwatch" value="${bg.color}"
-          oninput="setDraftBgColor(this.value)">
-        <input type="text" class="hexin" id="hsDraftBgHex" style="flex:1" maxlength="7" value="${bg.color}"
-          oninput="setDraftBgColorHex(this.value)">
-        ${eyedropperBtn('hsDraftBgSwatch')}
-      </div>`;
-  } else if (bg.imageUrl) {
-    const overlayColor = bg.overlayColor || '#000000';
-    const overlayOp = bg.overlayOpacity ?? 50;
-    const overlayOn = bg.overlayEnabled !== false;
-    const imgOp = bg.imageOpacity ?? 100;
-    const blendModes = ['normal','multiply','screen','overlay','darken','lighten','color-dodge','color-burn','hard-light','soft-light','difference','color','luminosity'];
-    bgControls = `
+  const color = bg.color || '#FFFFFF';
+  const overlayColor = bg.overlayColor || '#000000';
+  const overlayOp = bg.overlayOpacity ?? 50;
+  const overlayOn = bg.overlayEnabled !== false;
+  const imgOp = bg.imageOpacity ?? 100;
+  const blendModes = ['normal','multiply','screen','overlay','darken','lighten','color-dodge','color-burn','hard-light','soft-light','difference','color','luminosity'];
+  const imageControls = bg.imageUrl ? `
       <div class="hs-bg-img-row" style="margin-top:4px">
         <img src="${bg.imageUrl}" style="width:60px;height:40px;object-fit:cover;border-radius:6px;border:1px solid var(--gray-100)">
         <button class="btn sm" onclick="removeDraftBgImage()">Remove image</button>
@@ -433,22 +418,24 @@ export function buildVarBackgroundSection(d) {
         <select class="hs-editor-select" style="flex:1" onchange="setDraftBgOverlayBlend(this.value)">
           ${blendModes.map(m => `<option value="${m}"${(bg.overlayBlend || 'normal') === m ? ' selected' : ''}>${m.charAt(0).toUpperCase() + m.slice(1).replace(/-/g,' ')}</option>`).join('')}
         </select>
-      </div>` : ''}`;
-  } else {
-    bgControls = `
+      </div>` : ''}` : `
       <div style="margin-top:4px">
         <button class="btn sm" onclick="document.getElementById('hsDraftBgFile').click()">Upload image</button>
         <input type="file" id="hsDraftBgFile" accept="image/*" style="display:none" onchange="handleDraftBgImageUpload(event)">
       </div>`;
-  }
   return `
     <div class="hs-editor-section">
       <div class="hs-editor-label">Background</div>
-      <div class="hs-bg-toggle">
-        <button class="hs-tog-btn${bg.type === 'color' ? ' active' : ''}" onclick="setDraftBgType('color')">Color</button>
-        <button class="hs-tog-btn${bg.type === 'image' ? ' active' : ''}" onclick="setDraftBgType('image')">Image</button>
+      <div class="tl-row-label" style="font-size:12px;font-weight:600;color:var(--black)">Color</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+        <input type="color" class="hs-color-swatch" id="hsDraftBgSwatch" value="${color}"
+          oninput="setDraftBgColor(this.value)">
+        <input type="text" class="hexin" id="hsDraftBgHex" style="flex:1" maxlength="7" value="${color}"
+          oninput="setDraftBgColorHex(this.value)">
+        ${eyedropperBtn('hsDraftBgSwatch')}
       </div>
-      ${bgControls}
+      <div class="tl-row-label" style="font-size:12px;font-weight:600;color:var(--black);margin-top:14px">Image</div>
+      ${imageControls}
     </div>`;
 }
 
@@ -480,9 +467,7 @@ export function renderEditor() {
     const rows = [];
     rows.push(menuRow('template', 'Template', escXml(activeTmpl.name), 'openHsVarMenu'));
     const bg = d.background;
-    const bgHint = bg.type === 'color'
-      ? `<span class="hs-menu-swatch" style="background:${escXml(bg.color)}"></span>`
-      : 'Image';
+    const bgHint = `<span class="hs-menu-swatch" style="background:${escXml(bg.color || '#FFFFFF')}"></span>${bg.imageUrl ? ' + Image' : ''}`;
     rows.push(menuRow('background', 'Background', bgHint, 'openHsVarMenu'));
     rows.push(menuRow('bannerTop',    'Top banner',    d.bannerTop?.enabled    ? 'On' : 'Off', 'openHsVarMenu'));
     rows.push(menuRow('bannerBottom', 'Bottom banner', d.bannerBottom?.enabled ? 'On' : 'Off', 'openHsVarMenu'));

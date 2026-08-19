@@ -48,6 +48,8 @@ body { font-family:'Proxima Nova', 'DM Sans', sans-serif; background:var(--gray-
 header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
 .sign-out-btn { background:transparent; border:1px solid rgba(255,255,255,.35); color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; padding:5px 14px; border-radius:20px; cursor:pointer; transition:background .15s,color .15s; }
 .sign-out-btn:hover { background:rgba(255,255,255,.12); color:white; }
+.account-avatar { width:30px; height:30px; border-radius:50%; background:var(--gold); color:#1B1B18; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; text-decoration:none; font-family:'DM Sans',sans-serif; flex-shrink:0; transition:opacity .15s; }
+.account-avatar:hover { opacity:.85; }
 .logo { font-family:'DM Serif Display',serif; color:var(--chrome-text); font-size:20px; display:flex; align-items:center; gap:10px; }
 .beta-tag { font-family:'DM Sans',sans-serif; font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#fff; background:#06b6d4; border-radius:4px; padding:3px 7px; line-height:1.4; align-self:center; flex-shrink:0; }
 .logo-mark { width:48px; height:48px; display:block; flex-shrink:0; }
@@ -245,7 +247,17 @@ input[type=file] { display:none; }
 .lib-item.uploading .lib-item-name { background:rgba(26,74,46,.7); }
 .lib-empty { font-size:13px; color:var(--gray-400); text-align:center; padding:.5rem 0; grid-column:span 2; }
 
-.flag-wrap { width:100%; aspect-ratio:7519/4669; position:relative; border-radius:8px; overflow:hidden; background:var(--gray-50); }
+/* overflow is visible, not hidden/clip: a placed logo or text layer can be
+   dragged/resized well past the flag's own edge (see canvasBoundsInZonePct
+   in image-box.js), and only the image/text CONTENT should visually cut off
+   there, matching the print export — the bounding box and its drag/resize
+   handles must stay fully visible and grabbable no matter how far off-canvas
+   the content has been dragged, so the user can always pull it back. An
+   ancestor overflow:hidden/clip can't do that selectively (it clips the
+   handles right along with the content), so each piece of content clips
+   itself instead, via a JS-computed clip-path (see clipToCanvas in
+   image-box.js) sized to this element's own on-screen rect. */
+.flag-wrap { width:100%; aspect-ratio:7519/4669; position:relative; border-radius:8px; background:var(--gray-50); }
 .flag-wrap svg.bsvg { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
 /* The template's border/GS-tag frame, relocated here (see extractFrameElements)
    so it defaults to painting above logos/text. z-index (not DOM order) governs
@@ -255,6 +267,25 @@ input[type=file] { display:none; }
    own, so they stay in the implicit "0" bucket below it by default. */
 .dz-frame-overlay { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:5; }
 .dz-logo-wrap.above-frame, .flag-tl-overlay.above-frame { z-index:10; }
+/* Hole-sign only: the non-interactive "ghost" copy of a variation's logo sent
+   below the background (see belowBackground in image-box.js's createImageBox
+   doc comment) — a plain sibling of .dzone/.dz-logo-wrap, not nested inside
+   either, so its negative z-index escapes past both (which stay normal-tier,
+   fully clickable) all the way out to the background/frame's own level. */
+.dz-logo-ghost { position:absolute; transform:translate(-50%,-50%); height:auto; display:block; object-fit:contain; pointer-events:none; z-index:-2; }
+/* Hole-sign only: the background color and image are separate paint steps
+   in makeHoleSignSvg's own output (color absolute-back, image on top), but
+   var-canvas.js bakes them into one shared SVG element — a third thing (the
+   .dz-logo-ghost above) can't slot in between two pieces of one DOM element.
+   Stacking order, back to front: .dz-bg-color-layer (just the color fill,
+   pulled out like .dz-frame-overlay) → .dz-logo-ghost (a below-background
+   variation logo, when one exists) → .dz-bg-image-overlay (the uploaded
+   background image, pulled out the same way) → everything else (free text,
+   docked captions, sponsor fallback text left in the original bgSvgEl, plus
+   the normal draggable .dzone/.dz-logo-wrap) at the implicit "0" bucket —
+   so an uploaded background image never paints over text/logo content. */
+.dz-bg-color-layer { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:-3; }
+.dz-bg-image-overlay { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:-1; }
 /* ── Drop zones ──────────────────────────────────────────── */
 /* overflow is visible, not hidden: the zone rect is just a placement
    suggestion (see render.js), and a placed logo (.dz-logo-wrap, a child of
@@ -276,13 +307,13 @@ input[type=file] { display:none; }
 .dz-icon { font-size:18px; color:rgba(255,255,255,.8); pointer-events:none; }
 .dzone.has-logo .dz-lbl, .dzone.has-logo .dz-icon { display:none; }
 
-/* Centre guides — hidden until dragging */
-.dz-guide-h, .dz-guide-v { position:absolute; pointer-events:none; opacity:0; transition:opacity .1s; }
-.dz-guide-h { top:50%; left:4px; right:4px; height:4px; background:var(--guides); transform:translateY(-50%); border-radius:2px; }
-.dz-guide-v { left:50%; top:4px; bottom:4px; width:4px; background:var(--guides); transform:translateX(-50%); border-radius:2px; }
-/* guides only visible when actually snapping to an axis */
-.dz-adjusting.snap-h .dz-guide-v { opacity:.9; }
-.dz-adjusting.snap-v .dz-guide-h { opacity:.9; }
+/* Canvas-wide alignment guides (src/align-guides.js) — shared by every
+   axis-snapping drag/resize gesture: logos, free text layers, template-logo
+   slots. Span the full canvas rather than just a placement zone, and are
+   positioned via inline left/top set at snap time; hidden until snapped. */
+.align-guide-v { position:absolute; top:0; bottom:0; width:4px; background:var(--guides); border-radius:2px; transform:translateX(-50%); pointer-events:none; opacity:0; transition:opacity .1s; z-index:15; }
+.align-guide-h { position:absolute; left:0; right:0; height:4px; background:var(--guides); border-radius:2px; transform:translateY(-50%); pointer-events:none; opacity:0; transition:opacity .1s; z-index:15; }
+.align-guide-v.show, .align-guide-h.show { opacity:.9; }
 
 /* Full-canvas "drop it here" overlay while dragging a logo over the flag */
 .dz-drop-overlay {
@@ -330,6 +361,7 @@ input[type=file] { display:none; }
 .dz-toolbar { position:absolute; z-index:200; display:none; align-items:center; gap:4px; background:var(--chrome-bg); border-radius:8px; padding:4px; box-shadow:0 4px 20px rgba(0,0,0,.35); }
 .dz-tb-btn { background:transparent; border:none; color:rgba(255,255,255,.85); font-family:inherit; font-size:12px; font-weight:500; padding:4px 10px; border-radius:5px; cursor:pointer; white-space:nowrap; transition:background .12s, color .12s; }
 .dz-tb-btn:hover { background:rgba(255,255,255,.12); color:white; }
+.dz-tb-btn:disabled { opacity:.35; cursor:default; pointer-events:none; }
 .dz-tb-sep { width:1px; height:18px; background:rgba(255,255,255,.15); flex-shrink:0; }
 
 /* Library picker dropdown */
@@ -734,7 +766,10 @@ input[type=file] { display:none; }
 .hs-font-btn { padding:5px 14px; border:1.5px solid var(--gray-200); border-radius:20px; background:transparent; font-size:13px; cursor:pointer; color:var(--gray-600); font-family:inherit; transition:all .15s; }
 .hs-font-btn:hover { border-color:var(--gray-400); }
 .hs-font-btn.active { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
-.hs-sign-thumb { position:relative; aspect-ratio:6375/5475; background:var(--gray-50); border-radius:var(--rl); overflow:hidden; border:1px solid var(--gray-100); }
+/* See .flag-wrap comment: overflow is visible, not clipped — content clips
+   itself to this element's own rect via clipToCanvas (image-box.js) so the
+   bounding box/handles of an off-canvas logo or text layer stay grabbable. */
+.hs-sign-thumb { position:relative; aspect-ratio:6375/5475; background:var(--gray-50); border-radius:var(--rl); border:1px solid var(--gray-100); }
 .hs-sign-thumb svg { width:100%; height:100%; display:block; }
 .hs-sign-wrap { width:100%; }
 
@@ -782,7 +817,15 @@ input[type=file] { display:none; }
 .hs-var-tmpl-opt.active { background:var(--accent-tint); color:var(--accent); font-weight:500; }
 .hs-var-tmpl-opt-empty { padding:8px 10px; font-size:12px; color:var(--gray-400); font-style:italic; }
 .hs-var-tmpl-sep { height:1px; background:var(--gray-100); margin:4px 0; }
-.hs-sign-preview { position:relative; aspect-ratio:6375/5475; background:var(--gray-100); border-radius:var(--rl); overflow:hidden; }
+/* See .flag-wrap comment: overflow is visible, not clipped — content clips
+   itself to this element's own rect via clipToCanvas (image-box.js) so the
+   bounding box/handles of an off-canvas logo or text layer stay grabbable. */
+/* isolation:isolate contains the stacking context to this card — otherwise
+   a below-bg logo's negative z-index (see .dz-logo-wrap.below-bg) escapes
+   past this element (position:relative alone doesn't establish a stacking
+   context without an explicit z-index) and paints behind the whole page
+   instead of just behind its sibling background <svg>. */
+.hs-sign-preview { position:relative; isolation:isolate; aspect-ratio:6375/5475; background:var(--gray-100); border-radius:var(--rl); }
 .hs-sign-preview .dzone { overflow:visible; }
 .logo-processing-spinner { position:absolute; inset:0; background:rgba(0,0,0,.4); display:flex; align-items:center; justify-content:center; z-index:30; border-radius:4px; pointer-events:none; }
 .logo-processing-spinner::after { content:''; width:22px; height:22px; border:2.5px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:logo-spin .65s linear infinite; }
@@ -829,12 +872,6 @@ input[type=file] { display:none; }
 .tl-slot.has-logo:active { cursor:grabbing; }
 .tl-slot.has-logo:hover { border-color:var(--guides); }
 .tl-slot.selected { border-color:var(--guides); }
-/* Canvas-level alignment guides — span the whole canvas (not one slot's own
-   box) so they can show alignment with the sign's center OR any other
-   image's edges/center, not just self-centering. */
-.tl-align-guide-v { position:absolute; top:0; bottom:0; width:4px; background:var(--guides); border-radius:2px; transform:translateX(-50%); pointer-events:none; opacity:0; transition:opacity .1s; z-index:15; }
-.tl-align-guide-h { position:absolute; left:0; right:0; height:4px; background:var(--guides); border-radius:2px; transform:translateY(-50%); pointer-events:none; opacity:0; transition:opacity .1s; z-index:15; }
-.tl-align-guide-v.show, .tl-align-guide-h.show { opacity:.9; }
 .tl-slot-placeholder { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; color:var(--gray-600); font-size:11px; pointer-events:none; }
 .tl-slot-placeholder > span:first-child { font-size:18px; font-weight:300; line-height:1; }
 .tl-slot-ph-label { font-size:9px; text-transform:uppercase; letter-spacing:.06em; }

@@ -1,7 +1,7 @@
 import { HS, UI, getEffectiveState, getEffectiveVariation } from './state.js';
 import { goStep, updateSidebar } from './app.js';
 import { cloneTemplateLogos, loadCustomTemplates } from './design.js';
-import { saveDraftInternal } from './export.js';
+import { saveDraftInternal } from './draft.js';
 import { applyFillToVariation, hideHsToolbar, prepareLogo, removeBgFromLogo } from './logo-utils.js';
 import { HS_TEMPLATES } from '../hole-sign-data.js';
 import { logoThumbHtml } from '../media-utils.js';
@@ -49,7 +49,7 @@ export function renderStep2() {
                 <button class="add-var-opt" onclick="addEmptyHsVar();closeAddVarMenu()">New variation</button>
                 <button class="add-var-opt" onclick="openDefaultsPanel();closeAddVarMenu()">Default sign</button>
               </div>
-              <input type="file" id="hsCustomArtboardFile" accept="image/*" style="display:none">
+              <input type="file" id="hsCustomArtboardFile" accept="image/*,.pdf,.ai,.eps" multiple style="display:none">
             </div>
           </div>
           <div class="var-list" id="hsVarList"></div>
@@ -93,12 +93,18 @@ window.closeAddVarMenu = function () {
 };
 
 async function handleHsArtboardUpload(e) {
-  const file = e.target.files[0];
+  const files = Array.from(e.target.files);
   e.target.value = '';
-  if (!file) return;
+  if (!files.length) return;
 
+  // Each file becomes its own variation; uploads run independently so one
+  // slow/failed file doesn't hold up the others.
+  await Promise.all(files.map(uploadArtboardVariation));
+}
+
+async function uploadArtboardVariation(file) {
   // Add a placeholder tile immediately so the user sees the card appear right away
-  const varId = 'v-' + Date.now();
+  const varId = crypto.randomUUID();
   const newVar = {
     id: varId,
     name: file.name.replace(/\.[^.]+$/, ''),
@@ -113,10 +119,8 @@ async function handleHsArtboardUpload(e) {
 
   try {
     const logo = await uploadLogo(HS.projectId, file);
-    HS.library.push(logo);
     newVar.artboardSrc = logo.src;
     delete newVar.loading;
-    buildLibStrip();
     renderVarList();
     renderVariationPreview();
   } catch (err) {

@@ -1,4 +1,4 @@
-import { HS, UI } from './state.js';
+import { HS, UI, HS_LAYER_ORDER, HS_LAYER_LABELS, getVariationLayer, setVariationLayer } from './state.js';
 import { fillHsLogo, hideHsToolbar, prepareLogo, applyFillToVariation, removeBgFromLogo, detectArtworkBounds, cropSvgToArtwork } from './logo-utils.js';
 import { uploadLogo } from '../supabase.js';
 import { buildLibStrip, renderVarList } from './variations.js';
@@ -15,6 +15,22 @@ export function removeActiveHsLogo() {
   hideHsToolbar();
   renderVarList();
   renderVariationPreview();
+}
+
+// renderVariationPreview() tears down and rebuilds the whole preview DOM
+// (including .dzone/.dz-logo-wrap) on every call, so UI.hsActiveZone's
+// references go stale immediately after — re-showing the toolbar against
+// them would position it against a detached, zero-sized rect (effectively
+// making it vanish). Re-acquire the freshly rebuilt dzone/wrap for the same
+// variation and keep it selected/toolbar-visible across the re-render.
+function reselectAfterRerender(v) {
+  const dzone = document.querySelector('#hsSignPreview .dzone');
+  if (!dzone) return;
+  const wrap = dzone.querySelector('.dz-logo-wrap');
+  dzone.classList.add('selected');
+  wrap?.classList.add('selected');
+  UI.hsActiveZone = { dzone, wrap, variation: v };
+  showHsToolbar(dzone);
 }
 
 // Delete/Backspace removes the selected logo, unless the user is typing in a
@@ -37,7 +53,8 @@ export function ensureHsToolbar() {
     <div class="dz-tb-sep" id="hsTbFillSep"></div>
     <button class="dz-tb-btn" id="hsTbRemoveBg">Remove BG</button>
     <div class="dz-tb-sep" id="hsTbRemoveBgSep"></div>
-    <button class="dz-tb-btn" id="hsTbFrame" title="Move relative to the template's banner/text frame"></button>
+    <button class="dz-tb-btn" id="hsTbLayerDown" title="Send backward"><i class="fa-solid fa-arrow-down"></i></button>
+    <button class="dz-tb-btn" id="hsTbLayerUp" title="Bring forward"><i class="fa-solid fa-arrow-up"></i></button>
     <div class="dz-tb-sep" id="hsTbFrameSep"></div>
     <button class="dz-tb-btn" id="hsTbRemove">Remove</button>
     <div class="dz-tb-sep" id="hsTbSep"></div>
@@ -46,7 +63,7 @@ export function ensureHsToolbar() {
       <div class="dz-lib-picker" id="hsLibPicker" style="display:none"></div>
     </div>
     <input type="file" id="hsReplaceFile" accept="image/*,.pdf,.ai,.eps" style="display:none">
-    <input type="file" id="hsArtboardFile" accept="image/*" style="display:none">`;
+    <input type="file" id="hsArtboardFile" accept="image/*,.pdf,.ai,.eps" style="display:none">`;
   document.body.appendChild(t);
 
   document.getElementById('hsTbFill').addEventListener('click', fillHsLogo);
@@ -100,13 +117,26 @@ export function ensureHsToolbar() {
     hideHsToolbar();
   });
 
-  document.getElementById('hsTbFrame').addEventListener('click', () => {
+  document.getElementById('hsTbLayerUp').addEventListener('click', () => {
     const v = UI.hsActiveZone?.variation;
     if (!v) return;
-    v.aboveFrame = !v.aboveFrame;
+    const idx = HS_LAYER_ORDER.indexOf(getVariationLayer(v));
+    if (idx >= HS_LAYER_ORDER.length - 1) return;
+    setVariationLayer(v, HS_LAYER_ORDER[idx + 1]);
     renderVarList();
     renderVariationPreview();
-    if (UI.hsActiveZone) showHsToolbar(UI.hsActiveZone.dzone);
+    reselectAfterRerender(v);
+  });
+
+  document.getElementById('hsTbLayerDown').addEventListener('click', () => {
+    const v = UI.hsActiveZone?.variation;
+    if (!v) return;
+    const idx = HS_LAYER_ORDER.indexOf(getVariationLayer(v));
+    if (idx <= 0) return;
+    setVariationLayer(v, HS_LAYER_ORDER[idx - 1]);
+    renderVarList();
+    renderVariationPreview();
+    reselectAfterRerender(v);
   });
 
   document.getElementById('hsTbRemove').addEventListener('click', removeActiveHsLogo);
@@ -248,15 +278,22 @@ export function showHsToolbar(dz, openPicker = false) {
   document.getElementById('hsTbSep').style.display          = hasContent ? '' : 'none';
   document.getElementById('hsTbReplace').textContent        = hasLogo ? 'Replace ▾' : hasArtboard ? 'Replace design ▾' : hasText ? 'Change ▾' : 'Add logo or text ▾';
 
-  // The frame-order toggle only affects makeHoleSignSvg's logo/sponsor-text
+  // The layer controls only affect makeHoleSignSvg's logo/sponsor-text
   // block — not the full-canvas artboard upload, which bypasses it entirely.
   const showFrameToggle = hasLogo || hasText;
-  document.getElementById('hsTbFrame').style.display    = showFrameToggle ? '' : 'none';
+  const layerUpBtn = document.getElementById('hsTbLayerUp');
+  const layerDownBtn = document.getElementById('hsTbLayerDown');
+  layerUpBtn.style.display   = showFrameToggle ? '' : 'none';
+  layerDownBtn.style.display = showFrameToggle ? '' : 'none';
   document.getElementById('hsTbFrameSep').style.display = showFrameToggle ? '' : 'none';
   if (showFrameToggle) {
-    document.getElementById('hsTbFrame').innerHTML = v?.aboveFrame
-      ? '<i class="fa-solid fa-arrow-down"></i> Below Template'
-      : '<i class="fa-solid fa-arrow-up"></i> Above Template';
+    const idx = HS_LAYER_ORDER.indexOf(getVariationLayer(v));
+    layerUpBtn.disabled = idx >= HS_LAYER_ORDER.length - 1;
+    layerDownBtn.disabled = idx <= 0;
+    layerUpBtn.title = idx < HS_LAYER_ORDER.length - 1
+      ? `Bring forward (${HS_LAYER_LABELS[HS_LAYER_ORDER[idx + 1]]})` : 'Already frontmost';
+    layerDownBtn.title = idx > 0
+      ? `Send backward (${HS_LAYER_LABELS[HS_LAYER_ORDER[idx - 1]]})` : 'Already backmost';
   }
 
   const picker = document.getElementById('hsLibPicker');

@@ -6,7 +6,7 @@ const SENDGRID_API_KEY = Deno.env.get('SENDGRID_API_KEY_2') ?? Deno.env.get('SEN
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const APP_URL = Deno.env.get('APP_URL')!;
-const FROM_EMAIL = 'designstudio@golfstatus.com';
+const FROM_EMAIL = 'design@gsds.space';
 const FROM_NAME = 'GolfStatus Design Studio';
 
 // Warn at 53 days of inactivity, delete 7 days after that if still

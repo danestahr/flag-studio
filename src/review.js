@@ -3,7 +3,7 @@ import { S } from './state.js';
 import { FLAGS } from './data.js';
 import { getFlag, renderInto, preloadLogoAspects } from './render.js';
 import { loadAllFlags } from './svgLoader.js';
-import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase } from './supabase.js';
+import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase, createReviewClient } from './supabase.js';
 import { renderHoleSignInto } from './hole-sign-render.js';
 import { esc } from './dom-utils.js';
 
@@ -17,6 +17,7 @@ let hsState = null;
 let hsVariations = [];
 let projectId = null;
 let reviewToken = null;
+let reviewClient = null;
 let configChannel = null;
 
 // Loads the flag design (template, colors, variations, logo library) from a
@@ -28,7 +29,7 @@ async function loadFlagsInto(project) {
   if (!flagCfg) { S.variations = []; return; }
   S.flagId = flagCfg.flag_id;
   S.colors = flagCfg.colors || {};
-  try { S.library = await loadLogosForProject(project.id); } catch { S.library = []; }
+  try { S.library = await loadLogosForProject(project.id, reviewClient); } catch { S.library = []; }
   await preloadLogoAspects(S.library);
   const varData = flagCfg.variations || [];
   const varItems = Array.isArray(varData) ? varData : (varData.items || []);
@@ -65,7 +66,7 @@ function loadHsInto(project) {
 // /`localHsFeedback` are keyed by variation id and untouched here.
 async function reloadDesigns() {
   try {
-    const project = await getProjectByToken(reviewToken);
+    const project = await getProjectByToken(reviewToken, reviewClient);
     await loadFlagsInto(project);
     loadHsInto(project);
     renderPage(project);
@@ -100,18 +101,19 @@ async function init() {
   const token = new URLSearchParams(window.location.search).get('token');
   if (!token) { showError('Invalid review link.'); return; }
   reviewToken = token;
+  reviewClient = createReviewClient(token);
 
   root.innerHTML = '<div class="rv-loading">Loading…</div>';
 
   try {
-    const project = await getProjectByToken(token);
+    const project = await getProjectByToken(token, reviewClient);
     projectId = project.id;
 
     // ── Flags ──────────────────────────────────────────────
     await loadFlagsInto(project);
     if (project.flagConfig) {
       try {
-        (await getFeedback(project.id, 'flags')).forEach(f => {
+        (await getFeedback(project.id, 'flags', reviewClient)).forEach(f => {
           localFeedback[f.variation_id] = { status: f.status, note: f.note || '', resolved: f.resolved || false };
           submittedFlags.add(f.variation_id);
           if (!previousReviewerName && f.reviewer_name) previousReviewerName = f.reviewer_name;
@@ -123,7 +125,7 @@ async function init() {
     loadHsInto(project);
     if (project.holeSignConfig) {
       try {
-        (await getFeedback(project.id, 'hole-signs')).forEach(f => {
+        (await getFeedback(project.id, 'hole-signs', reviewClient)).forEach(f => {
           localHsFeedback[f.variation_id] = { status: f.status, note: f.note || '', resolved: f.resolved || false };
           submittedHs.add(f.variation_id);
           if (!previousReviewerName && f.reviewer_name) previousReviewerName = f.reviewer_name;
@@ -546,8 +548,8 @@ window.submitReview = async function () {
   btn.disabled = true;
 
   try {
-    if (flagItems.length) await submitFeedback(projectId, 'flags', flagItems);
-    if (hsItems.length)   await submitFeedback(projectId, 'hole-signs', hsItems);
+    if (flagItems.length) await submitFeedback(projectId, 'flags', flagItems, reviewClient);
+    if (hsItems.length)   await submitFeedback(projectId, 'hole-signs', hsItems, reviewClient);
 
     root.innerHTML = `
       <div class="rv-root">

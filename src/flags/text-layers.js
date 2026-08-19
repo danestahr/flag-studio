@@ -1,4 +1,6 @@
 import { HS_FONTS } from '../hole-sign-data.js';
+import { clipToCanvas } from '../image-box.js';
+import { findAxisSnap, hideAlignGuides, setAlignGuide } from '../align-guides.js';
 
 // Active and editing state
 let _activeFlagTlId = null;
@@ -237,7 +239,7 @@ function syncFlagTlFontSizes(wrap, textLayers) {
     if (!layer) return;
     const fsPx = Math.max(8, (layer.fontSize / 100) * sc);
     const div = overlay.querySelector('.hs-tl-content');
-    if (div) div.style.fontSize = fsPx + 'px';
+    if (div) { div.style.fontSize = fsPx + 'px'; clipToCanvas(div, wrap); }
     const editor = overlay.querySelector('.hs-tl-editor');
     if (editor) editor.style.fontSize = fsPx + 'px';
   });
@@ -255,7 +257,6 @@ export function clearFlagTextOverlays(wrapId) {
   const wrap = document.getElementById(wrapId);
   if (!wrap) return;
   wrap.querySelectorAll('.flag-tl-overlay').forEach(el => el.remove());
-  wrap.querySelectorAll('.flag-tl-guide-h, .flag-tl-guide-v').forEach(el => el.remove());
   if (wrap._flagTlRO) { wrap._flagTlRO.disconnect(); wrap._flagTlRO = null; }
 }
 
@@ -279,7 +280,10 @@ export function renderFlagTextOverlaysStatic(wrapId, textLayers, mirror = false)
     wrap.querySelectorAll('.flag-tl-overlay').forEach(overlay => {
       const layer = textLayers.find(l => l.id === overlay.dataset.tlId);
       const div = overlay.querySelector('.hs-tl-content');
-      if (layer && div) div.style.fontSize = Math.max(8, (layer.fontSize / 100) * sc) + 'px';
+      if (layer && div) {
+        div.style.fontSize = Math.max(8, (layer.fontSize / 100) * sc) + 'px';
+        clipToCanvas(div, wrap);
+      }
     });
   };
 
@@ -322,13 +326,6 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
   _ctx = { textLayers, onChange, wrapId };
 
   wrap.querySelectorAll('.flag-tl-overlay').forEach(el => el.remove());
-
-  // Centre guides for text dragging — span the whole canvas (unlike the logo
-  // zone's own guides, which are scoped to that zone's box), since text can be
-  // placed anywhere on the flag.
-  wrap.querySelectorAll('.flag-tl-guide-h, .flag-tl-guide-v').forEach(el => el.remove());
-  const tlGh = document.createElement('div'); tlGh.className = 'dz-guide-h flag-tl-guide-h'; wrap.appendChild(tlGh);
-  const tlGv = document.createElement('div'); tlGv.className = 'dz-guide-v flag-tl-guide-v'; wrap.appendChild(tlGv);
 
   // Keep a live ResizeObserver so font sizes stay correct when the canvas is zoomed
   if (wrap._flagTlRO) wrap._flagTlRO.disconnect();
@@ -381,6 +378,7 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
       layer.x = rightEdge - newW; layer.w = newW;
       overlay.style.left = layer.x + '%';
       overlay.style.width = newW + '%';
+      clipToCanvas(textDiv, wrap);
     });
     lh.addEventListener('pointerup', () => { document.body.style.cursor = ''; onChange(); });
     overlay.appendChild(lh);
@@ -402,6 +400,7 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
       const newW = Math.max(5, rhStartW + (e.clientX - rhStartX) / sx);
       layer.w = newW;
       overlay.style.width = newW + '%';
+      clipToCanvas(textDiv, wrap);
     });
     rh.addEventListener('pointerup', () => { document.body.style.cursor = ''; onChange(); });
     overlay.appendChild(rh);
@@ -441,6 +440,7 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
         const val = document.getElementById('flagTlSizeVal');
         if (slider) slider.value = newSize;
         if (val) val.textContent = newSize + '%';
+        clipToCanvas(textDiv, wrap);
       });
       ch.addEventListener('pointerup', () => { document.body.style.cursor = ''; onChange(); });
       return ch;
@@ -493,26 +493,25 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
 
       // Snap the text box's own center (not just its top-left anchor) to the
       // canvas center — matches the logo drop-zone's snap-to-center behavior.
-      const halfWPct = layer.w / 2;
       const halfHPct = (overlay.offsetHeight / wrap.offsetHeight * 100) / 2;
       const snapTolX = 5 / wrap.offsetWidth  * 100;
       const snapTolY = 5 / wrap.offsetHeight * 100;
-      const snapH = Math.abs((nx + halfWPct) - 50) < snapTolX;
-      const snapV = Math.abs((ny + halfHPct) - 50) < snapTolY;
-      if (snapH) nx = 50 - halfWPct;
-      if (snapV) ny = 50 - halfHPct;
-      wrap.classList.toggle('dz-adjusting', true);
-      wrap.classList.toggle('snap-h', snapH);
-      wrap.classList.toggle('snap-v', snapV);
+      const snapX = findAxisSnap([50], nx, layer.w, snapTolX);
+      const snapY = findAxisSnap([50], ny, halfHPct * 2, snapTolY);
+      if (snapX) nx = snapX.newPos;
+      if (snapY) ny = snapY.newPos;
+      setAlignGuide(wrap, 'v', !!snapX, '50%');
+      setAlignGuide(wrap, 'h', !!snapY, '50%');
 
       layer.x = nx; layer.y = ny;
       overlay.style.left = nx + '%';
       overlay.style.top  = ny + '%';
+      clipToCanvas(textDiv, wrap);
     });
 
     overlay.addEventListener('pointerup', () => {
       document.body.style.cursor = '';
-      wrap.classList.remove('dz-adjusting', 'snap-h', 'snap-v');
+      hideAlignGuides(wrap);
       if (didDrag) {
         onChange();
         if (_activeFlagTlId === layer.id) {
@@ -523,6 +522,7 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
     });
 
     wrap.appendChild(overlay);
+    requestAnimationFrame(() => clipToCanvas(textDiv, wrap));
   });
 }
 

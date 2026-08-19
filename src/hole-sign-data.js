@@ -7,6 +7,7 @@ export const HS_FONTS = [
   { id: 'dm-serif', name: 'DM Serif',  family: "'DM Serif Display', serif" },
   { id: 'dm-sans',  name: 'DM Sans',   family: "'DM Sans', sans-serif" },
   { id: 'georgia',  name: 'Georgia',   family: 'Georgia, serif' },
+  { id: 'meatball', name: 'Meatball',  family: '"meatball", sans-serif' },
 ];
 
 export const HS_TEMPLATES = [

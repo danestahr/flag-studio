@@ -384,10 +384,6 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
     'overflow:visible;',
   ].join('');
 
-  // Crosshair guides
-  const gh = document.createElement('div'); gh.className = 'dz-guide-h'; dz.appendChild(gh);
-  const gv = document.createElement('div'); gv.className = 'dz-guide-v'; dz.appendChild(gv);
-
   // Logo layers
   logos.forEach(layer => {
     const logo = S.library.find(l => l.id === layer.logoId);

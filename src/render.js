@@ -300,13 +300,22 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
     });
   }
 
-  if (frameEls.length) {
+  // The grey bleed guide is left in its original (pre-frame) template
+  // position, so the border zone — which deliberately paints past the trim
+  // line, with no gap once printed and cut — ends up covering it. Promote it
+  // above the frame (inside the same holder, so it shares the frame's mirror
+  // transform on the back face instead of losing it) so every renderInto()
+  // consumer (variation thumbnails, gallery cards) sees it, not just call
+  // sites that patched this locally.
+  const bleedEl = svg.querySelector('[id="Bleed"], [id="bleed"]');
+  if (frameEls.length || bleedEl) {
     const frameHolder = document.createElementNS(ns, 'g');
     // Elements are moving out of the mirrored `g` wrapper built above (for
     // face === 'back') — re-apply that same transform here or the frame
     // loses its mirroring/position.
     if (face === 'back') frameHolder.setAttribute('transform', `translate(${vbW},0) scale(-1,1)`);
     frameEls.forEach(el => frameHolder.appendChild(el));
+    if (bleedEl) frameHolder.appendChild(bleedEl);
     svg.appendChild(frameHolder);
   }
   aboveEls.forEach(el => svg.appendChild(el));
@@ -320,5 +329,18 @@ export function renderInto(el, logos, face = 'front', mirrorX = false, flagOverr
   if (svg) {
     svg.style.cssText = 'display:block;width:100%;height:100%';
     el.appendChild(svg);
+    // makeSvg's own showGsTagVariant call ran on this <svg> before it was
+    // attached above, so the tag's mirror-center lookup (getBBox()) couldn't
+    // measure real geometry and fell back to an approximation — visibly
+    // leaving the tag looking like it never moved off the front position.
+    // Re-run it now that the SVG is in the document.
+    if (face === 'back') {
+      const flag = flagOverride || getFlag();
+      const gst = gsTagOpts ?? { enabled: S.gsTag, mode: S.gsTagMode };
+      if (gst.enabled && flag) {
+        const keyZone = flag.tagKeyZone || 'zone-primary';
+        showGsTagVariant(svg, 'back', gst.mode, resolveColors(colorsOverride || S.colors, flag)[keyZone]);
+      }
+    }
   }
 }

@@ -7,6 +7,8 @@ import { HS_H, HS_TPL_LOGO_DEFAULT, HS_TPL_LOGO_MAX, HS_TPL_LOGO_MIN, HS_W, empt
 import { HS_TPL_LOGO_SAFE_FRAC, escXml, getTemplateLogoSlots, slotWidthForRatio } from '../hole-sign-render.js';
 import { uploadLogo } from '../supabase.js';
 import { logoThumbHtml } from '../media-utils.js';
+import { clipToCanvas } from '../image-box.js';
+import { ensureAlignGuides, findAxisSnap, hideAlignGuides } from '../align-guides.js';
 
 // Delete/Backspace removes every selected image entirely, unless the user is
 // typing in a text field or editing a text layer (own keydown handling).
@@ -261,30 +263,6 @@ export function applyTlSlotImgStyle(img, slot) {
   img.style.pointerEvents = 'none';
 }
 
-// Canvas-level alignment guide lines, shared across every slot's drag (not
-// owned by any one slot) — created lazily on the canvas container and reused
-// across drags; a fresh render clears the whole container anyway.
-function ensureAlignGuides(container) {
-  let v = container.querySelector(':scope > .tl-align-guide-v');
-  let h = container.querySelector(':scope > .tl-align-guide-h');
-  if (!v) { v = document.createElement('div'); v.className = 'tl-align-guide-v'; container.appendChild(v); }
-  if (!h) { h = document.createElement('div'); h.className = 'tl-align-guide-h'; container.appendChild(h); }
-  return { v, h };
-}
-
-// Finds the first candidate whose value is within `tol` of the box's left
-// edge, center, or right edge (same shape used for both axes) and returns
-// the candidate's coordinate plus the box's new position that aligns exactly
-// to it. Returns null if nothing is within tolerance.
-function findAxisSnap(candidates, pos, size, tol) {
-  for (const cand of candidates) {
-    if (Math.abs(pos - cand) < tol)                return { value: cand, newPos: cand };
-    if (Math.abs(pos + size / 2 - cand) < tol)      return { value: cand, newPos: cand - size / 2 };
-    if (Math.abs(pos + size - cand) < tol)          return { value: cand, newPos: cand - size };
-  }
-  return null;
-}
-
 // Drag and resize the slot box itself (sets per-slot freeX/freeY/freeW/freeH).
 // Pointer on slot body → move (the whole current multi-selection moves
 // together if this slot is part of one); pointer on a corner handle →
@@ -399,6 +377,8 @@ export function wireTlSlotFreeDrag(overlay, handles, idx, allRects, onTap) {
         if (gOverlay) {
           gOverlay.style.left = pct(gs.freeX, HS_W);
           gOverlay.style.top  = pct(gs.freeY, HS_H);
+          const gVisual = gOverlay.querySelector('.tl-slot-img');
+          if (gVisual && container) clipToCanvas(gVisual, container);
         }
       });
 
@@ -428,6 +408,8 @@ export function wireTlSlotFreeDrag(overlay, handles, idx, allRects, onTap) {
       overlay.style.top    = pct(s.freeY, HS_H);
       overlay.style.width  = pct(s.freeW, HS_W);
       overlay.style.height = pct(s.freeH, HS_H);
+      const visual = overlay.querySelector('.tl-slot-img');
+      if (visual && container) clipToCanvas(visual, container);
     }
   };
 
@@ -441,8 +423,7 @@ export function wireTlSlotFreeDrag(overlay, handles, idx, allRects, onTap) {
     mode = null;
     activeCorner = null;
     setTimeout(() => { UI.tlJustDragged = false; }, 0);
-    overlay.parentElement?.querySelector(':scope > .tl-align-guide-v')?.classList.remove('show');
-    overlay.parentElement?.querySelector(':scope > .tl-align-guide-h')?.classList.remove('show');
+    if (overlay.parentElement) hideAlignGuides(overlay.parentElement);
     // Fire onTap before redrawTplPreview so the overlay is still in the DOM
     // when the picker reads getBoundingClientRect() for positioning.
     if (!wasDrag && onTap) onTap(e.shiftKey);

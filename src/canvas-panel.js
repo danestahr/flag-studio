@@ -11,6 +11,12 @@ const MIN_HEIGHT = 240;
 // Breathing room left below the viewport-height-fitted canvas so it stops
 // short of the browser's bottom edge instead of touching it flush.
 const BELOW_MARGIN = 24;
+// Gap reserved between the fitted canvas and canvas-scroll's own edge, so a
+// drag/resize handle anchored just outside a logo/text box's corner (see
+// .dz-resize, .hs-tl-resize-*) has somewhere to render when that box sits
+// flush against the canvas edge — otherwise canvas-scroll's overflow:auto
+// clips the handle exactly when it's needed to pull the box back.
+const EDGE_MARGIN = 12;
 
 // Resize listeners are process-global (one per scrollId, however many times
 // the panel's DOM gets rebuilt) — keyed by id since the actual scroll/wrap
@@ -29,8 +35,8 @@ function fitCanvas(scroll, wrap, aspect, pct) {
   const chromeHeight = panel.offsetHeight - scroll.offsetHeight;
   const availH = Math.max(MIN_HEIGHT, Math.round(window.innerHeight - panelTop - chromeHeight - BELOW_MARGIN));
   scroll.style.height = availH + 'px';
-  const cw = scroll.clientWidth, ch = scroll.clientHeight;
-  if (!cw || !ch) return;
+  const cw = scroll.clientWidth - EDGE_MARGIN * 2, ch = scroll.clientHeight - EDGE_MARGIN * 2;
+  if (cw <= 0 || ch <= 0) return;
   let w = cw, h = cw / aspect;
   if (h > ch) { h = ch; w = ch * aspect; }
   const k = (pct || 100) / 100;

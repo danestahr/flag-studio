@@ -31,6 +31,9 @@ body { font-family:'DM Sans',sans-serif; background:var(--gray-50); color:var(--
 header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
 .sign-out-btn { background:transparent; border:1px solid rgba(255,255,255,.35); color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; padding:5px 14px; border-radius:20px; cursor:pointer; transition:background .15s,color .15s; }
 .sign-out-btn:hover { background:rgba(255,255,255,.12); color:white; }
+.account-avatar { width:30px; height:30px; border-radius:50%; background:var(--gold); color:#1B1B18; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; text-decoration:none; font-family:'DM Sans',sans-serif; flex-shrink:0; transition:opacity .15s; }
+.account-avatar:hover { opacity:.85; }
+.account-avatar-lg { width:72px; height:72px; border-radius:50%; background:var(--gold); color:#1B1B18; display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:700; font-family:'DM Serif Display',serif; }
 .logo { font-family:'DM Serif Display',serif; color:var(--chrome-text); font-size:20px; display:flex; align-items:center; gap:10px; }
 .logo-mark { width:48px; height:48px; display:block; flex-shrink:0; }
 .beta-tag { font-family:'DM Sans',sans-serif; font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#fff; background:#06b6d4; border-radius:4px; padding:3px 7px; line-height:1.4; align-self:center; flex-shrink:0; }
@@ -165,3 +168,7 @@ div.draft-card { cursor:pointer; }
 .ci-original-panel { margin-top:.75rem; background:var(--gray-50,#f9f9f9); border-radius:8px; padding:1rem; display:flex; flex-direction:column; gap:.45rem; }
 .ci-orig-row { display:flex; gap:.75rem; font-size:12px; }
 .ci-orig-label { font-weight:600; color:var(--gray-400); min-width:80px; flex-shrink:0; }
+
+/* ── Form status/error text (profile page) ──────────────────── */
+.login-error { font-size:13px; color:#c0392b; background:#fee2e2; border-radius:6px; padding:8px 12px; line-height:1.4; margin-top:1rem; }
+.login-notice { font-size:13px; color:var(--gray-700); background:var(--gray-50); border-radius:6px; padding:8px 12px; line-height:1.4; margin-top:1rem; }

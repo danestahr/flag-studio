@@ -398,7 +398,7 @@ function syncLogoZone(previewEl, st) {
 // Sign-coord hysteresis margin: once a layer is already docked to a zone, the
 // pointer must travel this far past the zone's edge before it undocks, so
 // hovering right at the boundary doesn't flicker in and out. Matches the
-// existing Shift-drag edge-snap threshold (design.js's snapNearest).
+// existing Shift-drag edge-snap threshold (design.js's findAxisSnap call).
 const DOCK_HYSTERESIS = 200;
 
 export function getDockedSiblings(state, which, excludeId) {

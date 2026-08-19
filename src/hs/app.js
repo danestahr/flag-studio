@@ -1,8 +1,8 @@
 import { HS, UI, defaultCaptionsEdited, mergeBanner } from './state.js';
 import { renderStep1, updateStep1Preview } from './design.js';
-import { renderStep2, renderVarList, createEmptyVariation } from './variations.js';
+import { renderStep2, renderVarList } from './variations.js';
 import { cropSvgToArtwork } from './logo-utils.js';
-import { renderGallery, saveDraftInternal } from './export.js';
+import { saveDraftInternal } from './draft.js';
 import { emptyTemplateLogos, migrateBannerCaptions } from '../hole-sign-data.js';
 import { getFeedback, loadHoleSignConfig, loadLogosForProject, loadOrderIntake, loadProject, supabase } from '../supabase.js';
 import { requireAuth } from '../auth.js';
@@ -134,12 +134,6 @@ export async function init() {
       }
     }
 
-    if (!HS.variations.length) {
-      const v = createEmptyVariation('Variation 1');
-      HS.variations.push(v);
-      HS.activeVarId = v.id;
-    }
-
     setSidebarProjectName(HS.projectName, HS.projectId);
     loadOrderIntake(projectId).then(intake => {
       if (intake) renderCustomerSection(intake);
@@ -220,7 +214,9 @@ export function goStep(n) {
   });
   if (n === 1) { UI.hsMenu = null; UI.hsMenuAnimate = false; renderStep1(); }
   if (n === 2) renderStep2();
-  if (n === 3) renderGallery();
+  // Dynamically imported: export.js pulls in pdf-lib + jszip (~200KB gzip),
+  // only needed once the user actually reaches the export step.
+  if (n === 3) import('./export.js').then(({ renderGallery }) => renderGallery());
   window.scrollTo(0, 0);
 }
 
