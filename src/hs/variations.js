@@ -344,17 +344,10 @@ function renderHsVarThumb(el, v) {
     el.innerHTML = '<div class="hs-vthumb-uploading"><div class="hs-upload-spinner"></div></div>';
     return;
   }
-  // Artboard variations: skip SVG render entirely — paint the image directly
-  // so there's no flash of the template behind the image.
-  if (v.artboardSrc) {
-    el.innerHTML = '';
-    const ab = document.createElement('img');
-    ab.className = 'hs-vthumb-artboard';
-    ab.src = v.artboardSrc;
-    ab.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;';
-    el.appendChild(ab);
-    return;
-  }
+  // Artboard variations render through the same SVG builder as everything
+  // else — makeHoleSignSvg paints the artboard image below the frame group,
+  // so banner/template-logo dressing still shows on top of it here exactly
+  // as it does on the live canvas.
   renderHoleSignInto(el, getEffectiveState(v), getEffectiveVariation(v));
   const imgEl = el.querySelector('image[href]');
   const src = imgEl?.getAttribute('href');

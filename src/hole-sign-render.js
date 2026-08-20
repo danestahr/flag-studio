@@ -375,14 +375,14 @@ function renderTemplateLogoSlot(slot, rect, clipId) {
 // (see dockedLayerPositions) rendered through the normal free-layer loop below.
 // `which` is 'top' | 'bottom'. Returns an array of SVG string parts, or []
 // when the banner is disabled.
-function renderBanner(state, which) {
+function renderBanner(state, which, uid) {
   const banner = which === 'bottom' ? state.bannerBottom : state.bannerTop;
   const h = bannerEffectiveHeight(state, which);
   if (!banner || !banner.enabled || !(h > 0)) return [];
   const y = which === 'bottom' ? HS_H - h : 0;
   const bg = banner.bg || {};
   const parts = [];
-  const clipId = which === 'bottom' ? 'bannerBotClip' : 'bannerTopClip';
+  const clipId = (which === 'bottom' ? 'bannerBotClip' : 'bannerTopClip') + '-' + uid;
   parts.push(`<clipPath id="${clipId}"><rect x="0" y="${y}" width="${HS_W}" height="${h}"/></clipPath>`);
   parts.push(`<rect x="0" y="${y}" width="${HS_W}" height="${h}" fill="${escXml(bg.color || '#E5E5E5')}"/>`);
   if (bg.type === 'image' && bg.imageUrl) {
@@ -396,7 +396,14 @@ function renderBanner(state, which) {
   return parts;
 }
 
+// Every clipPath/filter id this module emits must be unique per render call —
+// multiple hole-sign SVGs (canvas, its own frame overlay, sidebar thumbnails,
+// gallery grid, print sheets) are frequently live in the DOM at once, and
+// url(#id) resolves against the whole document, not just the local <svg>.
+let hsSvgIdCounter = 0;
+
 export function makeHoleSignSvg(state, variation) {
+  const uid = ++hsSvgIdCounter;
   // state.templateStyle comes from getEffectiveState() which correctly resolves
   // per-variation overrides. Prefer it over variation.templateId which can be a
   // stale value set when the variation was first created.
@@ -439,8 +446,9 @@ export function makeHoleSignSvg(state, variation) {
 
   // Collect SVG defs (filters, etc.) emitted before any element that uses them.
   const svgDefs = [];
+  const bgGreyId = 'hsBgGrey-' + uid;
   if (bg.imageUrl && bg.imageGreyscale) {
-    svgDefs.push(`<filter id="hsBgGrey"><feColorMatrix type="saturate" values="0"/></filter>`);
+    svgDefs.push(`<filter id="${bgGreyId}"><feColorMatrix type="saturate" values="0"/></filter>`);
   }
   if (svgDefs.length) parts.push(`<defs>${svgDefs.join('')}</defs>`);
 
@@ -462,7 +470,7 @@ export function makeHoleSignSvg(state, variation) {
   const bgImageParts = [];
   if (bg.imageUrl) {
     const imgOp = (bg.imageOpacity ?? 100) / 100;
-    const filterAttr = bg.imageGreyscale ? ` filter="url(#hsBgGrey)"` : '';
+    const filterAttr = bg.imageGreyscale ? ` filter="url(#${bgGreyId})"` : '';
     const opacityAttr = imgOp < 1 ? ` opacity="${imgOp.toFixed(3)}"` : '';
     bgImageParts.push(`<image href="${escXml(bg.imageUrl)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid slice"${filterAttr}${opacityAttr}/>`);
     const overlayAlpha = (bg.overlayEnabled !== false) ? (bg.overlayOpacity ?? 50) / 100 : 0;
@@ -484,8 +492,8 @@ export function makeHoleSignSvg(state, variation) {
 
   // Banners paint as an overlay on top of full-graphic's full-bleed image
   // (frameParts push after variationParts below) rather than reserving space.
-  frameParts.push(...renderBanner(state, 'top'));
-  frameParts.push(...renderBanner(state, 'bottom'));
+  frameParts.push(...renderBanner(state, 'top', uid));
+  frameParts.push(...renderBanner(state, 'bottom', uid));
 
   // Plain top/bottom sponsor captions — independent of any banner, always
   // drawn in their own reserved band (see computeLayout). Hidden while being
@@ -520,7 +528,7 @@ export function makeHoleSignSvg(state, variation) {
     state.templateLogos.slots.forEach((slot, i) => {
       const rect = tplSlots[i];
       if (!rect) return;
-      frameParts.push(renderTemplateLogoSlot(slot, rect, `tlc${i}`));
+      frameParts.push(renderTemplateLogoSlot(slot, rect, `tlc${i}-${uid}`));
     });
   }
 
@@ -529,12 +537,14 @@ export function makeHoleSignSvg(state, variation) {
   // moves it above instead.
   const variationParts = [];
   if (variation && variation.artboardSrc) {
-    // Full-canvas artboard upload ("Custom Design") always paints on top of
-    // everything else, bypassing the logo/frame layering entirely — mirrors
-    // var-canvas.js's artboardSrc branch and var-toolbar.js's hasArtboard,
-    // which hides the layer-order controls for this content type.
+    // Full-canvas artboard upload ("Custom Design") replaces the sponsor
+    // logo/text zone, but still defaults to painting below the frame (same
+    // as any other variation content) so banner/template-logo dressing set
+    // up for the whole project — see var-canvas.js's artboardSrc branch,
+    // which shows the frame overlay above the artboard on the live canvas —
+    // still shows on top of it here instead of being hidden underneath.
     const src = variation.artboardSrc;
-    aboveParts.push(isDisplayableImage(src)
+    variationParts.push(isDisplayableImage(src)
       ? `<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`
       : filePlaceholderSvg(0, 0, HS_W, HS_H, fileTypeLabel(src)));
   } else if (variation && variation.logoSrc && templateId === 'hole-sign-full-graphic') {
