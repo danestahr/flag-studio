@@ -145,7 +145,7 @@ export function ensureHsToolbar() {
     e.stopPropagation();
     const picker = document.getElementById('hsLibPicker');
     const open = picker.style.display !== 'none';
-    picker.style.display = open ? 'none' : 'block';
+    picker.style.display = open ? 'none' : 'grid';
     if (!open) renderHsLibPicker();
   });
 
@@ -210,9 +210,9 @@ export function renderHsLibPicker() {
     : '';
   picker.innerHTML = `
     ${libHtml}
-    <div class="dz-lp-upload" id="hsLpUpload">+ Upload image</div>
-    <div class="dz-lp-upload" id="hsLpText">+ Type text</div>
-    <div class="dz-lp-upload dz-lp-artboard" id="hsLpArtboard">+ Upload full design</div>`;
+    <div class="dz-lp-upload dz-lp-action" id="hsLpUpload">+ Upload image</div>
+    <div class="dz-lp-upload dz-lp-action" id="hsLpText">+ Type text</div>
+    <div class="dz-lp-upload dz-lp-action dz-lp-artboard" id="hsLpArtboard">+ Upload full design</div>`;
 
   picker.querySelectorAll('.dz-lp-item').forEach(el => {
     el.addEventListener('click', () => {
@@ -297,7 +297,7 @@ export function showHsToolbar(dz, openPicker = false) {
   }
 
   const picker = document.getElementById('hsLibPicker');
-  picker.style.display = openPicker ? 'block' : 'none';
+  picker.style.display = openPicker ? 'grid' : 'none';
   if (openPicker) renderHsLibPicker();
 
   const tb = document.getElementById('hsZoneToolbar');

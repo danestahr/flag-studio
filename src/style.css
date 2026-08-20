@@ -372,6 +372,11 @@ input[type=file] { display:none; }
 .dz-lp-item.active { border-color:var(--accent); background:var(--accent-tint); }
 .dz-lp-upload { width:44px; height:44px; border-radius:6px; border:1.5px dashed var(--gray-200); display:flex; align-items:center; justify-content:center; font-size:22px; color:var(--gray-400); cursor:pointer; transition:border-color .15s, color .15s; }
 .dz-lp-upload:hover { border-color:var(--accent); color:var(--accent); }
+/* Text-label rows (e.g. "+ Upload image", "+ Type text") share the picker's
+   grid but need to span the full width as a normal row instead of being
+   squeezed into a 44px icon cell — .dz-lp-upload alone is sized for a bare
+   "+" glyph (see flags/drop-zones.js). */
+.dz-lp-action { grid-column:1 / -1; width:auto; height:auto; justify-content:flex-start; padding:8px 10px; font-size:13px; font-weight:500; text-align:left; }
 
 /* Face tabs + sides toggle */
 .face-tabs, .face-toggle-row { display:flex; gap:4px; }
