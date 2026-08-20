@@ -528,7 +528,16 @@ export function makeHoleSignSvg(state, variation) {
   // to painting below the frame (banner/text above); variation.aboveFrame
   // moves it above instead.
   const variationParts = [];
-  if (variation && variation.logoSrc && templateId === 'hole-sign-full-graphic') {
+  if (variation && variation.artboardSrc) {
+    // Full-canvas artboard upload ("Custom Design") always paints on top of
+    // everything else, bypassing the logo/frame layering entirely — mirrors
+    // var-canvas.js's artboardSrc branch and var-toolbar.js's hasArtboard,
+    // which hides the layer-order controls for this content type.
+    const src = variation.artboardSrc;
+    aboveParts.push(isDisplayableImage(src)
+      ? `<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`
+      : filePlaceholderSvg(0, 0, HS_W, HS_H, fileTypeLabel(src)));
+  } else if (variation && variation.logoSrc && templateId === 'hole-sign-full-graphic') {
     const src = variation.logoSrcTight || variation.logoSrc;
     if (isDisplayableImage(src)) {
       variationParts.push(`<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`);
