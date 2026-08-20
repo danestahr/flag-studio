@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Render parity fixture</title>
+  </head>
+  <body>
+    <!--
+      Deliberately bare — no bootstrap <script>. render-parity.spec.js drives
+      everything via page.evaluate(), importing the real hs/ modules straight
+      from the dev server so the test exercises the actual render code paths
+      instead of a reimplementation of them.
+    -->
+  </body>
+</html>

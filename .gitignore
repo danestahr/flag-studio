@@ -5,3 +5,5 @@ dist
 .DS_Store
 .vercel
 .claude/worktrees
+test-results
+playwright-report

@@ -2,6 +2,17 @@ import { HS_W, HS_H, HS_MARGIN, HS_GAP, HS_FONTS, normalizeTplLogoSize } from '.
 import { isDisplayableImage, fileTypeLabel } from './media-utils.js';
 import { wrapText } from './text-utils.js';
 
+// makeHoleSignSvg (below) is the ONLY place that composes hole-sign visual
+// content — the interactive canvas, the Variations sidebar thumbnail, the
+// Gallery grid, print export, and the customer review page all call it (via
+// renderHoleSignInto) with the same getEffectiveState(v)/getEffectiveVariation(v)
+// pair. A new content type (a new upload kind, a new frame element) must be
+// handled INSIDE this function, never by a caller special-casing it and
+// painting around the shared builder — that's exactly how an artboard upload
+// once ended up hiding the project's template logo everywhere except the
+// live canvas (see git history) and how a thumbnail's own artboard shortcut
+// once skipped frame content entirely. See test/render-parity.spec.js.
+
 export function escXml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
