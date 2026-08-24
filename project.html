@@ -25,6 +25,48 @@
     <div id="projectCreatorInfo" style="display:none;font-size:12px;color:var(--gray-400);margin-top:6px"></div>
   </div>
 
+  <!-- Admin-only: default/primary view for staff — review status, actions, review link, print files. -->
+  <div id="adminReviewPanel" style="display:none;margin-bottom:2.5rem">
+    <div class="section-title" style="margin-bottom:1rem">Review &amp; Approval</div>
+
+    <div class="tool-card" style="padding:1.25rem 1.5rem">
+      <div id="statusPill" class="status-pill">—</div>
+      <div id="statusActions" style="margin-top:1rem"></div>
+      <div id="requestChangesForm" style="display:none;margin-top:.75rem">
+        <textarea class="form-textarea" id="requestChangesNote" placeholder="What needs to change?"></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn primary" id="confirmRequestChangesBtn" onclick="window.confirmRequestChanges()">Send to client</button>
+          <button class="btn-secondary" onclick="window.cancelRequestChanges()">Cancel</button>
+        </div>
+      </div>
+      <div id="reviewPanelStatus" style="font-size:12px;color:var(--gray-400);min-height:16px;margin-top:8px"></div>
+    </div>
+
+    <div class="tool-card" style="padding:1.25rem 1.5rem;margin-top:1rem">
+      <div class="tool-card-name" style="font-size:15px;margin-bottom:8px">Review link</div>
+      <div id="reviewLinkEmpty" style="font-size:13px;color:var(--gray-400)">No review link yet — send a proof to generate one.</div>
+      <div id="reviewLinkBox" style="display:none">
+        <div style="display:flex;gap:8px">
+          <input class="form-input" id="reviewLinkInput" readonly style="flex:1">
+          <button class="btn" onclick="window.copyReviewLink()">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tool-card" style="padding:1.25rem 1.5rem;margin-top:1rem">
+      <div class="tool-card-name" style="font-size:15px;margin-bottom:8px">Final print files</div>
+      <div id="printSheetList" style="font-size:13px;color:var(--gray-400)">Loading…</div>
+      <button class="btn primary" id="markSentToPrintBtn" style="width:100%;margin-top:10px;display:none" onclick="window.revealMarkSentToPrintConfirm()">Mark sent to print</button>
+      <div id="markSentToPrintConfirm" style="display:none;margin-top:10px">
+        <div style="font-size:13px;color:var(--gray-600);margin-bottom:8px">This is a terminal step — the project can't be reopened for review after this. Confirm?</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn primary" onclick="window.confirmMarkSentToPrint()">Confirm, mark sent to print</button>
+          <button class="btn-secondary" onclick="window.cancelMarkSentToPrint()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="section-title" style="margin-bottom:1rem">Choose a tool</div>
 
   <div class="tool-picker-grid">

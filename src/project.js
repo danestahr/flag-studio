@@ -1,12 +1,15 @@
 import './landing.css';
 import './icons.js';
-import { requireAuth } from './auth.js';
+import { requireAuth, isStaffOrAdmin } from './auth.js';
 import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake,
-         updateProject, deleteProject, upsertCustomerInfo } from './supabase.js';
+         updateProject, deleteProject, upsertCustomerInfo,
+         adminRequestChanges, adminSendProof, adminMarkSentToPrint,
+         listPrintSheets, getPrintSheetDownloadUrl, sendProofReady } from './supabase.js';
 import { FLAGS } from './data.js';
 import { esc } from './dom-utils.js';
 
-await requireAuth();
+const session = await requireAuth();
+const isAdmin = await isStaffOrAdmin(session);
 
 const pid = new URLSearchParams(window.location.search).get('project');
 if (!pid) window.location.href = '/';
@@ -18,6 +21,15 @@ holeCard.href  = `/hole-signs.html?project=${pid}`;
 
 let _project = null;
 let _intake = null;
+
+const STATUS_LABEL = {
+  draft: 'Draft',
+  submitted: 'Submitted for review',
+  needs_changes: 'Changes requested',
+  proof_sent: 'Proof sent — awaiting client',
+  approved: 'Approved',
+  sent_to_print: 'Sent to print',
+};
 
 async function init() {
   try {
@@ -65,6 +77,15 @@ async function init() {
       const summaryEl = document.getElementById('customerInfoSummary');
       if (summaryEl && summary) summaryEl.textContent = summary;
     }
+
+    if (isAdmin) {
+      document.getElementById('adminReviewPanel').style.display = '';
+      renderStatus(_project);
+      renderReviewLink(_project);
+      loadPrintSheets(pid);
+    }
+    // Customer-facing status/submit UI is a later phase - customers keep
+    // today's hub view unchanged for now.
   } catch (err) {
     console.error('Failed to load project', err);
   }
@@ -200,3 +221,187 @@ window.confirmDelete = async function() {
     deleteBtn.textContent = 'Delete';
   }
 };
+
+// ── Admin review panel (staff/admin only) ───────────────────
+function renderStatus(project) {
+  const pill = document.getElementById('statusPill');
+  pill.textContent = STATUS_LABEL[project.status] || project.status;
+  pill.className = 'status-pill status-' + project.status;
+
+  const actionsEl = document.getElementById('statusActions');
+  document.getElementById('requestChangesForm').style.display = 'none';
+
+  const btn = (label, onClick, primary = false) => {
+    const b = document.createElement('button');
+    b.className = 'btn' + (primary ? ' primary' : '');
+    b.style.marginRight = '8px';
+    b.textContent = label;
+    b.onclick = onClick;
+    return b;
+  };
+
+  actionsEl.innerHTML = '';
+  if (project.status === 'submitted') {
+    actionsEl.appendChild(btn('Request changes', () => {
+      document.getElementById('requestChangesForm').style.display = '';
+      document.getElementById('requestChangesNote').value = '';
+    }));
+    actionsEl.appendChild(btn('Send proof to client', window.sendProofToClient, true));
+  } else if (project.status === 'needs_changes') {
+    actionsEl.appendChild(document.createTextNode('Waiting on the client to resubmit. '));
+    actionsEl.appendChild(btn('Send proof to client', window.sendProofToClient, true));
+  } else if (project.status === 'proof_sent') {
+    actionsEl.appendChild(btn('Resend proof email', window.resendProofEmail));
+  } else if (project.status === 'approved') {
+    actionsEl.appendChild(document.createTextNode('Client approved — ready to print.'));
+  } else if (project.status === 'sent_to_print') {
+    actionsEl.appendChild(document.createTextNode('Sent to print.'));
+  } else {
+    actionsEl.appendChild(document.createTextNode('Waiting on the client to submit for review.'));
+  }
+
+  document.getElementById('markSentToPrintBtn').style.display = project.status === 'approved' ? '' : 'none';
+  document.getElementById('markSentToPrintConfirm').style.display = 'none';
+}
+
+function setReviewPanelStatus(message) {
+  const el = document.getElementById('reviewPanelStatus');
+  if (el) el.textContent = message || '';
+}
+
+window.cancelRequestChanges = function () {
+  document.getElementById('requestChangesForm').style.display = 'none';
+};
+
+window.confirmRequestChanges = async function () {
+  const note = document.getElementById('requestChangesNote').value.trim() || null;
+  const confirmBtn = document.getElementById('confirmRequestChangesBtn');
+  confirmBtn.disabled = true;
+  setReviewPanelStatus('');
+  try {
+    await adminRequestChanges(pid, note);
+    _project = await loadProject(pid);
+    renderStatus(_project);
+  } catch (err) {
+    console.error('Failed to request changes', err);
+    setReviewPanelStatus('Could not request changes — please try again.');
+  } finally {
+    confirmBtn.disabled = false;
+  }
+};
+
+window.sendProofToClient = async function () {
+  setReviewPanelStatus('Sending proof…');
+  try {
+    const token = await adminSendProof(pid);
+    _project = { ..._project, status: 'proof_sent', share_token: token };
+    const reviewUrl = `${window.location.origin}/review.html?token=${token}`;
+    if (_intake?.contact_email) {
+      await sendProofReady({
+        contactName: _intake.contact_name || '',
+        contactEmail: _intake.contact_email,
+        eventName: _intake.event_name || 'your event',
+        reviewUrl,
+      }).catch(err => console.error('sendProofReady failed', err));
+    }
+    _project = await loadProject(pid);
+    renderStatus(_project);
+    renderReviewLink(_project);
+    setReviewPanelStatus('Proof sent.');
+  } catch (err) {
+    console.error('Failed to send proof', err);
+    setReviewPanelStatus('Could not send the proof — please try again.');
+  }
+};
+
+window.resendProofEmail = async function () {
+  if (!_project?.share_token) return;
+  const reviewUrl = `${window.location.origin}/review.html?token=${_project.share_token}`;
+  setReviewPanelStatus('Resending…');
+  try {
+    await sendProofReady({
+      contactName: _intake?.contact_name || '',
+      contactEmail: _intake?.contact_email || '',
+      eventName: _intake?.event_name || 'your event',
+      reviewUrl,
+    });
+    setReviewPanelStatus('Proof email resent.');
+  } catch (err) {
+    console.error('Failed to resend proof email', err);
+    setReviewPanelStatus('Could not resend the email — please try again.');
+  }
+};
+
+window.revealMarkSentToPrintConfirm = function () {
+  document.getElementById('markSentToPrintConfirm').style.display = '';
+};
+
+window.cancelMarkSentToPrint = function () {
+  document.getElementById('markSentToPrintConfirm').style.display = 'none';
+};
+
+window.confirmMarkSentToPrint = async function () {
+  setReviewPanelStatus('');
+  try {
+    await adminMarkSentToPrint(pid);
+    document.getElementById('markSentToPrintConfirm').style.display = 'none';
+    _project = await loadProject(pid);
+    renderStatus(_project);
+  } catch (err) {
+    console.error('Failed to mark sent to print', err);
+    setReviewPanelStatus('Could not update — please try again.');
+  }
+};
+
+function renderReviewLink(project) {
+  const emptyEl = document.getElementById('reviewLinkEmpty');
+  const boxEl = document.getElementById('reviewLinkBox');
+  if (!project.share_token) {
+    emptyEl.style.display = '';
+    boxEl.style.display = 'none';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  boxEl.style.display = '';
+  document.getElementById('reviewLinkInput').value = `${window.location.origin}/review.html?token=${project.share_token}`;
+}
+
+window.copyReviewLink = function () {
+  const input = document.getElementById('reviewLinkInput');
+  navigator.clipboard.writeText(input.value).catch(() => {});
+  input.select();
+};
+
+async function loadPrintSheets(projectId) {
+  const listEl = document.getElementById('printSheetList');
+  try {
+    const sheets = await listPrintSheets(projectId);
+    if (!sheets.length) {
+      listEl.textContent = 'No print files uploaded yet.';
+      return;
+    }
+    listEl.innerHTML = sheets.map(s => {
+      const match = s.name.match(/^([a-z-]+)-\d+\.zip$/);
+      const label = match ? (match[1] === 'flags' ? 'Flags' : match[1] === 'hole-signs' ? 'Hole Signs' : match[1]) : s.name;
+      return `<div class="print-sheet-row"><span>${esc(label)} — ${new Date(s.createdAt).toLocaleDateString()}</span>` +
+        `<button class="btn sm" data-path="${esc(s.path)}">Download</button></div>`;
+    }).join('');
+    listEl.querySelectorAll('button[data-path]').forEach(b => b.addEventListener('click', async () => {
+      // Open the tab synchronously, in the click handler, before the await -
+      // Chrome only allows window.open() as a popup-blocker-exempt trusted
+      // action within the same tick as the user gesture that triggered it.
+      const win = window.open('', '_blank');
+      try {
+        const url = await getPrintSheetDownloadUrl(b.dataset.path);
+        if (win) win.location.href = url;
+      } catch (err) {
+        console.error('Failed to get print sheet download url', err);
+        if (win) win.close();
+        setReviewPanelStatus('Could not generate a download link.');
+      }
+    }));
+  } catch (err) {
+    console.error('Failed to load print sheets', err);
+    listEl.textContent = 'Could not load print files.';
+  }
+}

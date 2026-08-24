@@ -41,6 +41,65 @@ body {
   max-width: 380px;
 }
 
+/* Split-screen layout (login page only) */
+body.split-page {
+  padding: 0;
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.split-screen {
+  display: flex;
+  width: 100%;
+  min-height: 100vh;
+}
+
+.split-left {
+  flex: 1 1 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.split-right {
+  flex: 1 1 50%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  text-align: center;
+  background: #2E2E29 url('/graphics/login-bg.jpg') center/cover no-repeat;
+}
+
+.split-right::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0) 40%, rgba(0,0,0,.55) 100%);
+}
+
+.split-right-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  color: #FAFAF8;
+}
+
+.split-right-content h2 {
+  font-family: 'DM Serif Display', serif;
+  font-weight: 400;
+  font-size: 34px;
+  line-height: 1.25;
+}
+
+@media (max-width: 900px) {
+  .split-right {
+    display: none;
+  }
+}
+
 .login-card {
   background: var(--white);
   border: 1px solid var(--gray-100);
@@ -50,22 +109,6 @@ body {
   flex-direction: column;
   gap: 1.5rem;
   box-shadow: 0 4px 24px rgba(0,0,0,.06);
-}
-
-.login-logo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: 'DM Serif Display', serif;
-  font-size: 20px;
-  color: var(--accent);
-}
-
-.logo-mark {
-  width: 48px;
-  height: 48px;
-  display: block;
-  flex-shrink: 0;
 }
 
 .login-heading {
@@ -155,4 +198,8 @@ body {
 .login-alt-link a {
   color: var(--accent);
   font-weight: 500;
+}
+
+.login-alt-link-outside {
+  margin-top: 1.25rem;
 }

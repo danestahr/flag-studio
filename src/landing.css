@@ -101,6 +101,14 @@ div.draft-card { cursor:pointer; }
 .export-btn:hover { opacity:.82; }
 .export-btn:disabled { opacity:.45; cursor:default; }
 
+/* Admin review panel status pill + print-sheet rows */
+.status-pill { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:500; padding:4px 10px; border-radius:20px; background:var(--gray-50); color:var(--gray-600); }
+.status-pill.status-draft, .status-pill.status-needs_changes { background:var(--gray-50); color:var(--gray-600); }
+.status-pill.status-submitted, .status-pill.status-proof_sent { background:rgba(230,180,30,.12); color:#a67c00; }
+.status-pill.status-approved, .status-pill.status-sent_to_print { background:var(--accent-tint); color:var(--accent); }
+.print-sheet-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--gray-100); font-size:13px; color:var(--black); }
+.print-sheet-row:last-child { border-bottom:none; }
+
 /* Delete button on project overview */
 .danger-btn { appearance:none; -webkit-appearance:none; padding:.55rem 1.1rem; font-size:13px; font-weight:500; background:transparent; color:#c0392b; border:1.5px solid #c0392b; border-radius:7px; cursor:pointer; transition:background .15s, color .15s; }
 .danger-btn:hover { background:#c0392b; color:#fff; }

@@ -388,6 +388,51 @@ export async function getProjectByToken(token, client = supabase) {
   return { ...project, flagConfig: flagCfg || null, holeSignConfig: holeCfg || null };
 }
 
+// ── Review workflow (projects.status state machine) ─────────
+// Every RPC takes a `target_project_id` key - must match the Postgres
+// function's parameter name exactly (supabase-js maps object keys straight
+// through to named params). client_approve_proof/client_reject_proof accept
+// a `client` override so review.js can pass its createReviewClient(token)
+// instance - the x-share-token header it attaches is what the RPC checks
+// server-side, since there's no Supabase Auth session on that page.
+export async function submitProjectForReview(projectId) {
+  const { error } = await supabase.rpc('submit_project_for_review', { target_project_id: projectId });
+  if (error) throw error;
+}
+
+export async function adminRequestChanges(projectId, note = null) {
+  const { error } = await supabase.rpc('admin_request_changes', { target_project_id: projectId, note });
+  if (error) throw error;
+}
+
+// Returns the project's share_token (minted server-side if it didn't
+// already have one) so the caller can build the review URL without a
+// second round trip.
+export async function adminSendProof(projectId) {
+  const { data, error } = await supabase.rpc('admin_send_proof', { target_project_id: projectId });
+  if (error) throw error;
+  return data;
+}
+
+export async function clientApproveProof(projectId, client = supabase) {
+  const { error } = await client.rpc('client_approve_proof', { target_project_id: projectId });
+  if (error) throw error;
+}
+
+export async function clientRejectProof(projectId, note = null, client = supabase) {
+  const { error } = await client.rpc('client_reject_proof', { target_project_id: projectId, note });
+  if (error) throw error;
+}
+
+export async function adminMarkSentToPrint(projectId, storagePath = null, note = null) {
+  const { error } = await supabase.rpc('admin_mark_sent_to_print', {
+    target_project_id: projectId,
+    storage_path: storagePath,
+    note,
+  });
+  if (error) throw error;
+}
+
 // ── Order intake ──────────────────────────────────────────
 export async function loadOrderIntake(projectId) {
   const { data, error } = await supabase
@@ -535,4 +580,25 @@ export async function sendPrintSheetReady(payload) {
     throw new Error(`Print sheet email failed (${res.status}): ${text}`);
   }
   return res.json();
+}
+
+// Browsing (not uploading) previously-generated print sheets - relies
+// entirely on the print-sheets bucket's own staff/admin-only RLS (no
+// ownership branch), same as uploadPrintSheet() above. createSignedUrl()/
+// list() are evaluated against the caller's own JWT, not the anon key, so
+// no edge function is needed just to mint a browse-time signed URL.
+export async function listPrintSheets(projectId) {
+  const { data, error } = await supabase.storage
+    .from(PRINT_SHEETS_BUCKET)
+    .list(projectId, { sortBy: { column: 'created_at', order: 'desc' } });
+  if (error) throw error;
+  return (data || [])
+    .filter(f => f.id)
+    .map(f => ({ name: f.name, path: `${projectId}/${f.name}`, createdAt: f.created_at }));
+}
+
+export async function getPrintSheetDownloadUrl(path, expiresIn = 300) {
+  const { data, error } = await supabase.storage.from(PRINT_SHEETS_BUCKET).createSignedUrl(path, expiresIn);
+  if (error) throw error;
+  return data.signedUrl;
 }
