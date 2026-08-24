@@ -7,10 +7,11 @@ if (existing) {
   window.location.href = '/';
 }
 
-const form    = document.getElementById('signupForm');
-const btn     = document.getElementById('signupBtn');
-const errEl   = document.getElementById('signupError');
-const noteEl  = document.getElementById('signupNotice');
+const form      = document.getElementById('signupForm');
+const btn       = document.getElementById('signupBtn');
+const errEl     = document.getElementById('signupError');
+const noteEl    = document.getElementById('signupNotice');
+const headingEl = document.getElementById('signupHeading');
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -40,7 +41,8 @@ form.addEventListener('submit', async (e) => {
     } else {
       // Email confirmation is required — no session yet.
       form.style.display = 'none';
-      noteEl.textContent = `We've sent a confirmation link to ${email}. Click it to finish creating your account.`;
+      headingEl.textContent = 'Check your inbox';
+      noteEl.textContent = `We've sent a confirmation email to ${email}. Open it and click the link inside to confirm your address and finish creating your account.`;
       noteEl.style.display = '';
     }
   } catch (err) {

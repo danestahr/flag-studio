@@ -1,0 +1,56 @@
+<!--
+  GSDS-branded "Confirm signup" template for Supabase Auth.
+
+  This file is NOT wired up automatically — Supabase Auth email templates for a
+  hosted project are dashboard settings, not something `supabase config push`
+  should touch here (this repo's config.toml has a dev-only site_url of
+  127.0.0.1, and pushing it would overwrite the real production Site URL).
+
+  To apply: Supabase Dashboard → Authentication → Emails → Templates →
+  "Confirm signup" → paste this HTML in, and set the subject to
+  "Confirm your GolfStatus Design Studio account".
+
+  Available variables: {{ .ConfirmationURL }} {{ .SiteURL }} {{ .Email }} {{ .Token }} {{ .TokenHash }}
+-->
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;margin:0;padding:32px 16px;">
+<div style="max-width:580px;margin:0 auto;">
+
+  <!-- Header -->
+  <div style="background:#1A4A2E;border-radius:12px 12px 0 0;padding:28px 32px;">
+    <p style="margin:0 0 4px;color:rgba(255,255,255,.55);font-size:12px;text-transform:uppercase;letter-spacing:.08em;">GolfStatus Design Studio</p>
+    <h1 style="color:#fff;margin:0;font-size:22px;font-weight:600;">Confirm your email</h1>
+  </div>
+
+  <!-- Body -->
+  <div style="background:#fff;padding:32px;">
+    <p style="margin:0 0 24px;color:#333;font-size:15px;line-height:1.6;">
+      Thanks for creating a Design Studio account. Confirm your email address to finish setting up access to your projects.
+    </p>
+
+    <div style="text-align:center;margin:0 0 28px;">
+      <a href="{{ .ConfirmationURL }}" style="display:inline-block;background:#1A4A2E;color:#fff;text-decoration:none;font-size:15px;font-weight:600;padding:13px 32px;border-radius:8px;">
+        Confirm email address
+      </a>
+    </div>
+
+    <p style="margin:0;color:#999;font-size:13px;line-height:1.6;">
+      If the button doesn't work, copy and paste this link into your browser:<br>
+      <a href="{{ .ConfirmationURL }}" style="color:#1A4A2E;word-break:break-all;">{{ .ConfirmationURL }}</a>
+    </p>
+
+    <p style="margin:24px 0 0;color:#999;font-size:13px;line-height:1.6;">
+      If you didn't create this account, you can safely ignore this email.
+    </p>
+  </div>
+
+  <!-- Footer -->
+  <div style="padding:16px 32px;background:#f9f9f9;border-radius:0 0 12px 12px;border-top:1px solid #eee;">
+    <p style="margin:0;color:#ccc;font-size:12px;">GolfStatus Design Studio &middot; design@gsds.space<br>8545 S 78th St, Lincoln, NE 68516</p>
+  </div>
+
+</div>
+</body>
+</html>
