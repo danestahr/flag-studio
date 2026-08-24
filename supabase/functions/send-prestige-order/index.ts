@@ -79,6 +79,8 @@ serve(async (req) => {
 </body>
 </html>`;
 
+    const text = `Hey Tom,\n\nHere's the flag order for ${name}. The zip file is attached and includes everything you should need to know about the order.\n\nLet me know if you have any questions!`;
+
     const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
       headers: {
@@ -90,7 +92,10 @@ serve(async (req) => {
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         subject,
-        content: [{ type: 'text/html', value: html }],
+        content: [
+          { type: 'text/plain', value: text },
+          { type: 'text/html', value: html },
+        ],
         attachments: [{
           content: zipBase64,
           type: 'application/zip',

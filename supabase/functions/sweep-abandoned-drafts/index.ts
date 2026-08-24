@@ -56,11 +56,25 @@ function buildWarningHtml(p: { recipientName: string; projectName: string; proje
       </div>
     </div>
     <div style="padding:20px 32px;background:#fafafa;border-top:1px solid #f0f0f0;">
-      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · designstudio@golfstatus.com</p>
+      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · designstudio@golfstatus.com<br>8545 S 78th St, Lincoln, NE 68516</p>
     </div>
   </div>
 </body>
 </html>`;
+}
+
+function buildWarningText(p: { recipientName: string; projectName: string; projectUrl: string }): string {
+  return [
+    `Hi ${p.recipientName},`,
+    '',
+    `Your draft project "${p.projectName}" hasn't been touched in a while and will be removed in 7 days due to inactivity. Open it to keep it — no action needed if you're still working on it elsewhere.`,
+    '',
+    `Open it here: ${p.projectUrl}`,
+    '',
+    'GolfStatus Design Studio',
+    'designstudio@golfstatus.com',
+    '8545 S 78th St, Lincoln, NE 68516',
+  ].join('\n');
 }
 
 async function sendWarningEmail(p: { email: string; recipientName: string; projectName: string; projectUrl: string }) {
@@ -72,7 +86,10 @@ async function sendWarningEmail(p: { email: string; recipientName: string; proje
       from: { email: FROM_EMAIL, name: FROM_NAME },
       reply_to: { email: FROM_EMAIL, name: FROM_NAME },
       subject: `Your draft "${p.projectName}" will be removed soon`,
-      content: [{ type: 'text/html', value: buildWarningHtml(p) }],
+      content: [
+        { type: 'text/plain', value: buildWarningText(p) },
+        { type: 'text/html', value: buildWarningHtml(p) },
+      ],
     }),
   });
   if (!res.ok) throw new Error(`SendGrid failed: ${res.status} ${await res.text()}`);

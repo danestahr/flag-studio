@@ -193,12 +193,61 @@ function buildHtml(p: OrderPayload): string {
 
   <!-- Footer -->
   <div style="padding:16px 32px;background:#f9f9f9;border-radius:0 0 12px 12px;border-top:1px solid #eee;">
-    <p style="margin:0;color:#ccc;font-size:12px;">GolfStatus Design Studio &middot; dane@danestahr.com</p>
+    <p style="margin:0;color:#ccc;font-size:12px;">GolfStatus Design Studio &middot; dane@danestahr.com<br>8545 S 78th St, Lincoln, NE 68516</p>
   </div>
 
 </div>
 </body>
 </html>`;
+}
+
+function buildText(p: OrderPayload): string {
+  const deadline = calcApprovalDeadline(p.eventDate);
+  const lines = [
+    `Hi ${p.contactName}, thanks for submitting your order!`,
+    `We've received everything and will be in touch once your proof is ready for review.`,
+    '',
+  ];
+
+  if (deadline) {
+    lines.push(
+      `Artwork approval deadline: ${deadline.display}`,
+      `(17 days before your event; final artwork must be approved by this date to avoid rush fees.)`,
+      '',
+    );
+  }
+
+  lines.push('ORDER SUMMARY', '');
+  lines.push(`Event name: ${p.eventName}`);
+  if (p.courseName) lines.push(`Course: ${p.courseName}`);
+  lines.push(`Date: ${formatDate(p.eventDate)}`, '');
+
+  lines.push(`Name: ${p.contactName}`, `Email: ${p.contactEmail}`);
+  if (p.shipping) {
+    const s = p.shipping;
+    const shipLine = [s.addressLine1, s.addressLine2, [s.city, s.stateProvince, s.postalCode].filter(Boolean).join(', '), s.country === 'CA' ? 'Canada' : 'USA']
+      .filter(Boolean).join(', ');
+    lines.push(`Ship to: ${shipLine}`);
+  }
+  lines.push('');
+
+  lines.push(`Flag style: ${p.flagStyleName || p.flagStyle}`);
+  if (p.flagColors?.length) lines.push(`Colors: ${p.flagColors.map(c => c.name).join(', ')}`);
+  if (p.flagSetup) lines.push(`Setup: ${p.flagSetup === 'different' ? 'Different front & back' : 'Same front & back'}`);
+  if (p.flagQty) lines.push(`Quantity: ${p.flagQty} flag${p.flagQty === 1 ? '' : 's'}`);
+  if (p.designNotes) lines.push(`Notes: ${p.designNotes}`);
+  if (p.logoFileNames?.length) lines.push('', 'Logos:', ...p.logoFileNames.map(n => `- ${n}`));
+
+  lines.push(
+    '',
+    `You'll receive another email when your proof is ready. If you have questions, just reply to this email.`,
+    '',
+    'GolfStatus Design Studio',
+    'dane@danestahr.com',
+    '8545 S 78th St, Lincoln, NE 68516',
+  );
+
+  return lines.join('\n');
 }
 
 async function projectExists(projectId: string): Promise<boolean> {
@@ -235,7 +284,10 @@ serve(async (req) => {
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         subject: `Order confirmed — ${payload.eventName}`,
-        content: [{ type: 'text/html', value: buildHtml(payload) }],
+        content: [
+          { type: 'text/plain', value: buildText(payload) },
+          { type: 'text/html', value: buildHtml(payload) },
+        ],
       }),
     });
 

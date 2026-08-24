@@ -80,11 +80,25 @@ function buildHtml(p: { recipientName: string; eventName: string; productLabel: 
       <p style="margin:0;font-size:12px;color:#aaa;word-break:break-all;background:#f8f8f8;padding:10px 12px;border-radius:6px;font-family:monospace;">${esc(p.signedUrl)}</p>
     </div>
     <div style="padding:20px 32px;background:#fafafa;border-top:1px solid #f0f0f0;">
-      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · designstudio@golfstatus.com</p>
+      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · designstudio@golfstatus.com<br>8545 S 78th St, Lincoln, NE 68516</p>
     </div>
   </div>
 </body>
 </html>`;
+}
+
+function buildText(p: { recipientName: string; eventName: string; productLabel: string; signedUrl: string }): string {
+  return [
+    `Hi ${p.recipientName},`,
+    '',
+    `The print-ready ${p.productLabel} files for ${p.eventName} are ready to download. This link expires in 7 days.`,
+    '',
+    `Download: ${p.signedUrl}`,
+    '',
+    'GolfStatus Design Studio',
+    'designstudio@golfstatus.com',
+    '8545 S 78th St, Lincoln, NE 68516',
+  ].join('\n');
 }
 
 serve(async (req) => {
@@ -142,15 +156,26 @@ serve(async (req) => {
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         subject: `Print-ready ${productType === 'hole-signs' ? 'hole sign' : 'flag'} files — ${eventName || 'your event'}`,
-        content: [{
-          type: 'text/html',
-          value: buildHtml({
-            recipientName: recipientName || recipientEmail,
-            eventName: eventName || 'your event',
-            productLabel: productType === 'hole-signs' ? 'hole sign' : 'flag',
-            signedUrl: fullUrl,
-          }),
-        }],
+        content: [
+          {
+            type: 'text/plain',
+            value: buildText({
+              recipientName: recipientName || recipientEmail,
+              eventName: eventName || 'your event',
+              productLabel: productType === 'hole-signs' ? 'hole sign' : 'flag',
+              signedUrl: fullUrl,
+            }),
+          },
+          {
+            type: 'text/html',
+            value: buildHtml({
+              recipientName: recipientName || recipientEmail,
+              eventName: eventName || 'your event',
+              productLabel: productType === 'hole-signs' ? 'hole sign' : 'flag',
+              signedUrl: fullUrl,
+            }),
+          },
+        ],
       }),
     });
 

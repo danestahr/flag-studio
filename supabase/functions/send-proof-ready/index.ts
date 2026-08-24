@@ -55,11 +55,27 @@ function buildHtml(p: ProofPayload & { safeUrl: string }): string {
       </p>
     </div>
     <div style="padding:20px 32px;background:#fafafa;border-top:1px solid #f0f0f0;">
-      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · dane@danestahr.com</p>
+      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · dane@danestahr.com<br>8545 S 78th St, Lincoln, NE 68516</p>
     </div>
   </div>
 </body>
 </html>`;
+}
+
+function buildText(p: ProofPayload & { safeUrl: string }): string {
+  return [
+    `Hi ${p.contactName},`,
+    '',
+    `Your flag design proof for ${p.eventName} is ready for your review.`,
+    '',
+    `View it here: ${p.safeUrl}`,
+    '',
+    `Once you've reviewed the design, you can approve it or request changes directly on the page. If you have any questions, just reply to this email.`,
+    '',
+    'GolfStatus Design Studio',
+    'dane@danestahr.com',
+    '8545 S 78th St, Lincoln, NE 68516',
+  ].join('\n');
 }
 
 async function tokenExists(token: string): Promise<boolean> {
@@ -115,7 +131,10 @@ serve(async (req) => {
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         subject: `Your flag design proof is ready — ${payload.eventName}`,
-        content: [{ type: 'text/html', value: buildHtml({ ...payload, safeUrl }) }],
+        content: [
+          { type: 'text/plain', value: buildText({ ...payload, safeUrl }) },
+          { type: 'text/html', value: buildHtml({ ...payload, safeUrl }) },
+        ],
       }),
     });
 
