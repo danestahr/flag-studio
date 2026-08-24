@@ -7,7 +7,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const APP_URL = Deno.env.get('APP_URL')!;
 const FROM_EMAIL = 'design@gsds.space';
-const FROM_NAME = 'GolfStatus Design Studio';
+const FROM_NAME = 'Design Studio';
 
 // Warn at 53 days of inactivity, delete 7 days after that if still
 // untouched - a 60-day total window. Only pg_cron calls this (see the
@@ -56,7 +56,7 @@ function buildWarningHtml(p: { recipientName: string; projectName: string; proje
       </div>
     </div>
     <div style="padding:20px 32px;background:#fafafa;border-top:1px solid #f0f0f0;">
-      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · designstudio@golfstatus.com<br>8545 S 78th St, Lincoln, NE 68516</p>
+      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · design@gsds.space<br>8545 S 78th St, Lincoln, NE 68516</p>
     </div>
   </div>
 </body>
@@ -72,7 +72,7 @@ function buildWarningText(p: { recipientName: string; projectName: string; proje
     `Open it here: ${p.projectUrl}`,
     '',
     'GolfStatus Design Studio',
-    'designstudio@golfstatus.com',
+    'design@gsds.space',
     '8545 S 78th St, Lincoln, NE 68516',
   ].join('\n');
 }

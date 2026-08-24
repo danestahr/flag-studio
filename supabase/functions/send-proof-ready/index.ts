@@ -6,7 +6,7 @@ const SENDGRID_API_KEY = Deno.env.get('SENDGRID_API_KEY_2') ?? Deno.env.get('SEN
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const FROM_EMAIL = 'design@gsds.space';
-const FROM_NAME = 'GolfStatus Design Studio';
+const FROM_NAME = 'Design Studio';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -55,7 +55,7 @@ function buildHtml(p: ProofPayload & { safeUrl: string }): string {
       </p>
     </div>
     <div style="padding:20px 32px;background:#fafafa;border-top:1px solid #f0f0f0;">
-      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · dane@danestahr.com<br>8545 S 78th St, Lincoln, NE 68516</p>
+      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · design@gsds.space<br>8545 S 78th St, Lincoln, NE 68516</p>
     </div>
   </div>
 </body>
@@ -73,7 +73,7 @@ function buildText(p: ProofPayload & { safeUrl: string }): string {
     `Once you've reviewed the design, you can approve it or request changes directly on the page. If you have any questions, just reply to this email.`,
     '',
     'GolfStatus Design Studio',
-    'dane@danestahr.com',
+    'design@gsds.space',
     '8545 S 78th St, Lincoln, NE 68516',
   ].join('\n');
 }

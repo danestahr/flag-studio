@@ -6,7 +6,7 @@ const SENDGRID_API_KEY = Deno.env.get('SENDGRID_API_KEY_2') ?? Deno.env.get('SEN
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const FROM_EMAIL = 'design@gsds.space';
-const FROM_NAME = 'GolfStatus Design Studio';
+const FROM_NAME = 'Design Studio';
 const BUCKET = 'print-sheets';
 // 7 days, hardcoded - never accepted from the client. The client only ever
 // supplies WHAT to send and WHO to send it to; how long the link lives is a
@@ -80,7 +80,7 @@ function buildHtml(p: { recipientName: string; eventName: string; productLabel: 
       <p style="margin:0;font-size:12px;color:#aaa;word-break:break-all;background:#f8f8f8;padding:10px 12px;border-radius:6px;font-family:monospace;">${esc(p.signedUrl)}</p>
     </div>
     <div style="padding:20px 32px;background:#fafafa;border-top:1px solid #f0f0f0;">
-      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · designstudio@golfstatus.com<br>8545 S 78th St, Lincoln, NE 68516</p>
+      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · design@gsds.space<br>8545 S 78th St, Lincoln, NE 68516</p>
     </div>
   </div>
 </body>
@@ -96,7 +96,7 @@ function buildText(p: { recipientName: string; eventName: string; productLabel: 
     `Download: ${p.signedUrl}`,
     '',
     'GolfStatus Design Studio',
-    'designstudio@golfstatus.com',
+    'design@gsds.space',
     '8545 S 78th St, Lincoln, NE 68516',
   ].join('\n');
 }
