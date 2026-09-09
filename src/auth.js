@@ -4,16 +4,46 @@ export async function requireAuth() {
   const session = await getSession();
   if (!session) {
     const returnTo = window.location.pathname + window.location.search;
-    window.location.href = `/login.html?next=${encodeURIComponent(returnTo)}`;
+    window.location.href = `/login?next=${encodeURIComponent(returnTo)}`;
     await new Promise(() => {}); // halt execution while redirecting
   }
+  await initHeaderForSession(session);
+  return session;
+}
+
+// The session-established side effects requireAuth() runs after confirming
+// a session exists - split out so a page that supports BOTH an anonymous and
+// an authenticated view (landing.js's public template gallery) can run these
+// only in the authenticated branch, without duplicating requireAuth()'s
+// redirect-when-absent logic.
+export async function initHeaderForSession(session) {
   injectHeaderActions(session);
   watchForSignOut();
   // Best-effort: attach any anonymously-submitted orders under this account's
   // own email. Never blocks page load on failure - this is a background
   // reconciliation, not a critical path.
   claimMyProjects().catch((err) => console.error('claimMyProjects failed', err));
-  return session;
+}
+
+// Anonymous-visitor equivalent of injectHeaderActions() below - a single CTA
+// anchor instead of the avatar/sign-out group, since there's no session to
+// act on. Callers pick their own label/destination for "the other action" a
+// visitor on that particular page might want (e.g. "Sign in" from the public
+// gallery, "Get Started" from the sign-in form itself).
+export function injectHeaderCta(label, href) {
+  const header = document.querySelector('header');
+  if (!header || header.querySelector('.header-actions')) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'header-actions';
+
+  const cta = document.createElement('a');
+  cta.className = 'header-cta-btn';
+  cta.href = href;
+  cta.textContent = label;
+  wrap.appendChild(cta);
+
+  header.appendChild(wrap);
 }
 
 // UI-convenience gate only - the real boundary is DB-level (RLS / this
@@ -39,7 +69,7 @@ export async function isStaffOrAdmin(session) {
 function watchForSignOut() {
   supabase.auth.onAuthStateChange((event) => {
     if (event === 'SIGNED_OUT') {
-      window.location.href = '/login.html';
+      window.location.href = '/login';
     }
   });
 }
@@ -58,7 +88,7 @@ function injectHeaderActions(session) {
 
   const avatar = document.createElement('a');
   avatar.className = 'account-avatar';
-  avatar.href = '/profile.html';
+  avatar.href = '/profile';
   avatar.title = 'Your profile';
   avatar.textContent = (session.user.email || '?').slice(0, 2).toUpperCase();
   wrap.appendChild(avatar);
@@ -68,7 +98,7 @@ function injectHeaderActions(session) {
   btn.textContent = 'Sign out';
   btn.addEventListener('click', async () => {
     await signOut();
-    window.location.href = '/login.html';
+    window.location.href = '/login';
   });
   wrap.appendChild(btn);
 

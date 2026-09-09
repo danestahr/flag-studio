@@ -8,12 +8,15 @@ import { saveHoleSignConfig, updateProject } from '../supabase.js';
 
 export async function saveDraftInternal() {
   if (!HS.projectId) return;
-  // Strip blob: URLs from logoSrcTight before persisting — they're regenerable
-  // from logoArtworkBounds + logoSrc on load and would otherwise be dead refs.
-  const variations = HS.variations.map(v => {
-    const { logoSrcTight, ...rest } = v;
-    return rest;
-  });
+  // Strip blob: URLs from each logo layer's logoSrcTight before persisting —
+  // they're regenerable from logoArtworkBounds + logoSrc on load and would
+  // otherwise be dead refs. Also drop the transient `loading` flag (see
+  // addLogoLayer in logo-utils.js) so a save mid-upload never persists a
+  // layer stuck showing its spinner forever.
+  const variations = HS.variations.map(v => ({
+    ...v,
+    logos: (v.logos || []).map(({ logoSrcTight, loading, ...rest }) => rest),
+  }));
   // Strip blob URLs from template-logo slots before persisting; they're regenerable
   // from logoArtworkBounds + logoSrc on load.
   const tplLogos = HS.templateLogos ? {

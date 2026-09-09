@@ -2,33 +2,19 @@ import { HS, UI } from './state.js';
 import { HS_H, HS_W } from '../hole-sign-data.js';
 import { getEffectiveState, getEffectiveVariation } from './state.js';
 import { getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
-import { hideHsToolbar, prepareLogo, applyFillToVariation } from './logo-utils.js';
-import { stripSlotImages, paintTplSlotOverlays, paintTextLayerOverlays } from './design.js';
+import { hideHsToolbar, addLogoLayer } from './logo-utils.js';
+import { deselectTlSlots } from './template-logos.js';
+import { stripSlotImages, paintTplSlotOverlays, paintTextLayerOverlays, rescaleTextOverlayFonts } from './design.js';
 import { createImageBox, refreshImageBoxClips, refreshTextLayerClips, refreshTlSlotClips } from '../image-box.js';
 import { wireBannerHeightHandles, wireBannerSpacingHandles, wireCanvasTextEditing, wireElementDrag } from './banner.js';
-import { removeActiveHsLogo, showHsToolbar } from './var-toolbar.js';
+import { removeActiveHsLogo, showHsToolbar, hideHsToolbarPanel, reselectAfterRerender } from './var-toolbar.js';
 import { renderVarList, buildLibStrip } from './variations.js';
+import { refreshHsVarSectionReset } from './var-editor.js';
 import { uploadLogo } from '../supabase.js';
 import { renderCanvasPanel } from '../canvas-panel.js';
+import { commitActiveCanvasEdit } from '../dom-utils.js';
 
 // ── Canvas sizing & zoom ───────────────────────────────────
-
-// When zoom changes during inline text editing, rescale the input's font size so
-// the cursor/selection highlight stays aligned with the visible SVG text.
-function rescaleEditorInput(previewId) {
-  requestAnimationFrame(() => {
-    const preview = document.getElementById(previewId);
-    const input = preview?.querySelector('.canvas-edit-input');
-    if (!input || !preview) return;
-    const sc = (preview.clientHeight || HS_H) / HS_H;
-    const kind = input.closest('.canvas-edit-zone')?.dataset?.kind;
-    if (!kind) return;
-    const src = (HS.editingVarId && HS.editingDraft) ? HS.editingDraft : HS;
-    const t = kind === 'top' ? src.topText : kind === 'bottom' ? src.bottomText : null;
-    if (!t) return;
-    input.style.fontSize = Math.max(9, Math.round((t.size || 200) * sc)) + 'px';
-  });
-}
 
 // The Variations-step canvas panel — constructed fresh each time
 // renderStep2() rebuilds panel-2's markup (mirrors the old per-render
@@ -49,12 +35,9 @@ export function initHsVarCanvas(container) {
     getZoom: () => UI.hsZoom,
     setZoom: v => { UI.hsZoom = v; },
     onApply: () => {
-      if (UI.canvasEdit) rescaleEditorInput('hsSignPreview');
       const preview = document.getElementById('hsSignPreview');
-      if (preview) { refreshImageBoxClips(preview); refreshTextLayerClips(preview); refreshTlSlotClips(preview); }
+      if (preview) { rescaleTextOverlayFonts(preview); refreshImageBoxClips(preview); refreshTextLayerClips(preview); refreshTlSlotClips(preview); }
     },
-    headerName: '—',
-    headerNameId: 'hsActiveVarName',
     canvasContentHtml: '<div class="hs-sign-preview" id="hsSignPreview"></div>',
     description: 'Drag logos into zones',
   });
@@ -78,9 +61,8 @@ export function initHsStep1Canvas(container) {
     getZoom: () => UI.hsStep1Zoom,
     setZoom: v => { UI.hsStep1Zoom = v; },
     onApply: () => {
-      if (UI.canvasEdit) rescaleEditorInput('hsStep1Preview');
       const preview = document.getElementById('hsStep1Preview');
-      if (preview) { refreshImageBoxClips(preview); refreshTextLayerClips(preview); refreshTlSlotClips(preview); }
+      if (preview) { rescaleTextOverlayFonts(preview); refreshImageBoxClips(preview); refreshTextLayerClips(preview); refreshTlSlotClips(preview); }
     },
     canvasContentHtml: '<div class="hs-sign-thumb" id="hsStep1Preview"></div>',
   });
@@ -95,14 +77,6 @@ export function renderVariationPreview() {
   const preview = document.getElementById('hsSignPreview');
   if (!preview) return;
   preview.innerHTML = '';
-
-  const nameEl = document.getElementById('hsActiveVarName');
-  if (nameEl) {
-    const activeName = UI.activeDefaultId
-      ? HS.defaults.find(d => d.id === UI.activeDefaultId)?.name
-      : HS.variations.find(v => v.id === HS.activeVarId)?.name;
-    nameEl.textContent = activeName || '—';
-  }
 
   // Default hole sign selected — render it full-canvas, read-only
   if (UI.activeDefaultId) {
@@ -124,8 +98,34 @@ export function renderVariationPreview() {
   }
 
   const activeVar = HS.activeVarId ? HS.variations.find(v => v.id === HS.activeVarId) : null;
+
+  // No sponsor logos yet and nothing selected to preview — prompt for a
+  // logo upload instead of rendering the bare, un-personalized template.
+  // Uploading (via #hsLogoFile, wired by renderLogoTray in buildLibStrip)
+  // already auto-creates a variation per logo and selects it
+  // (addVariationForLogo in variations.js), so the next renderVariationPreview()
+  // call naturally replaces this prompt with the new variation.
+  if (!activeVar && !HS.library.length) {
+    preview.innerHTML = `
+      <div class="hs-sign-empty">
+        <span class="hs-sign-empty-icon"><i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i></span>
+        <div class="hs-sign-empty-title">Upload sponsor logos to get started</div>
+        <div class="hs-sign-empty-sub">Each logo becomes its own hole sign variation, ready to edit.</div>
+        <button type="button" class="btn primary" onclick="document.getElementById('hsLogoFile').click()">Upload logos</button>
+      </div>`;
+    return;
+  }
+
   const effState = getEffectiveState(activeVar);
-  const isEditingActive = HS.editingVarId && HS.editingVarId === HS.activeVarId;
+  // UI.hsFullEditorOpen (not just HS.editingVarId matching) distinguishes an
+  // explicit pencil-editor session from a quick-edit draft in progress (see
+  // beginQuickEdit in var-editor.js) — both set HS.editingVarId/editingDraft
+  // to the same variation, but only the former should unlock drag/resize.
+  const isEditingActive = HS.editingVarId && HS.editingVarId === HS.activeVarId && UI.hsFullEditorOpen;
+  // Quick-edit mode: a variation is selected but not (yet) in the full pencil
+  // editor — template logo slots / background / text bands are still
+  // click-to-edit, just with positions locked (no drag/resize).
+  const showQuickEdit = !isEditingActive && !!activeVar;
 
   // Re-snap template logo slots to the current layout so banner/text changes
   // automatically reposition non-custom slots. Inline to avoid circular import.
@@ -153,13 +153,14 @@ export function renderVariationPreview() {
   // (so the text/sponsor fallback still renders in the SVG).
   const bgVarForRender = isFullGraphic
     ? getEffectiveVariation(activeVar)
-    : (activeVar && !activeVar.logoSrc ? getEffectiveVariation(activeVar) : null);
+    : (activeVar && !activeVar.logos?.length ? getEffectiveVariation(activeVar) : null);
   // Only hide text layers (and top/bottom band text) from the SVG when editing
-  // (they become interactive DOM overlays). When just viewing, let them render
-  // in the SVG directly.
-  const hideTextLayers = isEditingActive ? (effState.textLayers || []).map(l => l.id) : [];
-  const hideText = isEditingActive ? ['top', 'bottom'] : [];
-  const bgState = { ...(isEditingActive ? stripSlotImages(effState) : effState), hideTextLayers, hideText };
+  // or quick-editing (they become interactive DOM overlays). When just
+  // viewing, let them render in the SVG directly.
+  const showOverlays = isEditingActive || showQuickEdit;
+  const hideTextLayers = showOverlays ? (effState.textLayers || []).map(l => l.id) : [];
+  const hideText = showOverlays ? ['top', 'bottom'] : [];
+  const bgState = { ...(showOverlays ? stripSlotImages(effState) : effState), hideTextLayers, hideText };
   renderHoleSignInto(bgSvgDiv, bgState, bgVarForRender);
   const bgSvgEl = bgSvgDiv.querySelector('svg');
   if (bgSvgEl) {
@@ -237,6 +238,12 @@ export function renderVariationPreview() {
     abZone.style.cssText = 'position:absolute;inset:0;cursor:pointer;';
     abZone.addEventListener('click', e => {
       e.stopPropagation();
+      // Same handoff banner.js's own band-to-band clicks perform explicitly
+      // (see startEdit/selectZone there) — this zone isn't focusable, so a
+      // native click here never blurs an in-progress text-band edit on its
+      // own, leaving HS.editingDraft dangling (and getEffectiveState reading
+      // its now-stale content) until something else happens to commit it.
+      commitActiveCanvasEdit(abZone);
       if (UI.hsActiveZone?.dzone === abZone) { hideHsToolbar(); UI.hsActiveZone = null; return; }
       // Store the real persisted variation, not the getEffectiveVariation()
       // copy — toolbar actions (e.g. aboveFrame toggle) mutate this object
@@ -252,7 +259,17 @@ export function renderVariationPreview() {
       wireCanvasTextEditing(preview);
       wireBannerHeightHandles(preview);
       wireBannerSpacingHandles(preview);
+    } else if (showQuickEdit) {
+      // Same coupling as the non-artboard branch below: showOverlays (above)
+      // already stripped the frame's slot images from the SVG in favor of a
+      // DOM overlay — that overlay has to actually get painted here, or an
+      // artboard variation's template logo/text simply vanishes while just
+      // viewing it (not editing) on the canvas.
+      paintTplSlotOverlays(preview, effState, { locked: true, variation: activeVar });
+      paintTextLayerOverlays(preview, effState, { locked: true, variation: activeVar });
+      wireCanvasTextEditing(preview, { locked: true });
     }
+    refreshHsVarSectionReset();
     return;
   }
   if (!variation) return;
@@ -261,102 +278,130 @@ export function renderVariationPreview() {
   const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
   dzone.style.cssText = `position:absolute;left:${pct(lz.x, HS_W)};top:${pct(lz.y, HS_H)};width:${pct(lz.w, HS_W)};height:${pct(lz.h, HS_H)};`;
 
+  const selectLogoLayer = (dz, wrap, layerId) => {
+    if (UI.hsActiveZone) {
+      UI.hsActiveZone.dzone.classList.remove('selected');
+      UI.hsActiveZone.wrap?.classList.remove('selected');
+    }
+    // Store the real persisted variation — see comment above for why.
+    UI.hsActiveZone = { dzone: dz, wrap, variation: activeVar, layerId };
+    dz.classList.add('selected');
+    // The purple "selected" outline lives on the image box itself
+    // (.dz-logo-wrap.selected) — dzone's own .selected only tints its
+    // background, so without this the wrap never shows anything but its
+    // blue :hover outline, i.e. it looked permanently "unselected".
+    wrap?.classList.add('selected');
+  };
+
   if (isFullGraphic) {
     // Full-graphic: image fills the canvas via the SVG renderer; dzone is just an
     // invisible interaction surface for drop and toolbar (no handles or guides).
-    dzone.className = 'dzone dzone-full-graphic' + (variation.logoSrc ? ' has-logo' : '');
+    // Only one logo is ever addressable here (see addLogoLayer's isFullGraphic
+    // branch in logo-utils.js) — there's no meaningful way to select among
+    // several full-bleed images stacked identically over the whole canvas.
+    const soleLayer = variation.logos?.[0] || null;
+    dzone.className = 'dzone dzone-full-graphic' + (soleLayer ? ' has-logo' : '');
     dzone.style.cursor = 'pointer';
     dzone.addEventListener('click', e => {
       e.stopPropagation();
+      // See the matching comment on abZone's click handler above.
+      commitActiveCanvasEdit(dzone);
       if (UI.hsActiveZone?.dzone === dzone) { hideHsToolbar(); return; }
-      if (UI.hsActiveZone) UI.hsActiveZone.dzone.classList.remove('selected');
-      // Store the real persisted variation — see comment above for why.
-      UI.hsActiveZone = { dzone, variation: activeVar };
-      showHsToolbar(dzone, !variation.logoSrc);
+      selectLogoLayer(dzone, null, soleLayer?.id ?? null);
+      showHsToolbar(dzone, !soleLayer);
     });
   } else {
-    const hasLogo = !!variation.logoSrc;
-    dzone.className = 'dzone' + (hasLogo ? ' has-logo' : ' hs-logo-placeholder');
+    const logos = variation.logos || [];
+    dzone.className = 'dzone' + (logos.length ? ' has-logo' : ' hs-logo-placeholder');
+    dzone.style.cursor = 'pointer';
 
-    if (hasLogo) {
-      if (!variation.logoData) variation.logoData = { x: 50, y: 50, w: 90 };
-      const displaySrc = variation.logoSrcTight || variation.logoSrc;
+    // Clicking empty space inside the zone (a click on a placed logo's own
+    // .dz-logo-wrap stops propagation before it reaches here — see
+    // createImageBox) no longer opens the add/replace picker — that read as
+    // an accidental "add a new image" prompt on a stray tap. Sponsor text
+    // (shown in this zone whenever it has no logo) is reachable this way
+    // whether or not it's already set — same "click the element on canvas to
+    // edit/add it" affordance as everything else, now that the sidebar menu
+    // no longer carries its own dedicated row. Adding a logo still goes only
+    // through an explicit action (drag from the library strip).
+    dzone.addEventListener('click', e => {
+      e.stopPropagation();
+      // See the matching comment on abZone's click handler above.
+      commitActiveCanvasEdit(dzone);
+      if (UI.hsActiveZone?.dzone === dzone && !UI.hsActiveZone.layerId) { hideHsToolbar(); return; }
+      if (!logos.length) {
+        selectLogoLayer(dzone, null, null);
+        hideHsToolbar();
+        window.startEditVar?.(activeVar.id);
+        window.openHsVarMenu?.('sponsor');
+      }
+    });
 
+    logos.forEach(layer => {
+      if (layer.loading) {
+        const lwrap = document.createElement('div');
+        lwrap.className = 'dz-logo-wrap dz-logo-wrap-loading';
+        lwrap.style.cssText = `left:${layer.x}%;top:${layer.y}%;width:${layer.w}%;`;
+        lwrap.innerHTML = '<div class="logo-processing-spinner"></div>';
+        dzone.appendChild(lwrap);
+        return;
+      }
+      const displaySrc = layer.logoSrcTight || layer.logoSrc;
       let wrap;
-      wrap = createImageBox(dzone, preview, variation.logoData, {
+      wrap = createImageBox(dzone, preview, layer, {
         src: displaySrc,
         alt: variation.name,
-        aboveFrame: variation.aboveFrame,
-        belowBackground: variation.belowBackground,
-        onCommit: () => renderVarList(),
+        aboveFrame: layer.aboveFrame,
+        belowBackground: layer.belowBackground,
+        // Duck the toolbar out of the way while dragging/resizing, and bring
+        // it back — freshly repositioned against the box's final size/place —
+        // once released. Same hide-then-reappear pattern as the text-layer
+        // toolbar in hs/design.js, rather than leaving it visibly stale over
+        // a box that's moved/resized out from under it.
+        onStart: () => hideHsToolbarPanel(),
+        onCommit: () => { renderVarList(); if (UI.hsActiveZone?.layerId === layer.id) showHsToolbar(dzone); },
         onClick: () => {
-          if (UI.hsActiveZone?.dzone === dzone) { hideHsToolbar(); return; }
-          if (UI.hsActiveZone) {
-            UI.hsActiveZone.dzone.classList.remove('selected');
-            UI.hsActiveZone.wrap?.classList.remove('selected');
+          if (UI.hsActiveZone?.layerId === layer.id) { hideHsToolbar(); return; }
+          // Selecting this image and selecting a text layer/template-logo
+          // slot are mutually exclusive on this canvas — same reasoning as
+          // the matching drop in design.js's template-logo onClick.
+          if (UI.activeTextLayerId) {
+            UI.activeTextLayerId = null;
+            document.querySelectorAll('.hs-tl-overlay').forEach(el => el.classList.remove('selected'));
+            window.closeTextLayerToolbar?.();
           }
-          // Store the real persisted variation — see comment above for why.
-          UI.hsActiveZone = { dzone, wrap, variation: activeVar };
-          dzone.classList.add('selected');
-          // The purple "selected" outline lives on the image box itself
-          // (.dz-logo-wrap.selected) — dzone's own .selected only tints its
-          // background, so without this the wrap never shows anything but
-          // its blue :hover outline, i.e. it looked permanently "unselected".
-          wrap.classList.add('selected');
+          deselectTlSlots();
+          selectLogoLayer(dzone, wrap, layer.id);
           showHsToolbar(dzone);
         },
-        // Hover shortcuts — jump straight to the same toolbar+picker (swap) or
-        // removal (remove) a plain click would reach, without the
-        // intermediate select-then-click-Replace step.
-        onSwap: () => {
-          if (UI.hsActiveZone) {
-            UI.hsActiveZone.dzone.classList.remove('selected');
-            UI.hsActiveZone.wrap?.classList.remove('selected');
-          }
-          UI.hsActiveZone = { dzone, wrap, variation: activeVar };
-          dzone.classList.add('selected');
-          wrap.classList.add('selected');
-          showHsToolbar(dzone, true);
-        },
-        onRemove: () => {
-          UI.hsActiveZone = { dzone, wrap, variation: activeVar };
-          removeActiveHsLogo();
-        },
+        // Hover shortcut — jump straight to removal a plain click would
+        // reach, without the intermediate select-then-click-Remove step.
+        // Swap/reorder now live only in the zone toolbar, not on the image.
+        onRemove: () => { selectLogoLayer(dzone, wrap, layer.id); removeActiveHsLogo(); },
       });
+      wrap.dataset.layerId = layer.id; // looked up by reselectAfterRerender in var-toolbar.js
       dzone.appendChild(wrap);
-    } else {
-      dzone.style.cursor = 'pointer';
-      dzone.addEventListener('click', e => {
-        e.stopPropagation();
-        if (UI.hsActiveZone?.dzone === dzone) { hideHsToolbar(); return; }
-        if (UI.hsActiveZone) UI.hsActiveZone.dzone.classList.remove('selected');
-        // Store the real persisted variation — see comment above for why.
-        UI.hsActiveZone = { dzone, variation: activeVar };
-        dzone.classList.add('selected');
-        // If the variation already has sponsor text, go straight to editing it.
-        if (activeVar?.sponsorText?.text) {
-          hideHsToolbar();
-          window.startEditVar?.(activeVar.id);
-          window.openHsVarMenu?.('sponsor');
-        } else {
-          showHsToolbar(dzone, true);
-        }
-      });
-    }
+    });
   }
 
-  const placeLogo = logo => {
-    variation.logoId  = logo.id;
-    variation.logoSrc = logo.src;
-    delete variation.logoSrcTight; delete variation.sponsorText;
-    if (!variation.logoData) variation.logoData = { x: 50, y: 50, w: 90 };
+  const refreshThumbAndPreview = () => {
+    const thumb = document.getElementById('hsvt-' + activeVar?.id);
+    if (thumb) renderHoleSignInto(thumb, getEffectiveState(activeVar), getEffectiveVariation(activeVar));
     renderVariationPreview();
-    prepareLogo(variation, logo.src).then(() => {
-      applyFillToVariation(variation);
-      const thumb = document.getElementById('hsvt-' + activeVar?.id);
-      if (thumb) renderHoleSignInto(thumb, getEffectiveState(activeVar), getEffectiveVariation(activeVar));
-      renderVariationPreview();
-    }).catch(() => {});
+  };
+
+  // Dragging a logo from the library onto the canvas always ADDS a new,
+  // independent layer — see addLogoLayer in logo-utils.js. Once it's placed
+  // (the promise resolves), immediately select it and pop the zone toolbar
+  // open — same as clicking it — so front/back, replace, remove-bg etc. are
+  // right there instead of requiring a separate click after the drop.
+  const dropLogo = logo => {
+    const p = addLogoLayer(activeVar, logo, { isFullGraphic });
+    renderVariationPreview(); // shows the pushed layer's loading spinner
+    p.then(layer => {
+      refreshThumbAndPreview();
+      reselectAfterRerender(activeVar, layer.id);
+    }).catch(() => renderVariationPreview());
   };
 
   dzone.addEventListener('dragover',  e => { e.preventDefault(); dzone.classList.add('drag-over'); });
@@ -371,7 +416,7 @@ export function renderVariationPreview() {
         const logo = await uploadLogo(HS.projectId, file);
         HS.library.push(logo);
         buildLibStrip();
-        placeLogo(logo);
+        dropLogo(logo);
       } catch (err) { console.error('Logo upload failed', err); }
       return;
     }
@@ -380,7 +425,7 @@ export function renderVariationPreview() {
     const logo = HS.library.find(l => l.id === UI.hsDragLogoId);
     if (!logo) return;
     UI.hsDragLogoId = null;
-    placeLogo(logo);
+    dropLogo(logo);
   });
 
   preview.appendChild(dzone);
@@ -392,7 +437,15 @@ export function renderVariationPreview() {
     wireCanvasTextEditing(preview);
     wireBannerHeightHandles(preview);
     wireBannerSpacingHandles(preview);
+  } else if (showQuickEdit) {
+    // Quick-edit: template logo slots / text bands / free text layers are
+    // still click-to-edit (swap image, edit text), but no drag/resize — no
+    // wireElementDrag, no banner height/spacing handles, positions stay put.
+    paintTplSlotOverlays(preview, effState, { locked: true, variation: activeVar });
+    paintTextLayerOverlays(preview, effState, { locked: true, variation: activeVar });
+    wireCanvasTextEditing(preview, { locked: true });
   }
+  refreshHsVarSectionReset();
 }
 
 window._hsRenderVariationPreview = renderVariationPreview;

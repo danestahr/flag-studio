@@ -374,7 +374,9 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
       const sx = wrap.offsetWidth / 100;
       const dx = (e.clientX - lhStartX) / sx;
       const rightEdge = lhStartLayerX + lhStartW;
-      const newW = Math.max(5, lhStartW - dx);
+      // Cap growth at the canvas's left edge (rightEdge stays fixed, so
+      // layer.x = rightEdge - newW can't go below 0).
+      const newW = Math.max(5, Math.min(rightEdge, lhStartW - dx));
       layer.x = rightEdge - newW; layer.w = newW;
       overlay.style.left = layer.x + '%';
       overlay.style.width = newW + '%';
@@ -397,7 +399,8 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
     rh.addEventListener('pointermove', e => {
       if (!rh.hasPointerCapture(e.pointerId)) return;
       const sx = wrap.offsetWidth / 100;
-      const newW = Math.max(5, rhStartW + (e.clientX - rhStartX) / sx);
+      // Cap growth at the canvas's right edge (layer.x stays fixed here).
+      const newW = Math.max(5, Math.min(100 - layer.x, rhStartW + (e.clientX - rhStartX) / sx));
       layer.w = newW;
       overlay.style.width = newW + '%';
       clipToCanvas(textDiv, wrap);
@@ -430,7 +433,12 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
         textDiv.style.fontSize = Math.max(8, (newSize / 100) * wrap.offsetHeight) + 'px';
 
         const ratio = newSize / chStartSize;
-        const newW = Math.max(5, chStartW * ratio);
+        // Growing from the center outward — cap so neither side crosses the
+        // canvas edge (the box can grow at most 2x its distance to whichever
+        // edge is closer).
+        const centerX = chStartLayerX + chStartW / 2;
+        const maxWByCenter = 2 * Math.min(centerX, 100 - centerX);
+        const newW = Math.max(5, Math.min(maxWByCenter, chStartW * ratio));
         layer.w = newW;
         layer.x = chStartLayerX + (chStartW - newW) / 2;
         overlay.style.width = newW + '%';
@@ -488,12 +496,15 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
         document.body.style.cursor = 'grabbing';
       }
       if (!didDrag) return;
-      let nx = Math.max(-layer.w + 5, Math.min(95, startX + dx));
-      let ny = Math.max(0, Math.min(100, startY + dy));
+      // Keep the whole box on the canvas — clamp the far edge (x+w, y+h), not
+      // just the near one, so it can't hang off either side.
+      const heightPct = overlay.offsetHeight / wrap.offsetHeight * 100;
+      let nx = Math.max(0, Math.min(100 - layer.w, startX + dx));
+      let ny = Math.max(0, Math.min(100 - heightPct, startY + dy));
 
       // Snap the text box's own center (not just its top-left anchor) to the
       // canvas center — matches the logo drop-zone's snap-to-center behavior.
-      const halfHPct = (overlay.offsetHeight / wrap.offsetHeight * 100) / 2;
+      const halfHPct = heightPct / 2;
       const snapTolX = 5 / wrap.offsetWidth  * 100;
       const snapTolY = 5 / wrap.offsetHeight * 100;
       const snapX = findAxisSnap([50], nx, layer.w, snapTolX);

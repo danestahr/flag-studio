@@ -1,70 +1,85 @@
+import '../order.css';
 import { HS, UI, getEffectiveState, getEffectiveVariation } from './state.js';
 import { HS_H, HS_W } from '../hole-sign-data.js';
 import { escXml, makeHoleSignSvg, renderHoleSignInto } from '../hole-sign-render.js';
 import {
   generateShareToken, loadEventName,
   loadOrderIntake, uploadPrintSheet, sendPrintSheetReady,
+  upsertCustomerInfo, submitProjectForReview, sendOrderConfirmation,
 } from '../supabase.js';
 import { PDFDocument, PDFName, PDFOperator, PDFString, rgb } from 'pdf-lib';
 import JSZip from 'jszip';
-import { dl, slug, sanitizeFilename, mapWithConcurrency } from '../dom-utils.js';
+import { dl, esc, slug, sanitizeFilename, mapWithConcurrency, scrollToFirstError } from '../dom-utils.js';
 import { pngBlobToPdfBlob } from '../pdf-utils.js';
 import { saveDraftInternal } from './draft.js';
+import { STATUS_LABEL } from '../status-labels.js';
+import {
+  renderContactShippingFields, attachContactShippingListeners, validateContactShipping,
+  renderAckItem, attachAckListeners, renderDeadlineCallout, renderRecapSection, formatDate,
+} from '../intake-shared.js';
+
+const ACK_DEADLINE_TEXT = 'I acknowledge that final artwork approval is required at least 17 days before the event to avoid rush fees. If the event is on a weekend or Monday, this deadline will be moved to the preceding Friday.';
 
 // ── Step 3: Gallery ─────────────────────────────────────────
 export function renderGallery() {
   const panel = document.getElementById('panel-3');
   panel.innerHTML = `
-    <div class="p1-header">
-      <div>
-        <div class="ptitle">Gallery & export</div>
-        <div class="psub">Review all variations and export or share.</div>
-      </div>
-      <div class="p1-header-actions">
-        <button class="btn sm" onclick="tryGoStep(2)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Variations</button>
-        <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
-      </div>
-    </div>
-    <div class="s5layout">
-      <div>
+    <div class="hs-design-layout">
+      <div class="hs-design-preview-col">
         <div class="hs-gallery-grid" id="hsGalleryGrid"></div>
       </div>
-      <div class="review-card">
-        <div class="rc-title">Selected</div>
-        <div class="hs-gallery-selected" id="hsGallerySelected"></div>
-        <div id="hsGallerySelectedName" style="font-size:13px;font-weight:500;text-align:center;margin-bottom:.5rem;color:var(--gray-600)"></div>
-        <div class="exp-row">
-          <button class="btn sm" id="hsExpPdf" onclick="exportHsPDF()">
-            <i class="fa-solid fa-file-pdf" aria-hidden="true"></i>PDF
-          </button>
-          <button class="btn sm" id="hsExpPng" onclick="exportHsPNG()">
-            <i class="fa-solid fa-download" aria-hidden="true"></i>PNG
-          </button>
-        </div>
-        <button class="btn sm" style="width:100%;justify-content:center" onclick="exportHsAllPNG()">Export all PNG</button>
-        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)">
-          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-400);font-weight:500;margin-bottom:6px">Print files</div>
-          <button class="btn sm primary" id="hsExpPrintBtn" style="width:100%;justify-content:center" onclick="downloadHsPrint()"><i class="fa-solid fa-download" aria-hidden="true"></i> Download print sheets (zip)</button>
-          <div id="hsExpPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px;margin-top:6px"></div>
-        </div>
-        <div class="share-section" id="hsEmailPrintSheetSection" style="display:${UI.isStaffOrAdmin ? '' : 'none'}">
-          <div class="rc-title">Email PDF sheet link</div>
-          <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openEmailPrintSheetModal()">Email PDF sheet link <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
-        </div>
-        <div class="share-section">
-          <div class="rc-title">Share</div>
-          <button class="btn sm primary" onclick="generateHsShareLink()">Generate share link</button>
-          <div class="share-link-box" id="hsShareLinkBox" style="display:none">
-            <input class="share-link-input" id="hsShareLinkInput" readonly>
-            <button class="btn sm" onclick="copyHsShareLink()">Copy</button>
+      <div class="hs-design-controls">
+        <div class="p1-header hs-panel-header">
+          <div>
+            <div class="ptitle">Gallery & export</div>
+            <div class="psub">Review all variations and export or share.</div>
           </div>
-          <div id="hsShareStatus" style="font-size:12px;color:var(--gray-400)"></div>
+          <div class="p1-header-actions">
+            ${UI.hsLocked ? '' : '<button class="btn sm" onclick="tryGoStep(2)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Variations</button>'}
+            <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
+          </div>
+        </div>
+        <div class="hs-design-controls-body">
+          <div class="hs-stack-section">
+            <div class="rc-title">Selected</div>
+            <div class="hs-gallery-selected" id="hsGallerySelected"></div>
+            <div id="hsGallerySelectedName" style="font-size:13px;font-weight:500;text-align:center;margin-bottom:.5rem;color:var(--gray-600)"></div>
+            <div class="exp-row">
+              <button class="btn sm" id="hsExpPdf" onclick="exportHsPDF()">
+                <i class="fa-solid fa-file-pdf" aria-hidden="true"></i>PDF
+              </button>
+              <button class="btn sm" id="hsExpPng" onclick="exportHsPNG()">
+                <i class="fa-solid fa-download" aria-hidden="true"></i>PNG
+              </button>
+            </div>
+            <button class="btn sm" style="width:100%;justify-content:center" onclick="exportHsAllPNG()">Export all PNG</button>
+          </div>
+          <div class="share-section">
+            <div class="rc-title">Print files</div>
+            <button class="btn sm primary" id="hsExpPrintBtn" style="width:100%;justify-content:center" onclick="downloadHsPrint()"><i class="fa-solid fa-download" aria-hidden="true"></i> Download print sheets (zip)</button>
+            <div id="hsExpPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px"></div>
+          </div>
+          <div class="share-section" id="hsSubmitSection"></div>
+          <div class="share-section" id="hsEmailPrintSheetSection" style="display:${UI.isStaffOrAdmin ? '' : 'none'}">
+            <div class="rc-title">Email PDF sheet link</div>
+            <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openEmailPrintSheetModal()">Email PDF sheet link <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+          </div>
+          <div class="share-section">
+            <div class="rc-title">Share</div>
+            <button class="btn sm primary" onclick="generateHsShareLink()">Generate share link</button>
+            <div class="share-link-box" id="hsShareLinkBox" style="display:none">
+              <input class="share-link-input" id="hsShareLinkInput" readonly>
+              <button class="btn sm" onclick="copyHsShareLink()">Copy</button>
+            </div>
+            <div id="hsShareStatus" style="font-size:12px;color:var(--gray-400)"></div>
+          </div>
         </div>
       </div>
     </div>
 `;
 
   ensureEmailPrintSheetModal();
+  renderHsSubmitSection();
 
   // Build gallery grid
   const grid = document.getElementById('hsGalleryGrid');
@@ -117,6 +132,119 @@ function ensureEmailPrintSheetModal() {
       </div>
     </div>`;
   document.body.appendChild(overlay);
+}
+
+// ── Submit for review ────────────────────────────────────────
+// renderGallery() rebuilds #panel-3's whole innerHTML on every visit, so
+// this sub-render (and its listeners) must be re-run each time too — the
+// draft form values themselves live on UI.hsSubmit* (state.js), not the DOM,
+// so they survive that rebuild.
+function renderHsSubmitSection() {
+  const el = document.getElementById('hsSubmitSection');
+  if (!el) return;
+
+  const status = HS.projectStatus;
+  if (!['draft', 'needs_changes'].includes(status)) {
+    el.innerHTML = `<div class="rc-title">Status</div><div style="font-size:13px;color:var(--gray-600)">${esc(STATUS_LABEL[status] || status)}</div>`;
+    return;
+  }
+
+  if (!HS.hasFlagConfig && !UI.hsCrossSellDismissed) {
+    el.innerHTML = `
+      <div class="rc-title">Also need flags?</div>
+      <div style="font-size:13px;color:var(--gray-600);margin-bottom:10px">You can design tournament flags for this event too, or continue straight to submitting your hole signs.</div>
+      <button type="button" class="btn sm primary" style="width:100%;justify-content:center;margin-bottom:8px" id="hsCrossSellYesBtn">Yes, design flags</button>
+      <button type="button" class="btn sm" style="width:100%;justify-content:center" id="hsCrossSellNoBtn">No, continue to submit</button>`;
+    document.getElementById('hsCrossSellYesBtn').addEventListener('click', () => {
+      window.location.href = `/flags?project=${encodeURIComponent(HS.projectId)}`;
+    });
+    document.getElementById('hsCrossSellNoBtn').addEventListener('click', () => {
+      UI.hsCrossSellDismissed = true;
+      renderHsSubmitSection();
+    });
+    return;
+  }
+
+  const ci = HS.customerInfo || {};
+  const eventRows = [
+    ['Name', ci.event_name ? esc(ci.event_name) : null],
+    ['Course', ci.course_name ? esc(ci.course_name) : null],
+    ['Date', ci.event_date ? esc(formatDate(ci.event_date)) : null],
+  ];
+  const hasEventInfo = eventRows.some(([, v]) => v);
+  const e = UI.hsSubmitErrors;
+
+  el.innerHTML = `
+    <div class="rc-title">Submit for review</div>
+    ${e.submit ? `<div class="submit-error-banner">${esc(e.submit)}</div>` : ''}
+    ${hasEventInfo ? renderRecapSection('Event', eventRows) : ''}
+    ${renderDeadlineCallout(ci.event_date)}
+    ${renderContactShippingFields(UI.hsSubmitContact, e)}
+    ${renderAckItem('deadline', UI.hsSubmitAcks.deadline, ACK_DEADLINE_TEXT)}
+    ${e.ackDeadline ? `<div class="form-error">${esc(e.ackDeadline)}</div>` : ''}
+    <button type="button" class="btn sm primary" style="width:100%;justify-content:center;margin-top:10px" id="hsSubmitForReviewBtn"${UI.hsSubmitting ? ' disabled' : ''}>${UI.hsSubmitting ? 'Submitting…' : 'Submit for review'}</button>`;
+
+  attachContactShippingListeners(el, UI.hsSubmitContact, { onCountryChange: renderHsSubmitSection });
+  attachAckListeners(el, UI.hsSubmitAcks, () => { UI.hsSubmitErrors = {}; renderHsSubmitSection(); });
+  document.getElementById('hsSubmitForReviewBtn')?.addEventListener('click', handleHsSubmitForReview);
+}
+
+async function handleHsSubmitForReview() {
+  const contact = UI.hsSubmitContact;
+  const errors = validateContactShipping(contact);
+  if (!UI.hsSubmitAcks.deadline) errors.ackDeadline = 'Please acknowledge the deadline policy.';
+  if (Object.keys(errors).length) {
+    UI.hsSubmitErrors = errors;
+    renderHsSubmitSection();
+    scrollToFirstError(document.getElementById('hsSubmitSection'));
+    return;
+  }
+  UI.hsSubmitErrors = {};
+  UI.hsSubmitting = true;
+  renderHsSubmitSection();
+
+  try {
+    const info = {
+      ...HS.customerInfo,
+      contact_name: contact.contactName,
+      contact_email: contact.contactEmail,
+      attn: contact.attn !== null && contact.attn !== undefined ? contact.attn : contact.contactName,
+      address_line1: contact.addressLine1,
+      address_line2: contact.addressLine2 || null,
+      city: contact.city,
+      state_province: contact.stateProvince,
+      postal_code: contact.postalCode,
+      country: contact.country,
+    };
+    await upsertCustomerInfo(HS.projectId, info);
+    await submitProjectForReview(HS.projectId);
+    HS.customerInfo = info;
+    HS.projectStatus = 'submitted';
+
+    sendOrderConfirmation({
+      contactName: contact.contactName,
+      contactEmail: contact.contactEmail,
+      courseName: info.course_name || '',
+      eventName: info.event_name || HS.projectName || '',
+      eventDate: info.event_date || '',
+      shipping: {
+        addressLine1: contact.addressLine1,
+        addressLine2: contact.addressLine2 || '',
+        city: contact.city,
+        stateProvince: contact.stateProvince,
+        postalCode: contact.postalCode,
+        country: contact.country,
+      },
+      projectId: HS.projectId,
+    }).catch(err => console.warn('Order confirmation email failed', err));
+
+    window.location.href = `/submitted?project=${encodeURIComponent(HS.projectId)}`;
+  } catch (err) {
+    console.error('Submit for review failed', err);
+    UI.hsSubmitting = false;
+    UI.hsSubmitErrors = { submit: 'We couldn’t finish submitting your project. Please try again — if this keeps happening, contact us directly so we can follow up.' };
+    renderHsSubmitSection();
+  }
 }
 
 window.openEmailPrintSheetModal = async function () {
@@ -683,7 +811,7 @@ window.generateHsShareLink = async function () {
     await saveDraftInternal();
     if (status) status.textContent = 'Generating link…';
     const token = await generateShareToken(HS.projectId);
-    const url = `${window.location.origin}/review.html?token=${token}`;
+    const url = `${window.location.origin}/review?token=${token}`;
     const input = document.getElementById('hsShareLinkInput');
     const box   = document.getElementById('hsShareLinkBox');
     if (input) input.value = url;

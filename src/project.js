@@ -4,9 +4,11 @@ import { requireAuth, isStaffOrAdmin } from './auth.js';
 import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake,
          updateProject, deleteProject, upsertCustomerInfo,
          adminRequestChanges, adminSendProof, adminMarkSentToPrint,
-         listPrintSheets, getPrintSheetDownloadUrl, sendProofReady } from './supabase.js';
+         listPrintSheets, getPrintSheetDownloadUrl, sendProofReady,
+         loadLatestChangeNote } from './supabase.js';
 import { FLAGS } from './data.js';
 import { esc } from './dom-utils.js';
+import { STATUS_LABEL } from './status-labels.js';
 
 const session = await requireAuth();
 const isAdmin = await isStaffOrAdmin(session);
@@ -16,20 +18,11 @@ if (!pid) window.location.href = '/';
 
 const flagCard  = document.getElementById('flagCard');
 const holeCard  = document.getElementById('holeCard');
-flagCard.href  = `/flags.html?project=${pid}`;
-holeCard.href  = `/hole-signs.html?project=${pid}`;
+flagCard.href  = `/flags?project=${pid}`;
+holeCard.href  = `/hole-signs?project=${pid}`;
 
 let _project = null;
 let _intake = null;
-
-const STATUS_LABEL = {
-  draft: 'Draft',
-  submitted: 'Submitted for review',
-  needs_changes: 'Changes requested',
-  proof_sent: 'Proof sent — awaiting client',
-  approved: 'Approved',
-  sent_to_print: 'Sent to print',
-};
 
 async function init() {
   try {
@@ -83,9 +76,9 @@ async function init() {
       renderStatus(_project);
       renderReviewLink(_project);
       loadPrintSheets(pid);
+    } else {
+      renderCustomerStatus(_project, flagCfg, holeCfg);
     }
-    // Customer-facing status/submit UI is a later phase - customers keep
-    // today's hub view unchanged for now.
   } catch (err) {
     console.error('Failed to load project', err);
   }
@@ -105,6 +98,45 @@ function setStatus(elId, cfg, intake) {
   }
 }
 
+// ── Customer status panel (non-admin owners) ─────────────────
+async function renderCustomerStatus(project, flagCfg, holeCfg) {
+  const panel = document.getElementById('customerStatusPanel');
+  panel.style.display = '';
+
+  const pill = document.getElementById('customerStatusPill');
+  pill.textContent = STATUS_LABEL[project.status] || project.status;
+  pill.className = 'status-pill status-' + project.status;
+
+  const body = document.getElementById('customerStatusBody');
+  // Same href either editor's "Choose a tool" card already uses - lands on
+  // whichever design type has content, so they can resume editing and reach
+  // Gallery & export's submit form themselves.
+  const continueHref = flagCfg ? flagCard.href : holeCfg ? holeCard.href : null;
+
+  if (project.status === 'draft') {
+    body.textContent = continueHref
+      ? 'Finish your design, then submit for review from the Gallery & export step when you’re ready.'
+      : 'Choose a tool below to start designing. You’ll be able to submit for review once you have a draft.';
+  } else if (project.status === 'needs_changes') {
+    let note = null;
+    try {
+      note = await loadLatestChangeNote(pid);
+    } catch (err) {
+      console.error('Failed to load change note', err);
+    }
+    const noteText = note?.note ? `"${note.note}"` : 'Changes were requested.';
+    body.innerHTML = `${esc(noteText)}${continueHref ? `<br><a href="${esc(continueHref)}" style="color:var(--accent)">Make your changes →</a>` : ''}`;
+  } else if (project.status === 'submitted') {
+    body.textContent = 'Submitted — our design team will review it shortly.';
+  } else if (project.status === 'proof_sent') {
+    body.textContent = 'We’ve sent your proof for review. We’ll follow up once you’ve responded.';
+  } else if (project.status === 'approved') {
+    body.textContent = 'Approved — your order is being prepared for print.';
+  } else if (project.status === 'sent_to_print') {
+    body.textContent = 'Sent to print.';
+  }
+}
+
 init();
 
 // ── Customer details modal ──────────────────────────────────
@@ -115,18 +147,32 @@ init();
 // including for projects where no order form was ever submitted.
 const customerModal = document.getElementById('customerModal');
 
+// Covers every field the order form collects across Steps 1-3 (event
+// details, contact/shipping, design preferences) so staff can see and correct
+// the full original submission in one place - not just name/address. The one
+// exception is flag_colors: it's a structured {zones,gsTag,gsTagMode} object
+// coming from the color pickers, not a simple scalar this generic text/date/
+// textarea form can edit; see the flag/hole-sign designer for that instead.
 const CUSTOMER_FIELDS = [
   { key: 'event_name', label: 'Event Name', type: 'text' },
+  { key: 'course_name', label: 'Course Name', type: 'text' },
   { key: 'event_date', label: 'Event Date', type: 'date' },
+  { key: 'event_source_url', label: 'Event Site Link', type: 'url' },
   { key: 'contact_name', label: 'Contact Name', type: 'text' },
   { key: 'contact_email', label: 'Contact Email', type: 'email' },
+  { key: 'attn', label: 'ATTN', type: 'text' },
   { key: 'address_line1', label: 'Address Line 1', type: 'text' },
   { key: 'address_line2', label: 'Address Line 2', type: 'text' },
   { key: 'city', label: 'City', type: 'text', pair: true },
   { key: 'state_province', label: 'State / Province', type: 'text', pair: true },
   { key: 'postal_code', label: 'Postal Code', type: 'text', pair: true },
   { key: 'country', label: 'Country', type: 'text', pair: true },
-  { key: 'design_notes', label: 'Notes', type: 'textarea' },
+  { key: 'flag_style', label: 'Flag Style', type: 'text' },
+  { key: 'flag_setup', label: 'Flag Setup', type: 'text' },
+  { key: 'flag_qty', label: 'Quantity', type: 'number' },
+  { key: 'design_notes', label: 'Design Description', type: 'textarea' },
+  { key: 'front_design_notes', label: 'Front Design Notes', type: 'textarea' },
+  { key: 'back_design_notes', label: 'Back Design Notes', type: 'textarea' },
 ];
 
 function fieldHtml(f, value) {
@@ -248,8 +294,10 @@ function renderStatus(project) {
     }));
     actionsEl.appendChild(btn('Send proof to client', window.sendProofToClient, true));
   } else if (project.status === 'needs_changes') {
-    actionsEl.appendChild(document.createTextNode('Waiting on the client to resubmit. '));
-    actionsEl.appendChild(btn('Send proof to client', window.sendProofToClient, true));
+    // No "Send proof to client" here: admin_send_proof() only accepts
+    // 'submitted' as its source status - the client has to resubmit
+    // (submit_project_for_review) before a proof can go out again.
+    actionsEl.appendChild(document.createTextNode('Waiting on the client to resubmit.'));
   } else if (project.status === 'proof_sent') {
     actionsEl.appendChild(btn('Resend proof email', window.resendProofEmail));
   } else if (project.status === 'approved') {
@@ -295,7 +343,7 @@ window.sendProofToClient = async function () {
   try {
     const token = await adminSendProof(pid);
     _project = { ..._project, status: 'proof_sent', share_token: token };
-    const reviewUrl = `${window.location.origin}/review.html?token=${token}`;
+    const reviewUrl = `${window.location.origin}/review?token=${token}`;
     if (_intake?.contact_email) {
       await sendProofReady({
         contactName: _intake.contact_name || '',
@@ -316,7 +364,7 @@ window.sendProofToClient = async function () {
 
 window.resendProofEmail = async function () {
   if (!_project?.share_token) return;
-  const reviewUrl = `${window.location.origin}/review.html?token=${_project.share_token}`;
+  const reviewUrl = `${window.location.origin}/review?token=${_project.share_token}`;
   setReviewPanelStatus('Resending…');
   try {
     await sendProofReady({
@@ -363,7 +411,7 @@ function renderReviewLink(project) {
   }
   emptyEl.style.display = 'none';
   boxEl.style.display = '';
-  document.getElementById('reviewLinkInput').value = `${window.location.origin}/review.html?token=${project.share_token}`;
+  document.getElementById('reviewLinkInput').value = `${window.location.origin}/review?token=${project.share_token}`;
 }
 
 window.copyReviewLink = function () {

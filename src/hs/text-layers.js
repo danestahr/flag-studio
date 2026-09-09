@@ -1,6 +1,7 @@
-import { HS, UI } from './state.js';
+import { HS, UI, HS_FRAME_LAYER_ORDER, getVariationLayer, setVariationLayer } from './state.js';
 import { HS_FONTS, HS_W, HS_H } from '../hole-sign-data.js';
-import { updateStep1Preview, repositionToolbar } from './design.js';
+import { getLogoZone } from '../hole-sign-render.js';
+import { applyAutoWidth, updateStep1Preview, repositionToolbar } from './design.js';
 
 // Returns the active text layers array — draft when editing a variation, global otherwise.
 export function textLayerSource() {
@@ -27,6 +28,7 @@ function doRefresh() {
         const fontFamily = HS_FONTS.find(f => f.id === layer.font)?.family || "'DM Serif Display', serif";
         editor.style.fontFamily = fontFamily;
         editor.style.fontSize = Math.max(8, Math.round(layer.size * sc)) + 'px';
+        editor.dataset.baseSize = layer.size;
         editor.style.color = layer.color;
         editor.style.textAlign = layer.align || 'center';
       }
@@ -41,13 +43,17 @@ function doRefresh() {
 
 window.addTextLayer = function () {
   const layers = textLayerSource();
+  // Match the width of the purple logo placement boundary so a new text box
+  // starts out aligned with it, rather than an arbitrary fraction of HS_W.
+  const state = (HS.editingVarId && HS.editingDraft) ? HS.editingDraft : HS;
+  const lz = getLogoZone(state, state.templateStyle);
   const id = 'tl-' + Date.now();
   layers.push({
     id,
     text: 'Text',
-    x: Math.round(HS_W * 0.1),
+    x: Math.round(lz.x),
     y: Math.round(HS_H * 0.35),
-    w: Math.round(HS_W * 0.8),
+    w: Math.round(lz.w),
     font: 'dm-serif',
     size: 300,
     color: '#000000',
@@ -108,9 +114,10 @@ window.openTextLayerToolbar = function (id, anchorEl) {
       <i class="fa-solid fa-align-right" aria-hidden="true"></i>
     </button>
     <div class="hs-tl-tb-sep"></div>
-    <button class="hs-tl-tb-btn" id="hsTlFrameToggle" title="Move relative to the template's banner/text frame">
-      ${layer.aboveFrame ? '<i class="fa-solid fa-arrow-down"></i> Below Template' : '<i class="fa-solid fa-arrow-up"></i> Above Template'}
-    </button>
+    <button class="hs-tl-tb-btn" id="hsTlLayerToBack" title="Move to back"><i class="fa-solid fa-arrows-down-to-line"></i></button>
+    <button class="hs-tl-tb-btn" id="hsTlLayerDown" title="Send backward"><i class="fa-solid fa-arrow-down"></i></button>
+    <button class="hs-tl-tb-btn" id="hsTlLayerUp" title="Bring forward"><i class="fa-solid fa-arrow-up"></i></button>
+    <button class="hs-tl-tb-btn" id="hsTlLayerToFront" title="Move to front"><i class="fa-solid fa-arrows-up-to-line"></i></button>
     ${layer.dock ? `
     <div class="hs-tl-tb-sep"></div>
     <button class="hs-tl-tb-btn" id="hsTlUndock" title="Pull this layer out of the banner">
@@ -157,15 +164,39 @@ window.openTextLayerToolbar = function (id, anchorEl) {
     doRefresh();
     window.closeTextLayerToolbar();
   });
-  const frameToggleBtn = tb.querySelector('#hsTlFrameToggle');
-  frameToggleBtn.addEventListener('click', () => {
+  // Free text layers are template-owned content — they can move above or
+  // below the rest of the template's own content (banners, static top/bottom
+  // text, template images), but unlike variation content they can never sink
+  // below the background, hence the capped 2-item HS_FRAME_LAYER_ORDER
+  // instead of the 3-item HS_LAYER_ORDER variation logos use.
+  const layerToBackBtn = tb.querySelector('#hsTlLayerToBack');
+  const layerUpBtn = tb.querySelector('#hsTlLayerUp');
+  const layerDownBtn = tb.querySelector('#hsTlLayerDown');
+  const layerToFrontBtn = tb.querySelector('#hsTlLayerToFront');
+  function syncLayerBtns(l) {
+    const idx = HS_FRAME_LAYER_ORDER.indexOf(getVariationLayer(l));
+    layerToBackBtn.disabled = idx <= 0;
+    layerDownBtn.disabled = idx <= 0;
+    layerUpBtn.disabled = idx >= HS_FRAME_LAYER_ORDER.length - 1;
+    layerToFrontBtn.disabled = idx >= HS_FRAME_LAYER_ORDER.length - 1;
+  }
+  function setLayer(tier) {
     const l = textLayerSource().find(x => x.id === id); if (!l) return;
-    l.aboveFrame = !l.aboveFrame;
-    frameToggleBtn.innerHTML = l.aboveFrame
-      ? '<i class="fa-solid fa-arrow-down"></i> Below Template'
-      : '<i class="fa-solid fa-arrow-up"></i> Above Template';
+    setVariationLayer(l, tier);
+    syncLayerBtns(l);
     doRefresh();
+  }
+  layerToBackBtn.addEventListener('click', () => setLayer(HS_FRAME_LAYER_ORDER[0]));
+  layerToFrontBtn.addEventListener('click', () => setLayer(HS_FRAME_LAYER_ORDER[HS_FRAME_LAYER_ORDER.length - 1]));
+  layerUpBtn.addEventListener('click', () => {
+    const idx = HS_FRAME_LAYER_ORDER.indexOf(getVariationLayer(layer));
+    if (idx < HS_FRAME_LAYER_ORDER.length - 1) setLayer(HS_FRAME_LAYER_ORDER[idx + 1]);
   });
+  layerDownBtn.addEventListener('click', () => {
+    const idx = HS_FRAME_LAYER_ORDER.indexOf(getVariationLayer(layer));
+    if (idx > 0) setLayer(HS_FRAME_LAYER_ORDER[idx - 1]);
+  });
+  syncLayerBtns(layer);
   tb.querySelector('[data-del]').addEventListener('click', () => {
     window.removeTextLayer(id);
   });
@@ -175,7 +206,11 @@ window.openTextLayerToolbar = function (id, anchorEl) {
 
   setTimeout(() => {
     const close = ev => {
-      if (ev.target.closest('#hsTlToolbar') || ev.target.closest('.hs-tl-overlay')) return;
+      // Not just `.hs-tl-overlay` — a top/bottom banner zone shares that same
+      // class (to reuse this toolbar's styling, see banner.js), so a plain
+      // class check here would wrongly treat clicking a *different* band as
+      // still being inside this text layer's own overlay and refuse to close.
+      if (ev.target.closest('#hsTlToolbar') || anchorEl.contains(ev.target)) return;
       window.closeTextLayerToolbar();
       UI.activeTextLayerId = null;
       document.querySelectorAll('.hs-tl-overlay').forEach(el => el.classList.remove('selected'));
@@ -218,7 +253,7 @@ document.addEventListener('keydown', e => {
 
 // ── Inline edit mode ──────────────────────────────────────────────────────────
 
-window.enterTextLayerEditMode = function (id, overlay) {
+window.enterTextLayerEditMode = function (id, overlay, { onCommit } = {}) {
   if (overlay.querySelector('.hs-tl-editor-wrap')) return;
   const layer = textLayerSource().find(l => l.id === id);
   if (!layer) return;
@@ -232,7 +267,7 @@ window.enterTextLayerEditMode = function (id, overlay) {
 
   const wrap = document.createElement('div');
   wrap.className = 'hs-tl-editor-wrap';
-  wrap.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.07);';
+  wrap.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;';
 
   const editor = document.createElement('div');
   editor.className = 'hs-tl-editor';
@@ -246,6 +281,7 @@ window.enterTextLayerEditMode = function (id, overlay) {
     `text-align:${layer.align || 'center'};`,
     'line-height:1.1;white-space:pre-wrap;word-break:break-word;cursor:text;',
   ].join('');
+  editor.dataset.baseSize = layer.size;
 
   // Hide the permanent text content div so we only see the contenteditable.
   // No SVG text exists in the preview (it's always stripped via hideTextLayers).
@@ -274,6 +310,14 @@ window.enterTextLayerEditMode = function (id, overlay) {
     // Keep the hidden textDiv in sync so the overlay auto-expands to match
     // the editor content — no explicit height calculation needed.
     if (contentDiv) contentDiv.textContent = layer.text || 'Text';
+    // A collapsed (autoWidth) layer keeps re-fitting its box as the user
+    // types — this editor lives inside a full repaint's early-out (see
+    // doRefresh() above), so nothing else re-fits it live while it's open.
+    if (layer.autoWidth && !layer.dock && parentEl) {
+      applyAutoWidth(layer, parentEl);
+      overlay.style.left  = (layer.x / HS_W * 100).toFixed(4) + '%';
+      overlay.style.width = (layer.w / HS_W * 100).toFixed(4) + '%';
+    }
   });
 
   const commit = () => {
@@ -282,7 +326,8 @@ window.enterTextLayerEditMode = function (id, overlay) {
     if (t) layer.text = t;
     wrap.remove();
     UI.editingTextLayerId = null;
-    if (HS.editingVarId) window._hsRenderVariationPreview?.();
+    if (onCommit) onCommit();
+    else if (HS.editingVarId) window._hsRenderVariationPreview?.();
     else updateStep1Preview();
   };
 
@@ -290,18 +335,38 @@ window.enterTextLayerEditMode = function (id, overlay) {
     // Don't commit if focus moved to the floating toolbar — the user is
     // changing font/color/size while still editing.
     if (e.relatedTarget?.closest?.('#hsTlToolbar')) return;
-    setTimeout(() => {
-      if (document.activeElement?.closest('#hsTlToolbar, .hs-tl-editor-wrap')) return;
-      commit();
-    }, 100);
+    // Commit synchronously, not deferred (see banner.js's matching band-editor
+    // blur handler): a deferred commit's rerender was landing after the user
+    // had already clicked to select something else, clobbering that selection
+    // and forcing a second click before it actually stuck.
+    if (document.activeElement?.closest('#hsTlToolbar, .hs-tl-editor-wrap')) return;
+    commit();
   });
+
+  // Belt-and-suspenders for the blur handler above (see the matching fix on
+  // banner.js's band editor): several other canvas surfaces (a logo's empty
+  // drop zone, a template-logo slot, the background quick-swap zone) aren't
+  // focusable, so clicking them never fires a native blur on this editor at
+  // all — nothing then commits the edit, leaving it (and, for quick-edit,
+  // HS.editingDraft) dangling until something else happens to commit it. A
+  // capture-phase outside click always fires regardless of what the clicked
+  // element's own handler does, so use it as the catch-all commit point.
+  setTimeout(() => {
+    const outsideCommit = ev => {
+      if (ev.target.closest?.('.hs-tl-editor-wrap, #hsTlToolbar')) return;
+      document.removeEventListener('click', outsideCommit, true);
+      commit();
+    };
+    document.addEventListener('click', outsideCommit, true);
+  }, 0);
 
   editor.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
       wrap.remove();
       UI.editingTextLayerId = null;
       if (contentDiv) contentDiv.style.visibility = '';
-      if (HS.editingVarId) window._hsRenderVariationPreview?.();
+      if (onCommit) onCommit();
+      else if (HS.editingVarId) window._hsRenderVariationPreview?.();
       else updateStep1Preview();
     }
     // Enter / Shift+Enter → soft return (contenteditable default behaviour)

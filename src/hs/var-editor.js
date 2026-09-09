@@ -1,11 +1,11 @@
-import { HS, UI, alignBtns, eyedropperBtn, fontSelect, mergeBanner, getEffectiveState, syncAlignBtns } from './state.js';
+import { HS, UI, alignBtns, eyedropperBtn, fontSelect, mergeBanner, getEffectiveState, isVarCustomized, syncAlignBtns } from './state.js';
 import { textLayerSource } from './text-layers.js';
-import { cloneTemplateLogos, loadCustomTemplates, menuRow } from './design.js';
+import { addRow, cloneTemplateLogos, loadCustomTemplates, menuRow } from './design.js';
 import { saveDraftInternal } from './draft.js';
 import { renderBannerSection } from './banner.js';
 import { closeTlSlotToolbar, renderTemplateLogoControls, renderTplSlotBody } from './template-logos.js';
 import { cropSvgToArtwork } from './logo-utils.js';
-import { HS_DEFAULT_TEMPLATES, HS_TEMPLATES, migrateBannerCaptions } from '../hole-sign-data.js';
+import { HS_DEFAULT_TEMPLATES, HS_TEMPLATES, bannerDockSpecsFor } from '../hole-sign-data.js';
 import { escXml } from '../hole-sign-render.js';
 import { renderVarList, renderVarTmplRow } from './variations.js';
 import { renderVariationPreview } from './var-canvas.js';
@@ -25,11 +25,87 @@ export function tlForCompare(tl) {
   };
 }
 
-window.startEditVar = function (id) {
-  const v = HS.variations.find(v => v.id === id);
-  if (!v) return;
-  HS.activeVarId = id;
-  HS.editingVarId = id;
+// Which draft fields each drilled-in section owns, and so which fields its
+// own Save/Cancel/Reset act on. 'template' owns every field below because
+// picking a template (setDraftTmpl) replaces all of them together — the
+// section that triggers that bundle change commits/reverts it as one unit.
+// Sections not listed here (logos/tplSlot/sponsor) have no per-section
+// save/cancel of their own — their content only commits through the
+// top-level Save, same as before this feature existed.
+const HS_VAR_SECTION_FIELDS = {
+  template: ['templateStyle', 'background', 'topText', 'bottomText', 'bannerTop', 'bannerBottom', 'templateLogos'],
+  background: ['background'],
+  bannerTop: ['bannerTop'],
+  bannerBottom: ['bannerBottom'],
+};
+
+function fieldSnapshotEqual(field, a, b) {
+  if (field === 'bannerTop' || field === 'bannerBottom') return JSON.stringify(mergeBanner(a)) === JSON.stringify(mergeBanner(b));
+  if (field === 'templateLogos') return JSON.stringify(tlForCompare(a)) === JSON.stringify(tlForCompare(b));
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Deep-clones one field's value into a plain object this module owns —
+// never the live object a setter (e.g. banner.js's `b.enabled = true`, which
+// mutates bannerSource()'s returned object in place rather than replacing
+// it) still holds a reference to. Anything read into a snapshot or into a
+// "reset to default" without going through this would otherwise silently
+// mutate alongside the very field it was meant to freeze.
+function cloneFieldValue(field, value) {
+  if (field === 'bannerTop' || field === 'bannerBottom') return mergeBanner(value);
+  if (field === 'templateLogos') return cloneTemplateLogos(value);
+  if (field === 'templateStyle') return value;
+  return value ? { ...value } : value;
+}
+
+function draftFieldDefault(field) {
+  const globalVal = field === 'templateStyle' ? HS.templateStyle : HS[field];
+  return cloneFieldValue(field, globalVal);
+}
+
+// Whether any field this section owns currently differs from the project
+// default in the live draft — drives both the section header's Reset button
+// and (indirectly, via the same fields) whether Save would write anything.
+function draftSectionCustomized(key) {
+  const fields = HS_VAR_SECTION_FIELDS[key];
+  if (!fields || !HS.editingDraft) return false;
+  return fields.some(f => !fieldSnapshotEqual(f, HS.editingDraft[f], draftFieldDefault(f)));
+}
+
+// Merges one field's current draft value into v.template — preserving
+// whatever other fields a previous section-level (or the top-level) Save
+// already committed there, instead of replacing the whole object the way a
+// single "apply everything at once" commit used to. Deletes the field's key
+// (and v.template/v.templateId entirely, once empty) when the draft now
+// matches the project default, so a field that's been reset doesn't linger
+// as a no-op override.
+function commitDraftField(v, field) {
+  const d = HS.editingDraft;
+  const draftVal = d[field];
+  const tpl = v.template ? { ...v.template } : {};
+  if (!fieldSnapshotEqual(field, draftVal, draftFieldDefault(field))) {
+    tpl[field] = cloneFieldValue(field, draftVal);
+  } else {
+    delete tpl[field];
+  }
+  if (Object.keys(tpl).length === 0) {
+    delete v.template;
+    delete v.templateId;
+  } else {
+    v.template = tpl;
+    v.templateId = tpl.templateStyle || d.templateStyle || HS.templateStyle;
+  }
+}
+
+// Builds HS.editingDraft from a variation's current effective state (global
+// template + this variation's own overrides flattened together) and points
+// HS.editingVarId/activeVarId at it. Shared by the full pencil-edit flow
+// (startEditVar, below) and the Variations-page "quick edit" click-to-edit
+// affordances (beginQuickEdit, below) — the only difference between the two
+// is whether the full side-panel editor is shown.
+function seedEditingDraft(v) {
+  HS.activeVarId = v.id;
+  HS.editingVarId = v.id;
   const eff = getEffectiveState(v);
   HS.editingDraft = {
     templateStyle: eff.templateStyle,
@@ -49,20 +125,37 @@ window.startEditVar = function (id) {
       }).catch(() => {});
     }
   });
+}
+
+window.startEditVar = function (id) {
+  const v = HS.variations.find(v => v.id === id);
+  if (!v) return;
+  seedEditingDraft(v);
+  UI.hsFullEditorOpen = true;
   UI.tlSelectedIdxs.clear();
   UI.hsVarMenu = null;
   UI.hsVarMenuAnimate = false;
-  closeTlSidePanel();
   closeTlSlotToolbar();
   renderEditor();
   renderVariationPreview();
 };
 
+// Silently begins (or continues) editing `v` without opening the full
+// side-panel editor — used by the Variations-page quick-edit affordances
+// (click a template logo slot / background / text band directly on the
+// canvas) so a single click can write into this variation's draft, ready for
+// applyEditVar() to persist, with no visible panel or Apply step.
+export function beginQuickEdit(v) {
+  if (HS.editingVarId === v.id && HS.editingDraft) return;
+  seedEditingDraft(v);
+}
+
 window.cancelEditVar = function () {
   HS.editingVarId = null;
   HS.editingDraft = null;
+  UI.hsFullEditorOpen = false;
   UI.tlSelectedIdxs.clear();
-  closeTlSidePanel();
+  UI.hsVarMenu = null;
   closeTlSlotToolbar();
   renderVarList();
   renderVariationPreview();
@@ -74,24 +167,12 @@ window.applyEditVar = function () {
   if (!v || !HS.editingDraft) return;
   const d = HS.editingDraft;
 
-  const tpl = {};
-  if (d.templateStyle !== HS.templateStyle) tpl.templateStyle = d.templateStyle;
-  if (JSON.stringify(d.background) !== JSON.stringify(HS.background)) tpl.background = { ...d.background };
-  if (JSON.stringify(d.topText)    !== JSON.stringify(HS.topText))    tpl.topText    = { ...d.topText };
-  if (JSON.stringify(d.bottomText) !== JSON.stringify(HS.bottomText)) tpl.bottomText = { ...d.bottomText };
-  if (JSON.stringify(mergeBanner(d.bannerTop))    !== JSON.stringify(mergeBanner(HS.bannerTop)))    tpl.bannerTop    = mergeBanner(d.bannerTop);
-  if (JSON.stringify(mergeBanner(d.bannerBottom)) !== JSON.stringify(mergeBanner(HS.bannerBottom))) tpl.bannerBottom = mergeBanner(d.bannerBottom);
-  if (JSON.stringify(tlForCompare(d.templateLogos)) !== JSON.stringify(tlForCompare(HS.templateLogos))) {
-    tpl.templateLogos = cloneTemplateLogos(d.templateLogos);
-  }
-
-  if (Object.keys(tpl).length === 0) {
-    delete v.template;
-    delete v.templateId;
-  } else {
-    v.template = tpl;
-    v.templateId = tpl.templateStyle || HS.templateStyle;
-  }
+  // Commits every template-shaped field via the same merge commitDraftField
+  // uses for a single section's own Save — safe to re-run here even for
+  // fields already committed by an earlier per-section Save (or reverted by
+  // that section's own Cancel/Back): the draft's current value already
+  // matches whatever's true, so recommitting it is a no-op.
+  HS_VAR_SECTION_FIELDS.template.forEach(f => commitDraftField(v, f));
 
   if (d.sponsorText?.text?.trim()) {
     v.sponsorText = { ...d.sponsorText };
@@ -108,14 +189,69 @@ window.applyEditVar = function () {
 
   HS.editingVarId = null;
   HS.editingDraft = null;
+  UI.hsFullEditorOpen = false;
   UI.tlSelectedIdxs.clear();
-  closeTlSidePanel();
+  UI.hsVarMenu = null;
   closeTlSlotToolbar();
   renderVarList();
   renderVariationPreview();
   renderVarTmplRow();
   saveDraftInternal().catch(() => {});
 };
+
+// Shared cleanup for the applyQuick* functions below — same as the tail of
+// applyEditVar, minus the parts (tlSelectedIdxs/side-panel closes) that only
+// matter for the full editor, which quick-edit never opens.
+function finishQuickEdit() {
+  HS.editingVarId = null;
+  HS.editingDraft = null;
+  renderVarList();
+  renderVariationPreview();
+  renderVarTmplRow();
+  saveDraftInternal().catch(() => {});
+}
+
+// The three functions below are the quick-edit counterparts to
+// applyEditVar() — used when a canvas click (see beginQuickEdit callers in
+// design.js/banner.js/var-canvas.js) only ever changed one piece of content,
+// never position/layout. Unlike applyEditVar's tpl/textLayers snapshots
+// (freeze the *entire* object the moment anything in it differs, position
+// included — correct for the full editor, where dragging a slot is exactly
+// the kind of intentional position customization that should stick), these
+// write into a small per-field sparse map (v.templateLogoOverrides,
+// v.backgroundOverride, v.textLayerOverrides) that getEffectiveState (see
+// state.js) layers onto whatever templateLogos/background/textLayers
+// resolves to — so a later reposition in the Design step still reaches a
+// variation whose only customization was picking a different image or
+// editing a line of text.
+
+// Commits slot `idx`'s picked image/display settings — not its position —
+// as a per-slot override.
+export function applyQuickLogoSlot(idx) {
+  const v = HS.variations.find(v => v.id === HS.editingVarId);
+  const slot = HS.editingDraft?.templateLogos?.slots?.[idx];
+  if (v && slot) {
+    const { freeX, freeY, freeW, freeH, ...content } = slot;
+    v.templateLogoOverrides = v.templateLogoOverrides || {};
+    v.templateLogoOverrides[idx] = content;
+  }
+  finishQuickEdit();
+}
+
+// Commits the picked background image — not the rest of the background
+// (color, opacity, greyscale, overlay, image position/scale) — as an
+// override.
+// Commits one free text layer's edited text — not its position/size/font/
+// color, and not any other layer — as a per-layer override.
+export function applyQuickTextLayer(layerId) {
+  const v = HS.variations.find(v => v.id === HS.editingVarId);
+  const layer = (HS.editingDraft?.textLayers || []).find(l => l.id === layerId);
+  if (v && layer) {
+    v.textLayerOverrides = v.textLayerOverrides || {};
+    v.textLayerOverrides[layerId] = { text: layer.text };
+  }
+  finishQuickEdit();
+}
 
 window.revertVarOverrides = function () {
   const v = HS.variations.find(v => v.id === HS.editingVarId);
@@ -124,8 +260,12 @@ window.revertVarOverrides = function () {
   delete v.templateId;
   delete v.sponsorText;
   delete v.textLayers;
+  delete v.templateLogoOverrides;
+  delete v.backgroundOverride;
+  delete v.textLayerOverrides;
   HS.editingVarId = null;
   HS.editingDraft = null;
+  UI.hsFullEditorOpen = false;
   renderVarList();
   renderVariationPreview();
   renderVarTmplRow();
@@ -144,15 +284,6 @@ function reseedDraftDockedLayers(sourceLayers) {
   sourceLayers.forEach(spec => {
     draft.textLayers.push({ ...spec, id: 'tl-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7) });
   });
-}
-
-// A template's banner caption specs — either its own `bannerTopTextLayers`/
-// `bannerBottomTextLayers` seed arrays (new-shape templates) or migrated from
-// a legacy `bannerTop.topText`/`subText` pair (older "My templates" entries).
-function bannerDockSpecsFor(tmpl) {
-  const top = Array.isArray(tmpl.bannerTopTextLayers) ? tmpl.bannerTopTextLayers : migrateBannerCaptions(tmpl.bannerTop, 'top');
-  const bottom = Array.isArray(tmpl.bannerBottomTextLayers) ? tmpl.bannerBottomTextLayers : migrateBannerCaptions(tmpl.bannerBottom, 'bottom');
-  return [...top, ...bottom];
 }
 
 window.setDraftTmpl = function (key) {
@@ -192,7 +323,11 @@ window.setDraftTmpl = function (key) {
     HS.editingDraft.templateStyle = key;
   }
   UI.tlSelectedIdxs.clear();
-  closeTlSidePanel();
+  // Swapping templates replaces the whole templateLogos slot list, so a
+  // currently-open per-slot panel would be showing a stale/mismatched slot —
+  // back it out to the slot list level, same as removeTlSlot() does when the
+  // slot it was showing disappears out from under it.
+  if (UI.hsVarMenu === 'tplSlot') UI.hsVarMenu = 'logos';
   closeTlSlotToolbar();
   renderEditor();
   renderVariationPreview();
@@ -347,8 +482,7 @@ export function renderDraftTextControls(which, label, optional) {
 const HS_VAR_MENU_TITLES = {
   template: 'Template', background: 'Background',
   bannerTop: 'Top banner', bannerBottom: 'Bottom banner',
-  top: 'Top text', bottom: 'Bottom text', logos: 'Template logos', sponsor: 'Sponsor text',
-  tplSlot: 'Logo options', textLayers: 'Text layers',
+  logos: 'Template logos', sponsor: 'Sponsor text', tplSlot: 'Logo options',
 };
 
 export function buildVarTemplateSection(d, customs) {
@@ -366,7 +500,6 @@ export function buildVarTemplateSection(d, customs) {
           ${customs.map(t => `<option value="custom:${t.id}">${escXml(t.name)}</option>`).join('')}
         </optgroup>` : ''}
       </select>
-      <button class="hs-editor-link" onclick="setDraftTmpl('__default__')"><i class="fa-solid fa-arrow-rotate-left" aria-hidden="true"></i> Revert to project default</button>
     </div>`;
 }
 
@@ -439,8 +572,129 @@ export function buildVarBackgroundSection(d) {
     </div>`;
 }
 
-window.openHsVarMenu = function (key) { UI.hsVarMenu = key; UI.hsVarMenuAnimate = true; renderEditor(); };
-window.closeHsVarMenu = function ()  { UI.hsVarMenu = null; UI.hsVarMenuAnimate = true; renderEditor(); };
+function buildVarQtySection(v) {
+  const qty = v.qty ?? 1;
+  return `
+    <div class="hs-editor-section">
+      <div class="hs-editor-label">Quantity</div>
+      <div class="qty-stepper">
+        <button class="qty-btn" type="button" onclick="setVarQtyDelta(-1)" aria-label="Decrease quantity"><i class="fa-solid fa-minus" aria-hidden="true"></i></button>
+        <input class="var-qty-input" type="number" min="1" step="1" id="hsVarQtyInput" value="${qty}" onchange="setVarQty(this.value)">
+        <button class="qty-btn" type="button" onclick="setVarQtyDelta(1)" aria-label="Increase quantity"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+      </div>
+    </div>`;
+}
+
+function commitVarQty(next) {
+  const v = HS.variations.find(v => v.id === HS.editingVarId);
+  if (!v) return;
+  v.qty = Math.max(1, next);
+  const input = document.getElementById('hsVarQtyInput');
+  if (input) input.value = v.qty;
+  renderVarList();
+  saveDraftInternal().catch(() => {});
+}
+
+window.setVarQtyDelta = function (delta) {
+  const base = parseInt(document.getElementById('hsVarQtyInput')?.value, 10) || 1;
+  commitVarQty(base + delta);
+};
+
+window.setVarQty = function (val) {
+  commitVarQty(parseInt(val, 10) || 1);
+};
+
+window.openHsVarMenu = function (key) {
+  const fields = HS_VAR_SECTION_FIELDS[key];
+  UI.hsVarSectionSnapshot = (fields && HS.editingDraft)
+    ? { key, values: Object.fromEntries(fields.map(f => [f, cloneFieldValue(f, HS.editingDraft[f])])) }
+    : null;
+  UI.hsVarMenu = key;
+  UI.hsVarMenuAnimate = true;
+  renderEditor();
+};
+window.closeHsVarMenu = function ()  { UI.hsVarMenu = null; UI.hsVarSectionSnapshot = null; UI.hsVarMenuAnimate = true; renderEditor(); };
+
+// Commits this section's own fields into v.template (merging — see
+// commitDraftField) and returns to the main menu list, without touching
+// anything else the draft may be mid-editing in another section.
+window.saveHsVarSection = function () {
+  const key = UI.hsVarMenu;
+  const fields = HS_VAR_SECTION_FIELDS[key];
+  const v = HS.variations.find(v => v.id === HS.editingVarId);
+  if (!fields || !v || !HS.editingDraft) return;
+  fields.forEach(f => commitDraftField(v, f));
+  UI.hsVarSectionSnapshot = null;
+  UI.hsVarMenu = null;
+  UI.hsVarMenuAnimate = true;
+  renderEditor();
+  renderVarList();
+  renderVariationPreview();
+  renderVarTmplRow();
+  saveDraftInternal().catch(() => {});
+};
+
+// Reverts this section's own fields to whatever they were the moment it was
+// opened (see openHsVarMenu's snapshot), discarding only its own in-progress
+// edits, then returns to the main menu list.
+window.cancelHsVarSection = function () {
+  const key = UI.hsVarMenu;
+  const fields = HS_VAR_SECTION_FIELDS[key];
+  const snap = UI.hsVarSectionSnapshot;
+  if (fields && snap?.key === key && HS.editingDraft) {
+    fields.forEach(f => { HS.editingDraft[f] = snap.values[f]; });
+  }
+  UI.hsVarSectionSnapshot = null;
+  UI.hsVarMenu = null;
+  UI.hsVarMenuAnimate = true;
+  renderEditor();
+  renderVariationPreview();
+};
+
+// Resets this section's own fields to the project default, live in the
+// draft — stays in the section (unlike Save/Cancel) so the reset can still
+// be tweaked further before deciding to Save or Cancel. 'template' resets
+// via setDraftTmpl('__default__'), which already covers every field this
+// section owns (and re-renders itself).
+window.resetHsVarSectionField = function () {
+  const key = UI.hsVarMenu;
+  if (key === 'template') { window.setDraftTmpl('__default__'); return; }
+  const fields = HS_VAR_SECTION_FIELDS[key];
+  if (!fields || !HS.editingDraft) return;
+  fields.forEach(f => { HS.editingDraft[f] = draftFieldDefault(f); });
+  renderEditor();
+  renderVariationPreview();
+};
+
+// Most in-section field setters (background color/opacity/overlay, banner
+// style/position, etc. — in this file and banner.js) only call
+// renderVariationPreview() after each edit, not the full renderEditor() —
+// a full re-render would blow away focus/cursor position in whatever hex
+// input or slider the user is mid-edit in. That leaves the section header's
+// Reset link (only shown once the section differs from default) unable to
+// react to those edits the normal way, so patch just that one button in
+// place instead — called from renderVariationPreview() (var-canvas.js)
+// itself, since virtually every such setter already calls that as its
+// common refresh, giving this a free ride on all of them without touching
+// each call site individually.
+export function refreshHsVarSectionReset() {
+  const key = UI.hsVarMenu;
+  if (!HS_VAR_SECTION_FIELDS[key]) return;
+  const titlerow = document.querySelector('#hsVarList .hs-menu-section-titlerow');
+  if (!titlerow) return;
+  const visible = draftSectionCustomized(key);
+  let btn = titlerow.querySelector('.hs-editor-link');
+  if (visible && !btn) {
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'hs-editor-link';
+    btn.textContent = 'Reset';
+    btn.addEventListener('click', () => window.resetHsVarSectionField());
+    titlerow.appendChild(btn);
+  } else if (!visible && btn) {
+    btn.remove();
+  }
+}
 
 // Bridge for template-logos.js to refresh the tplSlot section in the var editor
 // without a circular import.
@@ -457,37 +711,39 @@ export function renderEditor() {
   const d = HS.editingDraft;
   const customs = loadCustomTemplates();
   const activeTmpl = HS_TEMPLATES.find(t => t.id === d.templateStyle) || HS_TEMPLATES[0];
-  const isCustomized = !!(v.template || v.sponsorText);
+  const isCustomized = isVarCustomized(v);
 
-  if ((UI.hsVarMenu === 'top' || UI.hsVarMenu === 'bottom') && !activeTmpl.supportsText) UI.hsVarMenu = null;
   if (UI.hsVarMenu === 'banner') UI.hsVarMenu = 'bannerTop';
 
   let body;
   if (UI.hsVarMenu === null) {
+    // Mirrors renderDesignMenuList() (design.js) exactly — same rows, same
+    // order, same add-vs-drill-in split — so the per-variation editor feels
+    // like the same tool as the Templates step. Content this editor used to
+    // surface as its own sidebar rows (top/bottom text, sponsor text, the
+    // template-logo group settings) is still fully editable, just via
+    // clicking the element directly on canvas instead — see var-canvas.js's
+    // wireCanvasTextEditing/paintTplSlotOverlays, which already run whenever
+    // this editor is open.
     const rows = [];
     rows.push(menuRow('template', 'Template', escXml(activeTmpl.name), 'openHsVarMenu'));
     const bg = d.background;
     const bgHint = `<span class="hs-menu-swatch" style="background:${escXml(bg.color || '#FFFFFF')}"></span>${bg.imageUrl ? ' + Image' : ''}`;
     rows.push(menuRow('background', 'Background', bgHint, 'openHsVarMenu'));
-    rows.push(menuRow('bannerTop',    'Top banner',    d.bannerTop?.enabled    ? 'On' : 'Off', 'openHsVarMenu'));
-    rows.push(menuRow('bannerBottom', 'Bottom banner', d.bannerBottom?.enabled ? 'On' : 'Off', 'openHsVarMenu'));
-    if (activeTmpl.supportsText) {
-      rows.push(menuRow('top',    'Top text',    d.topText.text    ? escXml(d.topText.text)    : 'Empty', 'openHsVarMenu'));
-      rows.push(menuRow('bottom', 'Bottom text', d.bottomText.text ? escXml(d.bottomText.text) : 'Empty', 'openHsVarMenu'));
-    }
-    {
-      const c = d.templateLogos?.count ?? 0;
-      rows.push(menuRow('logos', 'Template logos', c ? `${c} logo${c > 1 ? 's' : ''}` : 'Off', 'openHsVarMenu'));
-    }
-    rows.push(menuRow('sponsor', 'Sponsor text', d.sponsorText?.text ? escXml(d.sponsorText.text) : 'Empty', 'openHsVarMenu'));
-    const tlCount = (d.textLayers || HS.textLayers || []).length;
-    rows.push(menuRow('textLayers', 'Text layers', tlCount ? `${tlCount} layer${tlCount !== 1 ? 's' : ''}` : 'None', 'openHsVarMenu'));
+    rows.push(d.bannerTop?.enabled
+      ? menuRow('bannerTop', 'Top banner', 'On', 'openHsVarMenu', 'fa-window-maximize')
+      : addRow('Top banner', "quickAdd('banner','top')", 'fa-window-maximize'));
+    rows.push(d.bannerBottom?.enabled
+      ? menuRow('bannerBottom', 'Bottom banner', 'On', 'openHsVarMenu', 'fa-window-maximize hs-icon-flip')
+      : addRow('Bottom banner', "quickAdd('banner','bottom')", 'fa-window-maximize hs-icon-flip'));
+    rows.push(addRow('Text', 'addTextLayer()', 'fa-font'));
+    rows.push(addRow('Images', 'addTplImage()', 'fa-image'));
     body = `
+      ${buildVarQtySection(v)}
       <div class="hs-menu-list">${rows.join('')}</div>
       <div class="var-editor-actions">
-        <button class="btn primary" onclick="applyEditVar()">Apply changes</button>
+        <button class="btn primary" onclick="applyEditVar()">Save</button>
         <button class="btn" onclick="cancelEditVar()">Cancel</button>
-        ${isCustomized ? '<button class="btn editor-revert-btn" onclick="revertVarOverrides()">Revert all overrides</button>' : ''}
       </div>`;
   } else {
     let section = '';
@@ -495,25 +751,35 @@ export function renderEditor() {
     else if (UI.hsVarMenu === 'background') section = buildVarBackgroundSection(d);
     else if (UI.hsVarMenu === 'bannerTop')    section = renderBannerSection('top');
     else if (UI.hsVarMenu === 'bannerBottom') section = renderBannerSection('bottom');
-    else if (UI.hsVarMenu === 'top')        section = renderDraftTextControls('top', 'Top text', true);
-    else if (UI.hsVarMenu === 'bottom')     section = renderDraftTextControls('bottom', 'Bottom text', true);
     else if (UI.hsVarMenu === 'logos')      section = renderTemplateLogoControls();
     else if (UI.hsVarMenu === 'tplSlot')   section = `<div class="hs-section">${renderTplSlotBody(UI.hsVarMenuSlotIdx ?? 0)}</div>`;
     else if (UI.hsVarMenu === 'sponsor')    section = renderDraftTextControls('sponsor', 'Sponsor text', true)
       + '<div style="font-size:11px;color:var(--gray-400);margin-top:-8px;margin-bottom:8px;padding:0 2px">Displayed in the logo zone when no logo is set for this variation.</div>';
-    else if (UI.hsVarMenu === 'textLayers') section = `
-      <div class="hs-editor-section">
-        <div class="hs-editor-label">Free text layers</div>
-        <div style="font-size:12px;color:var(--gray-500);margin-bottom:8px">Text layers float freely on the canvas. Click a layer in the preview to select, drag to move, double-click to edit.</div>
-        <button class="btn sm" onclick="addTextLayer()">+ Add text layer</button>
-      </div>`;
-    const backFn = UI.hsVarMenu === 'tplSlot' ? "openHsVarMenu('logos')" : 'closeHsVarMenu()';
+    // Only Template/Background/Top banner/Bottom banner get their own
+    // Save/Cancel/Reset (see HS_VAR_SECTION_FIELDS) — Back on those cancels
+    // (reverts to the section's own entry snapshot) exactly like the button
+    // does, so there's one consistent way to leave without saving. The other
+    // sections (logos/tplSlot/sponsor) keep plain navigation: their content
+    // only ever commits through the top-level Save.
+    const hasSectionSaveCancel = !!HS_VAR_SECTION_FIELDS[UI.hsVarMenu];
+    const backFn = UI.hsVarMenu === 'tplSlot' ? "openHsVarMenu('logos')"
+      : hasSectionSaveCancel ? 'cancelHsVarSection()'
+      : 'closeHsVarMenu()';
+    const sectionResetVisible = hasSectionSaveCancel && draftSectionCustomized(UI.hsVarMenu);
     body = `
       <div class="hs-menu-section-header">
         <button class="hs-menu-back" onclick="${backFn}"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
-        <span class="hs-menu-section-title">${HS_VAR_MENU_TITLES[UI.hsVarMenu] || ''}</span>
+        <div class="hs-menu-section-titlerow">
+          <span class="hs-menu-section-title">${HS_VAR_MENU_TITLES[UI.hsVarMenu] || ''}</span>
+          ${sectionResetVisible ? '<button class="hs-editor-link" onclick="resetHsVarSectionField()">Reset</button>' : ''}
+        </div>
       </div>
-      ${section}`;
+      ${section}
+      ${hasSectionSaveCancel ? `
+      <div class="var-editor-actions">
+        <button class="btn primary" onclick="saveHsVarSection()">Save</button>
+        <button class="btn" onclick="cancelHsVarSection()">Cancel</button>
+      </div>` : ''}`;
   }
 
   const animClass = UI.hsVarMenuAnimate ? ' hs-controls-enter' : '';
@@ -523,7 +789,10 @@ export function renderEditor() {
     <div class="var-editor">
       <div class="var-editor-header">
         <div class="var-editor-title">Editing: ${escXml(v.name)}</div>
-        <button class="vbtn" title="Cancel" aria-label="Cancel" onclick="cancelEditVar()"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+        <div class="var-editor-header-actions">
+          ${isCustomized ? '<button class="hs-editor-link" onclick="revertVarOverrides()">Reset</button>' : ''}
+          <button class="vbtn" title="Cancel" aria-label="Cancel" onclick="cancelEditVar()"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+        </div>
       </div>
       <div class="hs-editor-body${animClass}">${body}</div>
     </div>`;

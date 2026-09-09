@@ -1,10 +1,10 @@
 import { HS, UI, defaultCaptionsEdited, mergeBanner } from './state.js';
-import { renderStep1, updateStep1Preview } from './design.js';
+import { renderStep1, updateStep1Preview, applyBuiltInDefaults, flushCustomTemplateForkSave } from './design.js';
 import { renderStep2, renderVarList } from './variations.js';
-import { cropSvgToArtwork } from './logo-utils.js';
+import { cropSvgToArtwork, migrateVariationLogos } from './logo-utils.js';
 import { saveDraftInternal } from './draft.js';
-import { emptyTemplateLogos, migrateBannerCaptions } from '../hole-sign-data.js';
-import { getFeedback, loadHoleSignConfig, loadLogosForProject, loadOrderIntake, loadProject, supabase } from '../supabase.js';
+import { emptyTemplateLogos, migrateBannerCaptions, HS_TEMPLATES, HS_DEFAULT_TEMPLATES } from '../hole-sign-data.js';
+import { getFeedback, loadFlagConfig, loadHoleSignConfig, loadLogosForProject, loadOrderIntake, loadProject, supabase } from '../supabase.js';
 import { requireAuth } from '../auth.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 
@@ -19,30 +19,71 @@ export async function init() {
   if (!projectId) { window.location.href = '/'; return; }
   HS.projectId = projectId;
 
-  renderSidebar(document.getElementById('sidebar'), {
-    projectType: 'Hole Signs',
-    activeStep: 1,
-    customerSection: true,
-    projectId,
-    steps: [
-      { id: 'navDesign', label: 'Design', desc: 'Background & text', onClick: () => window.goStep(1) },
-      { id: 'navVariations', label: 'Variations', desc: 'Sponsor logos', onClick: () => window.goStep(2) },
-      { id: 'navGallery', label: 'Gallery & export', desc: 'Review & download', onClick: () => window.goStep(3) },
-    ],
-  });
-
   try {
-    const [project, hsCfg, logos] = await Promise.all([
+    const [project, hsCfg, logos, flagCfg] = await Promise.all([
       loadProject(projectId),
       loadHoleSignConfig(projectId),
       loadLogosForProject(projectId),
+      loadFlagConfig(projectId).catch(() => null),
     ]);
 
     HS.projectName = project.name || '';
+    HS.projectStatus = project.status;
+    HS.customerInfo = project.customer_info || {};
+    HS.hasFlagConfig = !!flagCfg;
     HS.library = logos;
 
+    // Customers can only edit while draft/needs_changes - once the project
+    // is submitted/under review/approved, Gallery & export stays viewable
+    // but Design/Variations are off limits (see goStep()). Staff/admin are
+    // never blocked. UI-convenience only - RLS is the real boundary.
+    UI.hsLocked = !UI.isStaffOrAdmin && !['draft', 'needs_changes'].includes(HS.projectStatus);
+
+    renderSidebar(document.getElementById('sidebar'), {
+      projectType: 'Hole Signs',
+      activeStep: 1,
+      customerSection: true,
+      projectId,
+      steps: [
+        { id: 'navDesign', label: 'Templates', desc: 'Background & text', ...(UI.hsLocked ? {} : { onClick: () => window.goStep(1) }) },
+        { id: 'navVariations', label: 'Variations', desc: 'Sponsor logos', ...(UI.hsLocked ? {} : { onClick: () => window.goStep(2) }) },
+        { id: 'navGallery', label: 'Gallery & export', desc: 'Review & download', onClick: () => window.goStep(3) },
+      ],
+    });
+    if (UI.hsLocked) {
+      ['navDesign', 'navVariations'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.cssText += 'opacity:.45;cursor:default';
+      });
+    }
+
+    const ci = HS.customerInfo;
+    UI.hsSubmitContact = {
+      contactName: ci.contact_name || '',
+      contactEmail: ci.contact_email || '',
+      attn: ci.attn ?? null,
+      country: ci.country || 'US',
+      addressLine1: ci.address_line1 || '',
+      addressLine2: ci.address_line2 || '',
+      city: ci.city || '',
+      stateProvince: ci.state_province || '',
+      postalCode: ci.postal_code || '',
+    };
+
     if (!hsCfg) {
-      UI.hsOnboarding = true;
+      // Arrived from the public template gallery / event-info step with a
+      // template already chosen there (?template=<id>) - skip the in-app
+      // onboarding picker and apply it directly, same as clicking that card
+      // would (pickOnboardingTemplate/pickOnboardingDefaultTemplate below).
+      const templateParam = new URLSearchParams(window.location.search).get('template');
+      if (templateParam && HS_TEMPLATES.some(t => t.id === templateParam)) {
+        HS.templateStyle = templateParam;
+        applyBuiltInDefaults();
+      } else if (templateParam && HS_DEFAULT_TEMPLATES.some(t => t.id === templateParam)) {
+        window.applyDefaultTemplate(templateParam);
+      } else {
+        UI.hsOnboarding = true;
+      }
     }
 
     if (hsCfg) {
@@ -88,19 +129,24 @@ export async function init() {
         HS.variations = hsCfg.variations;
         HS.variations.forEach(v => {
           if (!v.templateId) v.templateId = HS.templateStyle;
-          if (v.logoId && !v.logoSrc) {
-            const lib = HS.library.find(l => l.id === v.logoId);
-            if (lib) v.logoSrc = lib.src;
-          }
-          // Clear any persisted blob URL — blob URLs don't survive reload.
-          // The renderer will fall back to v.logoSrc (the durable public URL)
-          // until the async re-crop below resolves.
-          v.logoSrcTight = undefined;
-          if (v.logoSrc && v.logoArtworkBounds) {
-            cropSvgToArtwork(v.logoSrc, v.logoArtworkBounds).then(tight => {
-              if (tight) { v.logoSrcTight = tight.url; v.logoAspect = tight.aspect; }
-            }).catch(() => {});
-          }
+          // Old saved projects still have the single-logo shape — fold it
+          // into a one-element `logos` array before anything else touches it.
+          migrateVariationLogos(v);
+          (v.logos || []).forEach(layer => {
+            if (layer.logoId && !layer.logoSrc) {
+              const lib = HS.library.find(l => l.id === layer.logoId);
+              if (lib) layer.logoSrc = lib.src;
+            }
+            // Clear any persisted blob URL — blob URLs don't survive reload.
+            // The renderer will fall back to layer.logoSrc (the durable public
+            // URL) until the async re-crop below resolves.
+            layer.logoSrcTight = undefined;
+            if (layer.logoSrc && layer.logoArtworkBounds) {
+              cropSvgToArtwork(layer.logoSrc, layer.logoArtworkBounds).then(tight => {
+                if (tight) { layer.logoSrcTight = tight.url; layer.logoAspect = tight.aspect; }
+              }).catch(() => {});
+            }
+          });
           // Same legacy banner-caption migration as the global config above,
           // scoped to this variation's own override. Falls back to a clone of
           // the global textLayers array if the variation doesn't have its own
@@ -158,7 +204,7 @@ export async function init() {
   }
 
   updateSidebar();
-  goStep(1);
+  goStep(UI.hsLocked ? 3 : 1);
 }
 
 export function renderCustomerSection(intake) {
@@ -193,7 +239,9 @@ export function renderCustomerSection(intake) {
           <span class="cs-value">${intake.flag_setup === 'different' ? 'Different front &amp; back' : 'Same front &amp; back'}</span>
         </div>
         ${colors.length ? `<div class="cs-row"><span class="cs-label">Colors</span><div class="cs-colors">${colors.map(c => `<div class="cs-swatch" style="background:${escHtml(c.hex || c)}" title="${escHtml(c.name || c)}"></div>`).join('')}</div></div>` : ''}
-        ${intake.design_notes ? `<div class="cs-row"><span class="cs-label">Notes</span><span class="cs-notes">${escHtml(intake.design_notes)}</span></div>` : ''}
+        ${intake.design_notes ? `<div class="cs-row"><span class="cs-label">Design Description</span><span class="cs-notes">${escHtml(intake.design_notes)}</span></div>` : ''}
+        ${intake.front_design_notes ? `<div class="cs-row"><span class="cs-label">Front Notes</span><span class="cs-notes">${escHtml(intake.front_design_notes)}</span></div>` : ''}
+        ${intake.back_design_notes ? `<div class="cs-row"><span class="cs-label">Back Notes</span><span class="cs-notes">${escHtml(intake.back_design_notes)}</span></div>` : ''}
       </div>
     </div>`;
   el.style.display = '';
@@ -203,8 +251,10 @@ export function renderCustomerSection(intake) {
 let _hsMaxStep = 1;
 
 export function goStep(n) {
+  if (UI.hsLocked && n !== 3) n = 3;
   _hsMaxStep = Math.max(_hsMaxStep, n);
-  if (HS.projectId && !UI.hsOnboarding) saveDraftInternal().catch(() => {});
+  flushCustomTemplateForkSave();
+  if (HS.projectId && !UI.hsOnboarding && !UI.hsLocked) saveDraftInternal().catch(() => {});
 
   document.querySelectorAll('.panel').forEach((p, i) => p.classList.toggle('visible', i === n - 1));
   document.querySelectorAll('.step-item').forEach((s, i) => {

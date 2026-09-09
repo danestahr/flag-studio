@@ -1,4 +1,4 @@
-import { HS, UI, getEffectiveState } from './state.js';
+import { HS, UI, getEffectiveState, getVariationLayer } from './state.js';
 import { renderVarList } from './variations.js';
 import { renderVariationPreview } from './var-canvas.js';
 import { getLogoZone } from '../hole-sign-render.js';
@@ -82,41 +82,158 @@ export async function cropSvgToArtwork(src, ab) {
   } catch { return null; }
 }
 
-// Detect bounds, crop SVG viewBox, store tight src + aspect on variation
-export async function prepareLogo(variation, src) {
+// If a variation still carries the old single-logo fields (from before
+// sponsor logos became a per-variation array — see var-canvas.js), fold them
+// into a one-element `logos` array and drop the legacy fields. Mirrors
+// flags' own `v.assignment` → `v.logos` migration (src/flags/variations.js).
+export function migrateVariationLogos(v) {
+  if (!v || v.logos !== undefined) return;
+  if (v.logoSrc) {
+    v.logos = [{
+      id: crypto.randomUUID(),
+      logoId: v.logoId ?? null,
+      logoSrc: v.logoSrc,
+      logoSrcTight: v.logoSrcTight,
+      logoAspect: v.logoAspect,
+      logoArtworkBounds: v.logoArtworkBounds,
+      x: v.logoData?.x ?? 50, y: v.logoData?.y ?? 50, w: v.logoData?.w ?? 90,
+      aboveFrame: !!v.aboveFrame,
+      belowBackground: !!v.belowBackground,
+    }];
+  } else {
+    v.logos = [];
+  }
+  delete v.logoId; delete v.logoSrc; delete v.logoSrcTight;
+  delete v.logoAspect; delete v.logoArtworkBounds; delete v.logoData;
+}
+
+// Detect bounds, crop SVG viewBox, store tight src + aspect on one logo layer
+export async function prepareLogo(layer, src) {
   const ab = await detectArtworkBounds(src);
-  variation.logoArtworkBounds = ab;
+  layer.logoArtworkBounds = ab;
   if (!ab) return;
   const tight = await cropSvgToArtwork(src, ab);
   if (tight) {
-    if (variation.logoSrcTight?.startsWith('blob:')) URL.revokeObjectURL(variation.logoSrcTight);
-    variation.logoSrcTight = tight.url;
-    variation.logoAspect   = tight.aspect;
+    if (layer.logoSrcTight?.startsWith('blob:')) URL.revokeObjectURL(layer.logoSrcTight);
+    layer.logoSrcTight = tight.url;
+    layer.logoAspect   = tight.aspect;
   } else {
     // Raster fallback: compute actual artwork aspect from canvas bounds + natural dimensions.
     // ab.w and ab.h are fractions of natural width and height respectively (canvas was square
     // but fractions map 1:1 to natural coords), so artwork pixel dims are ab.w*natW × ab.h*natH.
     const artW = ab.w * ab.natW;
     const artH = ab.h * ab.natH;
-    variation.logoAspect = artW > 0 ? artH / artW : 1;
+    layer.logoAspect = artW > 0 ? artH / artW : 1;
   }
 }
 
-export function applyFillToVariation(variation) {
+export function applyFillToVariation(variation, layer) {
   const lz = getLogoZone(getEffectiveState(variation));
-  const aspect = variation.logoAspect ?? 1;
+  const aspect = layer.logoAspect ?? 1;
   const byHeight = 100 * (lz.h / lz.w) / aspect;
   const newW = Math.min(100, byHeight) * 0.97;
-  if (!variation.logoData) variation.logoData = { x: 50, y: 50, w: 90 };
-  variation.logoData.w = Math.round(newW * 10) / 10;
-  variation.logoData.x = 50;
-  variation.logoData.y = 50;
+  layer.w = Math.round(newW * 10) / 10;
+  layer.x = 50;
+  layer.y = 50;
+}
+
+// Pushes a new logo layer onto `variation.logos` and resolves once it's fully
+// prepared (or failed) — the caller should render right after calling this
+// (before awaiting) to show the pushed layer's loading spinner (`layer.loading`,
+// see var-canvas.js), then render again once the returned promise settles.
+// Always ADDS a layer — dragging a logo onto a variation never overwrites one
+// already there; only the toolbar's explicit Replace/Remove BG mutate a
+// specific *selected* layer in place. `isFullGraphic` templates are the one
+// exception: they show a single full-bleed image with no way to usefully
+// address more than one, so there a drop replaces the sole layer instead.
+export async function addLogoLayer(variation, logo, { isFullGraphic = false } = {}) {
+  delete variation.sponsorText;
+  if (isFullGraphic) variation.logos.length = 0;
+  const idx = variation.logos.length;
+  const layer = {
+    id: crypto.randomUUID(), logoId: logo.id, logoSrc: logo.src,
+    x: 50, y: 50, w: isFullGraphic ? 100 : 90,
+    aboveFrame: false, belowBackground: false, loading: true,
+  };
+  variation.logos.push(layer);
+  try {
+    await prepareLogo(layer, logo.src);
+    if (!isFullGraphic) {
+      applyFillToVariation(variation, layer);
+      // Cascade each additional layer a bit off-center so it doesn't land
+      // perfectly on top of the ones already there.
+      if (idx > 0) {
+        const cascade = Math.min(idx, 6) * 5;
+        layer.x = Math.min(85, 50 + cascade);
+        layer.y = Math.min(85, 50 + cascade);
+      }
+    }
+  } finally {
+    delete layer.loading;
+  }
+  return layer;
+}
+
+// Resolves the logo layer currently selected on the canvas (see
+// UI.hsActiveZone.layerId, set in var-canvas.js), or null if none/not a logo.
+export function activeLogoLayer() {
+  const z = UI.hsActiveZone;
+  if (!z?.variation || !z.layerId) return null;
+  return z.variation.logos?.find(l => l.id === z.layerId) || null;
+}
+
+// Multiple logos in one variation can share a tier (below-bg/below-frame/
+// above-frame — see HS_LAYER_ORDER in state.js); paint order within a shared
+// tier is v.logos array order (hole-sign-render.js's `(variation.logos ||
+// []).forEach`, and the matching DOM append order in var-canvas.js), so
+// reordering within a tier means swapping array position. Nearest same-tier
+// sibling one step forward (dir=1) or backward (dir=-1) from `layer`, or -1
+// if none — used by var-toolbar.js's arrange buttons to decide whether a
+// step swaps a sibling or crosses into the next/previous global tier.
+function sameTierSiblingIndex(v, layer, dir) {
+  const list = v?.logos || [];
+  const idx = list.indexOf(layer);
+  if (idx < 0) return -1;
+  const tier = getVariationLayer(layer);
+  for (let i = idx + dir; i >= 0 && i < list.length; i += dir) {
+    if (getVariationLayer(list[i]) === tier) return i;
+  }
+  return -1;
+}
+
+export function hasSiblingInDirection(v, layer, dir) {
+  return sameTierSiblingIndex(v, layer, dir) >= 0;
+}
+
+// Swaps `layer` with its nearest same-tier sibling one step forward/backward.
+// Returns true if a swap happened (false when there's no such sibling).
+export function swapLogoWithSibling(v, layer, dir) {
+  const list = v?.logos || [];
+  const idx = list.indexOf(layer);
+  const siblingIdx = sameTierSiblingIndex(v, layer, dir);
+  if (idx < 0 || siblingIdx < 0) return false;
+  [list[idx], list[siblingIdx]] = [list[siblingIdx], list[idx]];
+  return true;
+}
+
+// Moves `layer` to the absolute front/back of v.logos — paired with setting
+// its tier to the top/bottom in HS_LAYER_ORDER, so "move to front"/"move to
+// back" land it unambiguously frontmost/backmost even among same-tier
+// siblings, not just "whichever tier this is."
+export function moveLogoToEdge(v, layer, edge) {
+  const list = v?.logos || [];
+  const idx = list.indexOf(layer);
+  if (idx < 0) return;
+  list.splice(idx, 1);
+  if (edge === 'front') list.push(layer);
+  else list.unshift(layer);
 }
 
 export function fillHsLogo() {
   const variation = UI.hsActiveZone?.variation;
-  if (!variation?.logoSrc) return;
-  applyFillToVariation(variation);
+  const layer = activeLogoLayer();
+  if (!layer) return;
+  applyFillToVariation(variation, layer);
   hideHsToolbar();
   renderVarList();
   renderVariationPreview();

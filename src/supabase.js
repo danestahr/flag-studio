@@ -49,7 +49,7 @@ export async function signUp(email, password, { firstName, lastName } = {}) {
 
 export async function resetPasswordForEmail(email) {
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${window.location.origin}/reset-password.html`,
+    redirectTo: `${window.location.origin}/reset-password`,
   });
   if (error) throw error;
 }
@@ -100,10 +100,13 @@ export async function updateMyEmail(newEmail) {
 }
 
 // ── Projects ──────────────────────────────────────────────
-export async function createProject(name = '') {
+// customerInfo is optional so this stays a one-statement insert (never a
+// bare row followed by an update) when the caller already has event info to
+// save - see event-info.js, the only caller that passes it today.
+export async function createProject(name = '', customerInfo = null) {
   const { data, error } = await supabase
     .from('projects')
-    .insert({ name: name || null })
+    .insert({ name: name || null, ...(customerInfo ? { customer_info: customerInfo } : {}) })
     .select('id')
     .single();
   if (error) throw error;
@@ -139,10 +142,10 @@ export async function getMyRole(userId) {
 // unscoped select as an authenticated customer would also return every other
 // customer's ever-shared project. Staff/admin stay unscoped (RLS already
 // grants them everything via is_staff_or_admin()).
-export async function listProjects({ userId, role, cursor = null, pageSize = 30, q = '' } = {}) {
+export async function listProjects({ userId, role, cursor = null, pageSize = 30, q = '', status = '' } = {}) {
   let query = supabase
     .from('projects')
-    .select(`id, name, status, updated_at, created_by, profiles(email, first_name, last_name), flag_config(id, flag_id), hole_sign_config(id, template_style)`)
+    .select(`id, name, status, updated_at, created_by, customer_info, profiles(email, first_name, last_name), flag_config(id, flag_id), hole_sign_config(id, template_style)`)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(pageSize);
@@ -153,6 +156,9 @@ export async function listProjects({ userId, role, cursor = null, pageSize = 30,
   if (q) {
     const escaped = q.replace(/[%_\\]/g, (m) => `\\${m}`);
     query = query.ilike('name', `%${escaped}%`);
+  }
+  if (status) {
+    query = query.eq('status', status);
   }
   if (cursor) {
     query = query.or(`updated_at.lt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.lt.${cursor.id})`);
@@ -189,6 +195,11 @@ export async function deleteProject(projectId) {
     const { error: storageErr } = await supabase.storage.from('flag-logos').remove(logoPaths);
     if (storageErr) throw storageErr;
   }
+
+  // Not tracked in project_logos (it's an order-confirmation-email preview,
+  // not a customer logo — see uploadFlagPreview), so delete_project() doesn't
+  // know about it; best-effort clean up here instead of leaving it orphaned.
+  await supabase.storage.from('flag-logos').remove([`${projectId}/flag-preview.png`]).catch(() => {});
 }
 
 // Print-quality ceiling for a logo placed on a flag/sign — comfortably above
@@ -245,6 +256,26 @@ export async function uploadLogo(projectId, file) {
   if (error) throw error;
 
   return { id: data.id, name: data.name, src: publicUrl, storagePath: path };
+}
+
+// Renders a one-off PNG of the flag design the customer picked in the order
+// intake flow (order.js's rasterizeFlagPreviewPng), so send-order-confirmation
+// — a Deno edge function with no DOM/canvas — can embed it as a plain <img>
+// without having to render anything itself. Reuses the flag-logos bucket
+// (already public and anon-writable from this same anonymous flow) instead of
+// adding a new bucket; upsert:true so a retried submit overwrites cleanly.
+// Deliberately not inserted into project_logos — it's not a customer logo.
+export async function uploadFlagPreview(projectId, blob) {
+  const path = `${projectId}/flag-preview.png`;
+  const { error: uploadError } = await supabase.storage
+    .from('flag-logos')
+    .upload(path, blob, { upsert: true, contentType: 'image/png' });
+  if (uploadError) throw uploadError;
+
+  const { data: { publicUrl } } = supabase.storage
+    .from('flag-logos')
+    .getPublicUrl(path);
+  return publicUrl;
 }
 
 export async function loadLogosForProject(projectId, client = supabase) {
@@ -433,6 +464,23 @@ export async function adminMarkSentToPrint(projectId, storagePath = null, note =
   if (error) throw error;
 }
 
+// Most recent reason a project was kicked back to needs_changes - shown to
+// the owner on project.html. Owners can read their own project's
+// admin_actions rows (see "owners can read own project admin_actions" RLS
+// policy); note can be null if the actor didn't leave one.
+export async function loadLatestChangeNote(projectId) {
+  const { data, error } = await supabase
+    .from('admin_actions')
+    .select('note, created_at, action')
+    .eq('project_id', projectId)
+    .in('action', ['admin_request_changes', 'client_reject_proof'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
 // ── Order intake ──────────────────────────────────────────
 export async function loadOrderIntake(projectId) {
   const { data, error } = await supabase
@@ -518,6 +566,26 @@ async function callEdgeFunction(name, body) {
 
 export async function sendOrderConfirmation(payload) {
   return callEdgeFunction('send-order-confirmation', payload);
+}
+
+// Given a GolfStatus event page URL, returns { eventName, courseName,
+// eventDate, logoBase64, logoContentType } (nulls for whatever's missing) —
+// see supabase/functions/sync-event-info for the GolfStatus API details.
+// Unwraps the edge function's { error } body into a plain Error message
+// where possible, so callers can show it directly rather than
+// callEdgeFunction's generic "Edge function X failed: <raw body>" text.
+export async function syncEventInfo(url) {
+  try {
+    return await callEdgeFunction('sync-event-info', { url });
+  } catch (err) {
+    const prefix = 'Edge function sync-event-info failed: ';
+    if (err.message?.startsWith(prefix)) {
+      let parsed = null;
+      try { parsed = JSON.parse(err.message.slice(prefix.length)); } catch { /* not JSON, fall through */ }
+      if (parsed?.error) throw new Error(parsed.error);
+    }
+    throw err;
+  }
 }
 
 export async function sendProofReady(payload) {

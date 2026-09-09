@@ -29,6 +29,12 @@
   --accent: #232323; --accent-hover: #3E3E3E; --accent-contrast: #FFFFFF;
   --accent-tint: rgba(35,35,35,.06);
 
+  /* Toggle switch "on" state — a fixed cyan rather than --accent, since the
+     switch thumb is always a plain white circle: in dark mode --accent
+     becomes near-white too, so the thumb nearly disappears against the
+     track. Not theme-branched, since the white thumb doesn't change either. */
+  --toggle-on: #0E7490;
+
   --r: 10px; --rl: 16px;
 }
 
@@ -45,7 +51,7 @@
 }
 body { font-family:'Proxima Nova', 'DM Sans', sans-serif; background:var(--gray-50); color:var(--black); min-height:100vh; font-size:15px; line-height:1.6; }
 
-header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
+header { background:var(--chrome-bg); padding:0 1.5rem; height:80px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
 .sign-out-btn { background:transparent; border:1px solid rgba(255,255,255,.35); color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; padding:5px 14px; border-radius:20px; cursor:pointer; transition:background .15s,color .15s; }
 .sign-out-btn:hover { background:rgba(255,255,255,.12); color:white; }
 .account-avatar { width:30px; height:30px; border-radius:50%; background:var(--gold); color:#1B1B18; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; text-decoration:none; font-family:'DM Sans',sans-serif; flex-shrink:0; transition:opacity .15s; }
@@ -57,9 +63,11 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 
 .back-link { color:rgba(255,255,255,.6); font-size:13px; text-decoration:none; transition:color .15s; }
 .back-link:hover { color:var(--chrome-text); }
+.sidebar-back-link { display:flex; align-items:center; gap:7px; padding:1rem 1.5rem 0; color:var(--gray-400); font-size:12px; text-decoration:none; transition:color .15s; }
+.sidebar-back-link:hover { color:var(--gray-600); }
 
-.layout { display:grid; grid-template-columns:300px 1fr; height:calc(100vh - 80px); overflow:hidden; }
-.sidebar { background:var(--white); border-right:1px solid var(--gray-100); display:flex; flex-direction:column; height:100%; }
+.layout { display:grid; grid-template-columns:var(--sidebar-w, 240px) 1fr; height:calc(100vh - 80px); overflow:hidden; transition:grid-template-columns .18s ease; }
+.sidebar { background:var(--white); border-right:1px solid var(--gray-100); display:flex; flex-direction:column; height:100%; position:relative; min-width:0; }
 /* .main no longer scrolls — it's exactly one viewport tall and clips.
    Scrolling is confined to individual components inside each panel (the
    canvas/list side-panels below, sized live by fitCanvas/fitSidePanel in
@@ -80,6 +88,23 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 .step-item.done .step-label { color:var(--gray-400); }
 .step-desc { font-size:12px; color:var(--gray-400); line-height:1.3; }
 .sdivider { height:1px; background:var(--gray-100); margin:1rem 1.5rem; }
+
+.sidebar-header { position:relative; }
+.sidebar-collapse-btn { position:absolute; top:50%; right:14px; transform:translateY(-50%); width:30px; height:30px; border-radius:50%; border:1.5px solid var(--gray-200); background:var(--white); color:var(--gray-400); display:flex; align-items:center; justify-content:center; font-size:12px; cursor:pointer; transition:all .15s; z-index:2; }
+.sidebar-collapse-btn:hover { background:var(--gray-50); color:var(--gray-600); }
+/* Collapsed rail: numbers only, real estate handed back to the canvas via --sidebar-w. */
+.sidebar.collapsed { overflow:hidden; }
+/* .sidebar-id (and with it the .sidebar-header box the button centers against)
+   is hidden below, collapsing .sidebar-header to zero height — pin the button
+   back to a fixed top instead of the now-meaningless 50%. */
+.sidebar.collapsed .sidebar-collapse-btn { top:14px; right:50%; transform:translateX(50%); }
+.sidebar.collapsed .sidebar-id,
+.sidebar.collapsed .sdivider,
+.sidebar.collapsed .sidebar-back-link,
+.sidebar.collapsed #customerSection { display:none; }
+.sidebar.collapsed .steps-nav { padding:52px .5rem 0; }
+.sidebar.collapsed .step-item { justify-content:center; padding:10px 0; gap:0; }
+.sidebar.collapsed .step-text { display:none; }
 .ssummary { padding:0 1.5rem 1.5rem; flex:1; }
 .stitle { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.08em; color:var(--gray-400); margin-bottom:10px; }
 .srow { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--gray-100); font-size:13px; }
@@ -105,7 +130,6 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 .btn.dirty { background:#d97706; border-color:#d97706; color:white; }
 .btn.dirty:hover { background:#b45309; border-color:#b45309; }
 .btn:disabled { opacity:.35; cursor:default; pointer-events:none; }
-.arow { display:flex; justify-content:space-between; align-items:center; padding-top:.5rem; flex-shrink:0; }
 
 /* Step 1 — always-split layout */
 #panel-1.visible { gap: 1rem; }
@@ -148,7 +172,7 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 .color-zone { display:flex; flex-direction:column; gap:8px; }
 .color-zone-hdr { display:flex; align-items:center; justify-content:space-between; }
 .color-chip-picked { display:flex; align-items:center; gap:10px; padding:8px 10px 8px 12px; background:var(--white); border:1.5px solid var(--gray-200); border-radius:10px; cursor:default; width:100%; box-sizing:border-box; }
-.chip-dot { width:20px; height:20px; border-radius:50%; flex-shrink:0; }
+.chip-dot { width:20px; height:20px; border-radius:50%; flex-shrink:0; border:1px solid var(--gray-200); }
 .chip-info { display:flex; flex-direction:column; gap:1px; flex:1; min-width:0; }
 .chip-name { font-size:13px; font-weight:500; color:var(--black); }
 .chip-hex { font-size:11px; color:var(--gray-400); font-family:monospace; }
@@ -161,7 +185,7 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 .gs-toggle-input { position:absolute; opacity:0; width:0; height:0; }
 .gs-toggle-switch { position:relative; display:inline-block; width:34px; height:20px; background:var(--gray-200); border-radius:10px; flex-shrink:0; transition:background .15s; }
 .gs-toggle-switch::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; background:white; border-radius:50%; transition:transform .15s; box-shadow:0 1px 2px rgba(0,0,0,.2); }
-.gs-toggle-input:checked ~ .gs-toggle-switch { background:var(--accent); }
+.gs-toggle-input:checked ~ .gs-toggle-switch { background:var(--toggle-on); }
 .gs-toggle-input:checked ~ .gs-toggle-switch::after { transform:translateX(14px); }
 .gs-toggle-text { color:var(--gray-600); }
 .gs-mode-wrap { display:flex; align-items:center; gap:4px; }
@@ -196,7 +220,7 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 #colorZones { overflow-y:auto; min-height:0; }
 .zlabel { font-size:12px; font-weight:500; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-600); }
 .swatch-grid { display:flex; flex-wrap:wrap; gap:8px; }
-.swatch { width:36px; height:36px; border-radius:50%; cursor:pointer; border:2.5px solid transparent; transition:transform .1s, box-shadow .15s; }
+.swatch { width:36px; height:36px; border-radius:50%; cursor:pointer; border:2.5px solid var(--gray-200); transition:transform .1s, box-shadow .15s; }
 .swatch:hover { transform:scale(1.12); }
 .swatch.sel { box-shadow:0 0 0 2px var(--white), 0 0 0 4px var(--accent); transform:scale(1.08); }
 .swatch.ws { box-shadow:inset 0 0 0 1px var(--gray-200); }
@@ -208,10 +232,10 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 .csw { width:34px; height:34px; border-radius:50%; cursor:pointer; background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red); overflow:hidden; position:relative; flex-shrink:0; transition:transform .1s, box-shadow .15s; }
 .csw::after { font-family:"Font Awesome 7 Free"; font-weight:900; content:"+"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:15px; color:white; text-shadow:0 0 4px rgba(0,0,0,.6); background:rgba(0,0,0,.12); pointer-events:none; }
 .csw:hover { transform:scale(1.12); }
-input[type=color] { width:34px; height:34px; border:none; border-radius:50%; padding:2px; cursor:pointer; background:none; flex-shrink:0; }
+input[type=color] { width:34px; height:34px; border:1.5px solid var(--gray-200); border-radius:50%; padding:2px; cursor:pointer; background:none; flex-shrink:0; }
 input[type=color]::-webkit-color-swatch-wrapper { padding:0; border-radius:50%; }
 input[type=color]::-webkit-color-swatch { border:none; border-radius:50%; }
-.hexin { flex:1; height:34px; border:1px solid var(--gray-200); border-radius:var(--r); padding:0 10px; font-size:13px; font-family:'DM Sans',sans-serif; color:var(--black); background:var(--white); outline:none; }
+.hexin { flex:1; min-width:0; height:34px; border:1px solid var(--gray-200); border-radius:var(--r); padding:0 10px; font-size:13px; font-family:'DM Sans',sans-serif; color:var(--black); background:var(--white); outline:none; }
 .hexin:focus { border-color:var(--accent); }
 .hexin::placeholder { color:var(--gray-200); }
 .cpop-apply { width:100%; padding:8px; background:var(--accent); color:var(--accent-contrast); border:none; border-radius:var(--r); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; cursor:pointer; }
@@ -236,7 +260,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:17px; h
 .usub { font-size:12px; color:var(--gray-400); }
 input[type=file] { display:none; }
 .lib-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; align-content:start; flex:1; min-height:0; overflow-y:auto; }
-.lib-item { position:relative; border:1.5px solid var(--gray-100); border-radius:8px; overflow:hidden; aspect-ratio:1; cursor:grab; transition:border-color .15s, transform .1s; background:var(--gray-50); }
+.lib-item { position:relative; border:1.5px solid var(--gray-100); border-radius:8px; overflow:hidden; aspect-ratio:1; cursor:grab; transition:border-color .15s, transform .1s; background:var(--gray-300); }
 .lib-item:hover { border-color:var(--gray-400); transform:scale(1.04); }
 .lib-item.dragging { opacity:.4; }
 .lib-item img, .lib-item .file-type-badge { width:100%; height:100%; object-fit:contain; display:flex; pointer-events:none; padding:6px; }
@@ -266,7 +290,14 @@ input[type=file] { display:none; }
    above it — .dzone/.dz-logo-wrap/.flag-tl-overlay carry no z-index of their
    own, so they stay in the implicit "0" bucket below it by default. */
 .dz-frame-overlay { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:5; }
-.dz-logo-wrap.above-frame, .flag-tl-overlay.above-frame { z-index:10; }
+/* Must beat .hs-tl-overlay's z-index:20 (below) — hole signs render top/bottom
+   template text and docked banner captions as .hs-tl-overlay-classed DOM
+   overlays while editing, unconditionally at z-index:20 regardless of their
+   own front/back state. Without this, "Move to front" on an image would only
+   clear the (non-interactive) frame group — z-index:5 — but still sit behind
+   that always-on-20 text overlay the moment you're actively editing/dragging
+   it, which is exactly when a user is trying to layer an image over text. */
+.dz-logo-wrap.above-frame, .flag-tl-overlay.above-frame, .hs-tl-overlay.above-frame, .tl-slot.above-frame { z-index:21; }
 /* Hole-sign only: the non-interactive "ghost" copy of a variation's logo sent
    below the background (see belowBackground in image-box.js's createImageBox
    doc comment) — a plain sibling of .dzone/.dz-logo-wrap, not nested inside
@@ -293,8 +324,12 @@ input[type=file] { display:none; }
    should only ever be clipped by the flag canvas itself (.flag-wrap), same
    as the final render. */
 .dzone { position:absolute; border:none; border-radius:6px; cursor:default; transition:background .15s; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; overflow:visible; }
+/* Only while previewing an unenabled banner turning on (design.js's edge-drag
+   preview) does the logo zone need to ease into its shrunk position — banner
+   height/spacing handle drags also move it every frame and must stay 1:1
+   with the handle, so the transition is scoped to this class, not the base rule. */
+.dzone.hs-logo-zone-previewing { transition: background .15s, left .14s ease, top .14s ease, width .14s ease, height .14s ease; }
 .dzone.has-logo { background:transparent; }
-.dzone.selected { background:rgba(255,255,255,.06); }
 /* When one zone is active, make all others invisible and non-interactive */
 .flag-wrap.dz-solo .dzone:not(.selected):not(.drag-over) { pointer-events:none; }
 
@@ -354,6 +389,10 @@ input[type=file] { display:none; }
 .dz-resize-tr { top:0; right:0; cursor:ne-resize; transform:translate(50%,-50%); }
 .dz-resize-bl { bottom:0; left:0; cursor:sw-resize; transform:translate(-50%,50%); }
 .dz-resize-br { bottom:0; right:0; cursor:se-resize; transform:translate(50%,50%); }
+.dz-resize-t { top:0; left:50%; cursor:n-resize; transform:translate(-50%,-50%); }
+.dz-resize-b { bottom:0; left:50%; cursor:s-resize; transform:translate(-50%,50%); }
+.dz-resize-l { top:50%; left:0; cursor:w-resize; transform:translate(-50%,-50%); }
+.dz-resize-r { top:50%; right:0; cursor:e-resize; transform:translate(50%,-50%); }
 .dz-logo-wrap:hover .dz-resize, .dz-logo-wrap.selected .dz-resize { display:block; }
 
 
@@ -366,7 +405,7 @@ input[type=file] { display:none; }
 
 /* Library picker dropdown */
 .dz-lib-picker { position:absolute; top:calc(100% + 6px); left:0; background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--r); padding:8px; box-shadow:0 8px 24px rgba(0,0,0,.12); display:grid; grid-template-columns:repeat(4,44px); gap:6px; z-index:10; min-width:220px; }
-.dz-lp-item { width:44px; height:44px; border-radius:6px; border:1.5px solid var(--gray-100); padding:4px; cursor:pointer; transition:border-color .12s; display:flex; align-items:center; justify-content:center; }
+.dz-lp-item { width:44px; height:44px; border-radius:6px; border:1.5px solid var(--gray-100); padding:4px; cursor:pointer; transition:border-color .12s; display:flex; align-items:center; justify-content:center; background:var(--gray-300); }
 .dz-lp-item img, .dz-lp-item .file-type-badge { width:100%; height:100%; object-fit:contain; }
 .dz-lp-item:hover { border-color:var(--accent); }
 .dz-lp-item.active { border-color:var(--accent); background:var(--accent-tint); }
@@ -390,11 +429,13 @@ input[type=file] { display:none; }
 /* Gallery/export step shared by the flag wizard and hole-sign editor
    (hs/export.js) — previously had no layout rules at all, so its two
    children just stacked full-width. Same stretch pattern as the other
-   steps: the gallery/thumbnail side scrolls internally, .review-card opts
-   out to stay its natural, compact size. */
+   steps: both sides stretch to the row height and scroll internally
+   (min-height:0 + overflow-y:auto) rather than clipping — .review-card can
+   now grow taller than one viewport (the Gallery & export submit-for-review
+   form), so it needs the same treatment as the gallery/thumbnail side. */
 .s5layout { display:grid; grid-template-columns:1fr 320px; gap:1.5rem; flex:1; min-height:0; }
 .s5layout > *:first-child { min-height:0; overflow-y:auto; }
-.s5layout > .review-card { align-self:start; }
+.s5layout > .review-card { min-height:0; overflow-y:auto; }
 
 /* Step 4 */
 .s4layout { display:grid; grid-template-columns:1fr 270px; gap:1.5rem; align-items:start; flex:1; min-height:0; }
@@ -406,7 +447,7 @@ input[type=file] { display:none; }
    and the description/zoom-controls footer, shared by flags + hole signs. */
 .canvas-panel-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:.75rem; }
 .canvas-panel-title { font-size:13px; font-weight:500; }
-.canvas-face-row { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:.5rem; }
+.canvas-face-row { display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:.5rem; }
 .canvas-panel-footer { display:flex; flex-direction:column; justify-content:center; align-items:center; flex-wrap:wrap; gap:12px; margin-top:.5rem; text-align:center; }
 .canvas-panel-footer .canvas-bleed-hint { margin:0; text-align:center; }
 .canvas-panel-footer .canvas-zoom-row { margin:0; justify-content:center; }
@@ -419,7 +460,8 @@ input[type=file] { display:none; }
 .canvas-zoom-hint { font-size:11px; color:var(--gray-400); }
 .canvas-bleed-hint { font-size:11px; color:var(--gray-400); margin:-2px 0 .5rem; }
 
-.canvas-scroll { overflow:auto; max-height:calc(100vh - 280px); border-radius:6px; }
+.canvas-scroll { overflow:auto; max-height:calc(100vh - 280px); border-radius:6px; scrollbar-width:none; -ms-overflow-style:none; }
+.canvas-scroll::-webkit-scrollbar { display:none; }
 /* All five canvas-panel usages (flags + hole-signs, template step(s) and
    Variations step) now size themselves via an explicit JS-computed height
    (canvas-panel.js) — the calc() above is only a pre-JS fallback, so
@@ -443,7 +485,7 @@ input[type=file] { display:none; }
 
 /* Gallery dual view */
 .gallery-dual-stage { display:flex; flex-direction:column; gap:.75rem; }
-.var-lib-item { position:relative; width:52px; height:52px; border:1.5px solid var(--gray-100); border-radius:8px; overflow:hidden; cursor:grab; background:var(--gray-50); flex-shrink:0; transition:border-color .15s; }
+.var-lib-item { position:relative; width:52px; height:52px; border:1.5px solid var(--gray-100); border-radius:8px; overflow:hidden; cursor:grab; background:var(--gray-300); flex-shrink:0; transition:border-color .15s; }
 .var-lib-item:hover { border-color:var(--gray-400); }
 .var-lib-del { position:absolute; top:2px; right:2px; width:18px; height:18px; background:rgba(0,0,0,.6); color:#fff; border:none; border-radius:50%; font-size:13px; line-height:1; cursor:pointer; display:none; align-items:center; justify-content:center; padding:0; z-index:2; }
 .var-lib-item:hover .var-lib-del { display:flex; }
@@ -516,7 +558,7 @@ input[type=file] { display:none; }
 .ve-editor { display:flex; flex-direction:column; gap:0; padding-bottom:1rem; }
 .ve-section { display:flex; flex-direction:column; gap:.75rem; padding:.75rem 0; border-top:1px solid var(--gray-100); }
 .ve-section-title { display:flex; align-items:center; justify-content:space-between; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-500); }
-.ve-flag-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(100px,1fr)); gap:8px; }
+.ve-flag-grid { display:grid; grid-template-columns:1fr; gap:8px; }
 .ve-flag-grid .flag-card { padding:6px; }
 .ve-flag-grid .flag-card-name { font-size:11px; }
 .ve-override-badge { font-size:11px; font-weight:500; color:var(--gray-400); background:none; border:none; padding:0; cursor:pointer; font-family:inherit; white-space:nowrap; text-decoration:underline; }
@@ -533,17 +575,16 @@ input[type=file] { display:none; }
 .btn-link-small { font-size:11px; color:var(--gray-400); background:none; border:none; cursor:pointer; padding:0; font-family:inherit; text-decoration:underline; flex-shrink:0; }
 #varListView { display:flex; flex-direction:column; gap:.75rem; flex:1; min-height:0; overflow-y:auto; padding-bottom:1rem; padding-right:4px; }
 #varEditPanel { display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
-/* Hole-sign Variations step reuses .var-list-panel directly around
-   #hsVarList (no separate list/edit-view wrapper like the flag wizard's
-   #varListView/#varEditPanel above) — #hsVarList itself is the scrolling
-   region, matching the flag wizard's split. */
-#hsVarList { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; }
+/* Hole-sign Variations step: #hsVarList sits directly in the same scrolling
+   .hs-design-controls-body as the logo library above it (see
+   .hs-stack-section) rather than owning a separate scroll region — no
+   flex/overflow of its own needed here. */
 .var-list .var-card { background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--r); padding:10px 12px; cursor:pointer; transition:border-color .15s, transform .08s; display:flex; flex-direction:column; gap:8px; }
 .var-list .var-card:active { transform:translateY(1px); }
 .var-list .var-card:hover { border-color:var(--gray-300); }
 .var-list .var-card.active { border-color:var(--accent); border-width:2px; }
-.var-list-panel:has(.var-card.active) .var-list .var-card:not(.active) { border-color:transparent; }
-.var-list-panel:has(.var-card.active) .var-list .var-card:not(.active):hover { border-color:var(--gray-200); }
+#varListPanel:has(.var-card.active) .var-list .var-card:not(.active) { border-color:transparent; }
+#varListPanel:has(.var-card.active) .var-list .var-card:not(.active):hover { border-color:var(--gray-200); }
 .var-list .var-card.needs-edits { border-color:#d97706; }
 .var-list .var-card.approved { border-color:#16a34a; }
 /* The gallery's own .var-card (below, distinguished by containing
@@ -587,13 +628,6 @@ input[type=file] { display:none; }
 .var-edit-resolve-btn:hover { background:#d97706; color:white; }
 .var-edit-resolved-tag { flex-shrink:0; font-size:12px; font-weight:500; color:var(--gray-400); padding:3px 10px; border-radius:20px; background:var(--gray-100); white-space:nowrap; }
 
-/* Step 5 — grid rows stretch by default, so #varList (the variation cards,
-   the column that can grow past the viewport) fills the row's height and
-   scrolls internally; .var-details-sticky opts out (align-self:start below,
-   sticky/vh-calc dropped — nothing scrolls past it now that .main doesn't)
-   to stay its natural, compact size. */
-.var-gallery-layout { display:grid; grid-template-columns:1fr 280px; gap:1.5rem; flex:1; min-height:0; }
-.var-gallery-layout > #varList { overflow-y:auto; min-height:0; }
 .var-list { display:flex; flex-direction:column; gap:1rem; }
 .var-card { background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; transition:border-color .2s; position:relative; }
 .var-card:hover { border-color:var(--gray-300); }
@@ -606,7 +640,6 @@ input[type=file] { display:none; }
 .var-card-face-label { font-size:10px; font-weight:500; text-transform:uppercase; letter-spacing:.06em; color:var(--gray-400); margin-bottom:4px; }
 .var-card-flag { width:100%; aspect-ratio:7519/4669; background:var(--gray-50); border-radius:8px; overflow:hidden; }
 .var-card-flag svg { width:100%; height:100%; display:block; }
-.var-details-sticky { align-self:start; }
 .review-card { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; display:flex; flex-direction:column; gap:1rem; }
 .rc-title { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.08em; color:var(--gray-400); }
 .drow { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--gray-100); font-size:13px; }
@@ -647,24 +680,136 @@ input[type=file] { display:none; }
 .draft-del { width:22px; height:22px; border:none; border-radius:50%; background:transparent; color:var(--gray-400); font-size:11px; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:background .1s, color .1s; }
 .draft-del:hover { background:#fee2e2; color:#dc2626; }
 
-/* ── Hole Signs ─────────────────────────────────────────────────────────────── */
+/* ── Hole Signs / shared design-layout shell ───────────────────────────────── */
+/* Originally built for hole signs' 3 steps, now shared by the flag wizard's
+   Design/Variations/Gallery pages too — none of them have a full-width header
+   sibling bleeding out of .panel.visible's padding anymore (that title/actions
+   block now lives inside .hs-design-controls — see .hs-panel-header below), so
+   they don't need .panel.visible's default inset (sized around that bled
+   header) — content runs flush to the panel's edges instead. Matches on
+   .hs-design-layout rather than a specific #panel-N so every page using this
+   shell picks it up automatically. */
+.panel.visible:has(.hs-design-layout) { padding: 0; }
 /* Grid rows stretch by default, so .hs-design-controls (the menu list, the
    column that can grow past the viewport) fills the row's height and scrolls
    internally; .hs-design-preview-col opts out (align-self:start below) to
    stay its natural, compact size. */
-.hs-design-layout { display:grid; grid-template-columns:1fr 280px; gap:2rem; flex:1; min-height:0; }
-.hs-ob-wrap { display:flex; flex-direction:column; gap:1.5rem; }
-.hs-ob-header { }
-.hs-ob-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:16px; }
-.hs-ob-card { border:2px solid var(--gray-200); border-radius:var(--rl); overflow:hidden; cursor:pointer; transition:border-color .15s,box-shadow .15s; background:var(--white); }
-.hs-ob-card:hover { border-color:var(--accent); box-shadow:0 4px 16px rgba(0,0,0,.09); }
-.hs-ob-thumb { aspect-ratio:6375/5475; background:var(--gray-50); position:relative; overflow:hidden; }
+.hs-design-layout { display:grid; grid-template-columns:1fr 280px; gap:0; flex:1; min-height:0; }
+/* Step 2 (Variations) only: a dedicated vertical rail for the logo library on
+   the far left, ahead of the canvas — it frees the controls column to hold
+   just the variations list (matching Step 1's plain single-purpose list).
+   Matches the app sidebar's own background/border so it reads as an
+   extension of that sidebar rather than a floating strip. */
+.hs-design-layout:has(.hs-logo-rail) { grid-template-columns: 104px 1fr 280px; }
+.hs-logo-rail {
+  display:flex; flex-direction:column; align-items:center; gap:12px;
+  padding:24px 16px; min-height:0;
+  background:var(--white); border-right:1px solid var(--gray-100);
+}
+.hs-rail-title { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.06em; color:var(--gray-400); flex-shrink:0; }
+/* Only the item stack scrolls — the "Logos" title above stays put, same
+   pattern as .hs-panel-header + .hs-design-controls-body. */
+.hs-logo-rail-items { display:flex; flex-direction:column; align-items:center; gap:10px; width:100%; overflow-y:auto; min-height:0; flex:1; }
+/* Rail-only logo sizing (.var-lib-item/.var-upload-btn are shared with the
+   flag wizard's horizontal logo strip at a fixed 52x52 — scoped here so
+   that's untouched). Width-only: height is left to the image's own aspect
+   ratio instead of forcing a square crop, so a wide or tall logo doesn't get
+   squashed/cropped in the tray. The upload tile has no image to take a ratio
+   from, so it stays a fixed square. */
+.hs-logo-rail-items .var-lib-item { width:72px; height:auto; }
+/* display:block matters here: an <img> is inline by default, so at
+   height:auto (the box sizing to the image's own rendered height) the
+   default inline baseline leaves room for a descender below it — a gap at
+   the bottom of the box that overflow:hidden doesn't catch since it's
+   inside the box, not overflowing it. */
+.hs-logo-rail-items .var-lib-item img { display:block; width:100%; height:auto; object-fit:unset; padding:0; }
+.hs-logo-rail-items .var-lib-item .file-type-badge { width:100%; aspect-ratio:1; padding:0; }
+.hs-logo-rail-items .var-upload-btn { width:72px; height:72px; }
+/* Placeholder shown in place of the thumbnail while a logo upload is in
+   flight (see logo-tray.js) — reuses the same loading tile as the custom-
+   artboard variation upload placeholder for a consistent look. */
+.hs-canvas-upload-overlay { position:absolute; inset:0; z-index:20; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.35); }
+.hs-canvas-upload-overlay .hs-upload-spinner { width:28px; height:28px; border-width:3px; }
+/* Onboarding "Choose a template" grid (design.js's UI.hsOnboarding branch of
+   renderStep1) — laid out inside the same .hs-design-layout shell as every
+   other step (canvas/list column + 280px header column, full-bleed via the
+   .panel.visible:has(.hs-design-layout) rule below), so the grid gets the
+   whole page width instead of being boxed into a narrow, capped column.
+   Auto-fill instead of a fixed column count so it actually uses whatever
+   width that full bleed frees up, at any viewport size. */
+.hs-ob-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:16px; padding:24px; }
+/* No card chrome (border/background/name/description) — just the rendered
+   sign itself, clipped to a rounded rect. Identifying info moves to a plain
+   title attribute (hover tooltip) instead of on-card text. */
+.hs-ob-card { position:relative; cursor:pointer; }
+.hs-ob-thumb { aspect-ratio:6375/5475; background:var(--gray-50); border-radius:var(--rl); overflow:hidden; transition:box-shadow .15s; }
 .hs-ob-thumb svg { width:100%; height:100%; display:block; }
-.hs-ob-info { padding:10px 12px 12px; }
-.hs-ob-name { font-size:13px; font-weight:600; color:var(--black); margin-bottom:2px; }
-.hs-ob-desc { font-size:11px; color:var(--gray-500); line-height:1.4; }
-.hs-ob-subheader { font-size:13px; font-weight:600; color:var(--gray-600); margin-top:-8px; }
-.hs-design-controls { display:flex; flex-direction:column; gap:1rem; overflow-y:auto; min-height:0; }
+.hs-ob-card:hover .hs-ob-thumb { box-shadow:0 0 0 2px var(--accent); }
+/* "Custom" corner badge on a saved "My templates" card — swaps to "Edit
+   template" on hover (see editCustomTemplate in design.js) rather than
+   showing both at once, so the badge reads as a normal status label until
+   the user's pointer signals it's also a button. */
+.hs-ob-badge {
+  position:absolute; top:8px; right:8px; z-index:2;
+  font-size:11px; font-weight:600; color:#fff;
+  background:rgba(17,17,16,.72); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
+  border-radius:100px; padding:4px 10px; line-height:1.3; cursor:pointer;
+}
+.hs-ob-badge-edit { display:none; }
+.hs-ob-badge:hover .hs-ob-badge-default { display:none; }
+.hs-ob-badge:hover .hs-ob-badge-edit { display:inline; }
+/* Shared by every page using .hs-design-layout (both tools' Design/Templates,
+   Variations, and Gallery steps): each page's title/actions row lives inside
+   the (narrow, 280px) controls column instead of spanning the whole panel
+   like every other page's .p1-header — freeing the preview column to start at
+   the panel's top edge instead of below a full-width header, so the canvas
+   gets the vertical space that used to belong to the header. Stacks title
+   over actions (instead of .p1-header's side-by-side row) since 280px isn't
+   wide enough for both, and drops the full-bleed negative-margin trick
+   since it no longer needs to span past its own column. A plain
+   (non-sticky) block, not part of the scrolling region below it — see
+   .hs-design-controls-body — so it needs its own opaque background:
+   otherwise the list scrolling past underneath would read as running right
+   up against the Next/Save button. Matches the page/canvas background (not
+   a white card) so it reads as breathing room, not a separate panel sitting
+   on top of the page. */
+.hs-panel-header { flex-direction:column; align-items:stretch; position:static; padding:24px; margin:0; background:var(--gray-50); }
+.hs-panel-header .p1-header-actions { padding-top:.75rem; }
+/* Only .hs-design-controls-body scrolls — .hs-panel-header above stays put
+   outside that scroll region, so the scrollbar/scroll boundary only ever
+   runs alongside the list, not the whole column. For Step 1,
+   .hs-design-controls-body is also the piece openHsMenuSection/
+   closeHsMenuSection swap between the menu list and a drilled-into section
+   — kept separate from .hs-panel-header above so those swaps never wipe out
+   the header. */
+.hs-design-controls { display:flex; flex-direction:column; gap:16px; min-height:0; }
+.hs-design-controls-body { display:flex; flex-direction:column; gap:1rem; flex:1; min-height:0; overflow-y:auto; padding:24px; }
+/* Strips the canvas card's own border/background/padding for Steps 1 and 2,
+   so the sign fills the whole preview column (fitCanvas still finds this
+   via .closest('.var-canvas-panel') for its chrome-height math — only the
+   visual chrome goes away, not the structural class). */
+.hs-canvas-bare { background:none; border:none; padding:0; position:relative; }
+/* The zoom/description footer (canvas-panel.js) normally sits below the
+   canvas and claims its own row of height, which is exactly the space this
+   canvas just reclaimed above. Floating it over the bottom edge of the
+   artwork instead means the reclaimed height goes entirely to the sign —
+   including the extra room a zoomed-in sign needs — while the zoom % /
+   reset control (and, for Step 2, the "drag logos into zones" hint) stays
+   reachable on top of it. */
+.hs-canvas-bare .canvas-panel-footer {
+  position:absolute; left:50%; bottom:16px; transform:translateX(-50%); z-index:5;
+  flex-direction:row; margin:0; width:max-content; max-width:calc(100% - 32px);
+  background:rgba(17,17,16,.72); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+  color:#fff; padding:8px 18px; border-radius:100px;
+}
+.hs-canvas-bare .canvas-panel-footer .canvas-bleed-hint:empty { display:none; }
+.hs-canvas-bare .canvas-zoom-value { color:#fff; }
+.hs-canvas-bare .canvas-zoom-reset { color:rgba(255,255,255,.85); }
+.hs-canvas-bare .canvas-zoom-reset:hover { color:#fff; }
+.hs-canvas-bare .canvas-zoom-hint { color:rgba(255,255,255,.55); }
+/* Groups a controls-column section's own header + list (Step 2's variations
+   list, Step 3's export/submit/share groups). */
+.hs-stack-section { display:flex; flex-direction:column; gap:10px; }
 
 /* Design-options menu (Step 1 controls behave as a list → section drawer) */
 .hs-menu-list { display:flex; flex-direction:column; gap:6px; }
@@ -685,10 +830,10 @@ input[type=file] { display:none; }
    so "top banner" vs "bottom banner" is visually distinct at a glance. */
 .hs-icon-flip { display:inline-block; transform:scaleY(-1); }
 .hs-menu-swatch { display:inline-block; width:16px; height:16px; border-radius:4px; border:1px solid var(--gray-200); }
-.hs-menu-section-header { display:flex; align-items:center; gap:10px; margin-bottom:2px; }
+.hs-menu-section-header { display:flex; flex-direction:column; align-items:flex-start; gap:6px; margin-bottom:2px; }
 .hs-menu-back { background:none; border:none; padding:4px 0; font-family:inherit; font-size:13px; font-weight:500; color:var(--gray-600); cursor:pointer; }
 .hs-menu-back:hover { color:var(--black); }
-.hs-menu-section-title { font-size:14px; font-weight:600; flex:1; }
+.hs-menu-section-title { font-size:17px; font-weight:600; flex:1; }
 .hs-menu-section-header .btn { margin-left:auto; }
 @keyframes hsControlsIn { from { opacity:0; transform:translateX(12px); } to { opacity:1; transform:translateX(0); } }
 .hs-controls-enter { animation:hsControlsIn .18s ease; }
@@ -721,7 +866,24 @@ input[type=file] { display:none; }
 .band-drag:hover { box-shadow:inset 0 0 0 2px rgba(128,128,128,.3); border-radius:4px; }
 .band-drop-target { border:2px dashed rgba(128,128,128,.3); background:rgba(128,128,128,.06); border-radius:6px; pointer-events:none; transition:background .12s, border-color .12s; }
 .band-drop-target.active { border-color:rgba(128,128,128,.55); background:rgba(128,128,128,.18); }
+/* Text-dragged-to-unenabled-banner-edge preview (design.js) is a live preview
+   of upcoming layout, not a hovering drop target — no dashed outline/rounded
+   corners, just the tinted fill from .band-drop-target.active above. */
+.hs-banner-preview.band-drop-target { border: none; border-radius: 0; }
+/* Fake "collapsing band" overlay (design.js/banner.js's showBannerShrinkGhost)
+   shown while a docked layer leaves a banner (or kills it, as the last one
+   out) — eases from the old band size down to the new one. */
+.hs-banner-shrink-ghost { transition: top .14s ease, height .14s ease; }
 .tl-slot { z-index:4; }
+/* Interactive (non-locked) template-logo slots render through the shared
+   image-box.js `.dz-logo-wrap` component instead of `.tl-slot` — same
+   z-index as `.tl-slot` above, so they still paint above the "drag whole
+   zone to top/bottom" `.band-drag` overlay (banner.js, z-index:2) sharing
+   the same canvas area. Without this, `.band-drag`'s explicit z-index beats
+   `.dz-logo-wrap`'s default `auto` regardless of DOM order, silently
+   swallowing every click/drag meant for an individual logo. */
+.dz-logo-wrap[data-tl-idx] { z-index:4; }
+.band-dragging .dz-logo-wrap[data-tl-idx] { opacity:.35; }
 /* Ghost of the section being dragged — follows the cursor so the move is visible */
 .band-ghost { pointer-events:none; border-radius:6px; overflow:hidden; opacity:.95; display:flex; align-items:center; justify-content:center; outline:2px solid rgba(128,128,128,.3); box-shadow:0 10px 28px rgba(0,0,0,.32); }
 .band-ghost-label { font-size:12px; font-weight:600; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.55); padding:2px 10px; }
@@ -735,8 +897,8 @@ input[type=file] { display:none; }
 /* Inline canvas text editing */
 .canvas-edit-zone { border-radius:4px; }
 .canvas-edit-hotspot { border-radius:4px; }
-.canvas-edit-input { border-radius:4px; background:transparent; padding:0; }
-.canvas-edit-input::selection { background:rgba(59,130,246,.35); }
+.canvas-edit-input { border-radius:4px; background:transparent !important; padding:0; }
+.canvas-edit-input::selection { background:rgba(168,124,237,.35); }
 /* Banner title/sub only: the input text itself is transparent (SVG stays the
    display layer), so selection must stay invisible too — otherwise the browser's
    default selection color would reveal a misaligned duplicate (the halo). */
@@ -747,11 +909,26 @@ input[type=file] { display:none; }
 .hs-logo-placeholder { border:2px dashed var(--guides) !important; }
 .hs-ph-label { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; color:rgba(128,128,128,.85); background:rgba(255,255,255,.55); padding:2px 7px; border-radius:10px; }
 .hs-design-preview-col { min-width:0; align-self:start; }
+/* Step 3 (Gallery): the preview column holds a plain CSS grid of thumbnails
+   instead of a JS-sized canvas (steps 1-2), so unlike those it needs to
+   actually stretch to the row height and scroll internally once the grid
+   grows past one viewport — align-self:start (above) would otherwise just
+   let it grow the whole page. */
+.hs-design-preview-col:has(.hs-gallery-grid) { align-self:stretch; overflow-y:auto; min-height:0; }
+/* Flag wizard's Gallery page: same reasoning as the hole-sign thumbnail grid
+   above, but for its own content model — a scrollable list of variation
+   cards (each showing front+back together) rather than a click-to-select
+   thumbnail grid. */
+.hs-design-preview-col:has(> #varList) { align-self:stretch; overflow-y:auto; min-height:0; }
+/* Onboarding "Choose a template" grid (see .hs-ob-grid above): a scrollable
+   grid of many cards rather than one JS-sized canvas, same reasoning as the
+   two rules above. */
+.hs-design-preview-col:has(.hs-ob-grid) { align-self:stretch; overflow-y:auto; min-height:0; }
 .hs-section { display:flex; flex-direction:column; gap:8px; background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; }
 .hs-section-title { font-size:13px; font-weight:500; }
 .hs-optional { font-size:12px; font-weight:400; color:var(--gray-400); }
 .hs-canvas-hint { font-size:12px; color:var(--gray-400); }
-.hs-bg-toggle { display:flex; gap:4px; }
+.hs-bg-toggle { display:flex; gap:4px; flex-wrap:wrap; }
 .hs-tog-btn { padding:6px 16px; border:1.5px solid var(--gray-200); border-radius:20px; background:transparent; font-size:13px; font-weight:500; cursor:pointer; color:var(--gray-600); font-family:inherit; transition:all .15s; }
 .hs-tog-btn:hover { border-color:var(--gray-400); }
 .hs-tog-btn.active { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
@@ -760,7 +937,7 @@ input[type=file] { display:none; }
 .tl-assign-rows { display:flex; flex-direction:column; gap:6px; margin:8px 0 4px; }
 .tl-assign-row { display:flex; align-items:center; gap:6px; }
 .tl-assign-label { font-size:11px; color:var(--gray-500); min-width:38px; }
-.tl-assign-thumb { width:36px; height:24px; object-fit:contain; border:1px solid var(--gray-200); border-radius:4px; background:var(--gray-50); flex-shrink:0; }
+.tl-assign-thumb { width:36px; height:24px; object-fit:contain; border:1px solid var(--gray-200); border-radius:4px; background:var(--gray-300); flex-shrink:0; }
 .tl-assign-empty { font-size:11px; color:var(--gray-300); width:36px; text-align:center; }
 .tl-assign-btn { flex:1; }
 .tl-assign-rm { color:#dc2626; border-color:#fecaca; padding:4px 8px; }
@@ -774,12 +951,19 @@ input[type=file] { display:none; }
 /* See .flag-wrap comment: overflow is visible, not clipped — content clips
    itself to this element's own rect via clipToCanvas (image-box.js) so the
    bounding box/handles of an off-canvas logo or text layer stay grabbable. */
-.hs-sign-thumb { position:relative; aspect-ratio:6375/5475; background:var(--gray-50); border-radius:var(--rl); border:1px solid var(--gray-100); }
-.hs-sign-thumb svg { width:100%; height:100%; display:block; }
+.hs-sign-thumb { position:relative; aspect-ratio:6375/5475; background:var(--gray-50); border-radius:12px; border:1px solid var(--gray-100); }
+/* The background SVG(s) paint edge-to-edge (a full-bleed rect), so rounding
+   only the container leaves square artwork corners poking past the rounded
+   border. Clip the SVG itself instead of adding overflow:hidden to
+   .hs-sign-thumb — that would also clip the drag/resize handles this canvas
+   intentionally lets overflow past its own edge (see the .flag-wrap-style
+   comment above and clipToCanvas in image-box.js, which those overlays rely
+   on instead). */
+.hs-sign-thumb svg { width:100%; height:100%; display:block; border-radius:12px; overflow:hidden; }
 .hs-sign-wrap { width:100%; }
 
 /* Template picker */
-.hs-template-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.hs-template-grid { display:grid; grid-template-columns:1fr; gap:8px; }
 .hs-template-card { position:relative; border:1.5px solid var(--gray-200); border-radius:var(--r); padding:8px; cursor:pointer; transition:border-color .15s, background .15s; }
 .hs-template-card:hover { border-color:var(--gray-400); }
 .hs-template-card.active { border-color:var(--accent); background:var(--accent-tint); }
@@ -796,6 +980,12 @@ input[type=file] { display:none; }
 .var-editor { display:flex; flex-direction:column; gap:14px; padding:4px 2px; max-height:calc(100vh - 200px); overflow-y:auto; }
 .var-editor-header { display:flex; align-items:center; justify-content:space-between; padding-bottom:8px; border-bottom:1px solid var(--gray-100); }
 .var-editor-title { font-size:14px; font-weight:600; color:var(--black); }
+.var-editor-header-actions { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+/* Title + its section's own Reset link share a row (the section header
+   itself, .hs-menu-section-header below, stays column: Back stacked above
+   this row — see its own comment) so Reset reads as "next to the title" for
+   the section that's currently open. */
+.hs-menu-section-titlerow { display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%; }
 .hs-editor-body { display:flex; flex-direction:column; gap:14px; }
 .hs-editor-section { display:flex; flex-direction:column; gap:6px; }
 .hs-editor-label { font-size:12px; font-weight:500; color:var(--gray-600); text-transform:uppercase; letter-spacing:.05em; }
@@ -803,8 +993,25 @@ input[type=file] { display:none; }
 .hs-editor-select:hover { border-color:var(--gray-400); }
 .hs-editor-link { background:transparent; border:none; color:var(--gray-600); font-size:12px; text-decoration:underline; cursor:pointer; padding:4px 0; text-align:left; font-family:inherit; align-self:flex-start; }
 .hs-editor-link:hover { color:var(--black); }
-.var-editor-actions { display:flex; flex-direction:column; gap:6px; padding-top:8px; border-top:1px solid var(--gray-100); }
-.var-editor-actions .btn { width:100%; justify-content:center; }
+/* Sticky so Apply/Cancel stay reachable once the menu list above scrolls —
+   position:sticky anchors to .var-editor's own scrollport (the nearest
+   overflow ancestor) despite the .hs-editor-body wrapper in between, which
+   has no overflow/transform of its own to intercept it. Needs its own
+   background (matching the panel, not a white card — see .hs-panel-header's
+   matching comment) so scrolled-past rows don't show through underneath. */
+.var-editor-actions { display:flex; flex-direction:row; flex-wrap:wrap; gap:8px; padding:8px 0 2px; border-top:1px solid var(--gray-100); position:sticky; bottom:0; background:var(--gray-50); }
+/* flex-basis:0 (not auto) so Apply/Cancel split the row evenly regardless of
+   label width instead of summing their natural widths first — at auto, the
+   two labels together exceed this 280px column's ~228px content width and
+   each wrapped-alone button then stretches to fill its own full-width line,
+   which is what "row not column" was reported against. min-width:0 lets a
+   button shrink past its text's natural width (ellipsis picks up the slack)
+   instead of forcing a wrap here too. */
+.var-editor-actions .btn { flex:1 1 0; min-width:0; padding:8px 6px; justify-content:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Revert is a secondary, less-frequent action — forced onto its own full-width
+   line below Apply/Cancel rather than squeezed into the same row as a third
+   equal column, where its longer label would be the one left truncated. */
+.var-editor-actions .editor-revert-btn { flex-basis:100%; }
 .editor-revert-btn { color:var(--gray-600) !important; }
 .var-custom-badge { font-size:10px; color:var(--accent); font-weight:500; text-transform:uppercase; letter-spacing:.05em; padding:2px 6px; background:var(--accent-tint); border-radius:3px; align-self:flex-start; }
 
@@ -815,13 +1022,21 @@ input[type=file] { display:none; }
 .hs-var-tmpl-trigger { width:100%; padding:8px 12px; border:1.5px solid var(--gray-200); border-radius:6px; font-size:13px; font-weight:500; cursor:pointer; background:var(--white); color:var(--black); font-family:inherit; transition:border-color .15s; text-align:left; display:flex; align-items:center; justify-content:space-between; }
 .hs-var-tmpl-trigger:hover { border-color:var(--gray-400); }
 .hs-var-tmpl-trigger .caret { color:var(--gray-400); font-size:10px; margin-left:8px; }
-.hs-var-tmpl-menu { position:absolute; top:calc(100% + 4px); left:0; right:0; background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--r); padding:6px; box-shadow:0 8px 24px rgba(0,0,0,.12); z-index:10; max-height:320px; overflow-y:auto; }
+.hs-var-tmpl-menu { position:fixed; background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--r); padding:6px; box-shadow:0 8px 24px rgba(0,0,0,.12); z-index:1000; max-height:320px; overflow-y:auto; }
 .hs-var-tmpl-group-label { font-size:11px; color:var(--gray-400); text-transform:uppercase; letter-spacing:.05em; padding:6px 8px 4px; font-weight:600; }
 .hs-var-tmpl-opt { padding:8px 10px; border-radius:4px; cursor:pointer; font-size:13px; color:var(--black); display:flex; align-items:center; justify-content:space-between; }
 .hs-var-tmpl-opt:hover { background:var(--gray-50); }
 .hs-var-tmpl-opt.active { background:var(--accent-tint); color:var(--accent); font-weight:500; }
 .hs-var-tmpl-opt-empty { padding:8px 10px; font-size:12px; color:var(--gray-400); font-style:italic; }
 .hs-var-tmpl-sep { height:1px; background:var(--gray-100); margin:4px 0; }
+.hs-var-tmpl-gallery-menu { width:280px; max-height:480px; }
+.hs-var-tmpl-gallery { display:grid; grid-template-columns:1fr; gap:8px; padding:2px 2px 8px; }
+.hs-var-tmpl-gtile { border:1.5px solid var(--gray-200); border-radius:var(--r); overflow:hidden; cursor:pointer; transition:border-color .15s; }
+.hs-var-tmpl-gtile:hover { border-color:var(--gray-400); }
+.hs-var-tmpl-gtile.active { border-color:var(--accent); }
+.hs-var-tmpl-gthumb { aspect-ratio:6375/5475; background:var(--gray-50); }
+.hs-var-tmpl-gthumb svg { width:100%; height:100%; display:block; }
+.hs-var-tmpl-gname { font-size:11px; color:var(--gray-600); padding:4px 6px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 /* See .flag-wrap comment: overflow is visible, not clipped — content clips
    itself to this element's own rect via clipToCanvas (image-box.js) so the
    bounding box/handles of an off-canvas logo or text layer stay grabbable. */
@@ -830,8 +1045,22 @@ input[type=file] { display:none; }
    past this element (position:relative alone doesn't establish a stacking
    context without an explicit z-index) and paints behind the whole page
    instead of just behind its sibling background <svg>. */
-.hs-sign-preview { position:relative; isolation:isolate; aspect-ratio:6375/5475; background:var(--gray-100); border-radius:var(--rl); }
+.hs-sign-preview { position:relative; isolation:isolate; aspect-ratio:6375/5475; background:var(--gray-100); border-radius:12px; }
+/* Same reasoning as .hs-sign-thumb svg above: clip the full-bleed background
+   SVG layer(s) (bg/color/image/frame — all direct-child <svg>s appended by
+   var-canvas.js) rather than the container, so drag/resize handles and other
+   DOM overlays (.dzone etc., explicitly overflow:visible below) can still
+   extend past the sign's own edge. */
+.hs-sign-preview > svg { border-radius:12px; overflow:hidden; }
 .hs-sign-preview .dzone { overflow:visible; }
+/* Fills .hs-sign-preview in place of the SVG template when there's nothing
+   to preview yet (no logos uploaded, no variation/default selected) — see
+   renderVariationPreview() in var-canvas.js. */
+.hs-sign-empty { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; padding:2rem; }
+.hs-sign-empty-icon { font-size:28px; color:var(--gray-400); }
+.hs-sign-empty-title { font-size:15px; font-weight:600; color:var(--black); }
+.hs-sign-empty-sub { font-size:13px; color:var(--gray-500); max-width:280px; }
+.hs-sign-empty .btn { margin-top:6px; }
 .logo-processing-spinner { position:absolute; inset:0; background:rgba(0,0,0,.4); display:flex; align-items:center; justify-content:center; z-index:30; border-radius:4px; pointer-events:none; }
 .logo-processing-spinner::after { content:''; width:22px; height:22px; border:2.5px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:logo-spin .65s linear infinite; }
 @keyframes logo-spin { to { transform:rotate(360deg); } }
@@ -867,8 +1096,8 @@ input[type=file] { display:none; }
 .tl-select:hover { border-color:var(--gray-400); }
 .tl-select:disabled { cursor:not-allowed; background-color:var(--gray-50); color:var(--gray-400); }
 .tl-hint { font-size:11px; color:var(--gray-400); line-height:1.4; margin-top:4px; }
-.tl-slot { position:absolute; border:1.5px solid rgba(128,128,128,.25); border-radius:8px; cursor:pointer; box-sizing:border-box; background:rgba(255,255,255,.7); transition:border-color .15s, background .15s; overflow:visible; }
-.tl-slot:hover { border-color:var(--guides); background:rgba(255,255,255,.85); }
+.tl-slot { position:absolute; border:1.5px solid rgba(128,128,128,.25); border-radius:8px; cursor:pointer; box-sizing:border-box; background:transparent; transition:border-color .15s, background .15s; overflow:visible; }
+.tl-slot:hover { border-color:var(--guides); background:transparent; }
 .tl-slot.has-logo { border-color:transparent; background:transparent; cursor:grab; }
 /* Clips only the logo image to the slot's shape — kept separate from .tl-slot
    itself so the corner handles can sit outside the slot's bounds (like the
@@ -882,40 +1111,43 @@ input[type=file] { display:none; }
 .tl-slot-ph-label { font-size:9px; text-transform:uppercase; letter-spacing:.06em; }
 .tl-slot-img { user-select:none; -webkit-user-drag:none; }
 .tl-slot-file-badge { display:flex; align-items:center; justify-content:center; background:#e8e8e8; font-size:11px; font-weight:700; color:#888; letter-spacing:.04em; border-radius:4px; }
-/* Same handle look as the text-layer's .hs-tl-resize-corner, straddling the
-   slot's edge — the logo image is clipped by .tl-slot-imgclip instead of the
-   slot itself, so these can sit outside the box without being cut off. */
-.tl-slot-handle { position:absolute; width:10px; height:10px; background:#fff; border:1px solid var(--gray-400); box-shadow:0 1px 4px rgba(0,0,0,.25); z-index:5; opacity:0; transition:opacity .15s; }
-.tl-slot-handle.tl { left:-5px;  top:-5px;    cursor:nwse-resize; }
-.tl-slot-handle.tr { right:-5px; top:-5px;    cursor:nesw-resize; }
-.tl-slot-handle.bl { left:-5px;  bottom:-5px; cursor:nesw-resize; }
-.tl-slot-handle.br { right:-5px; bottom:-5px; cursor:nwse-resize; }
-.tl-slot:hover .tl-slot-handle, .tl-slot.selected .tl-slot-handle { opacity:1; }
 .tl-slot-hover-actions { position:absolute; top:4px; right:4px; display:flex; gap:4px; opacity:0; transition:opacity .15s; z-index:7; }
 .tl-slot:hover .tl-slot-hover-actions { opacity:1; }
 .tl-slot-mini-btn { width:20px; height:20px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; display:flex; align-items:center; justify-content:center; font-size:10px; cursor:pointer; transition:background .15s; }
 .tl-slot-mini-btn:hover { background:rgba(0,0,0,.8); }
 .tl-slot-remove:hover { background:#dc2626; }
+/* Quick-edit (Variations page, not the full pencil editor): click-to-swap
+   content, no drag — signal that with a pointer cursor instead of the
+   draggable grab/grabbing cursor above. */
+.tl-slot.locked, .tl-slot.locked.has-logo { cursor:pointer; }
+.tl-slot.locked.has-logo:active { cursor:pointer; }
 
 .color-row { display:flex; align-items:center; gap:8px; }
 .eyedropper-btn { width:34px; height:34px; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--white); border:1.5px solid var(--gray-200); border-radius:8px; color:var(--gray-600); cursor:pointer; padding:0; font-size:14px; transition:border-color .15s, color .15s; }
 .eyedropper-btn:hover { border-color:var(--gray-400); color:var(--black); }
-.banner-img-drag-wrap { position:relative; border-radius:6px; overflow:hidden; cursor:grab; border:1px solid var(--gray-200); margin-top:6px; touch-action:none; }
-.banner-img-drag-wrap:active { cursor:grabbing; }
-.banner-img-drag-thumb { height:64px; background-repeat:no-repeat; }
-.banner-img-drag-hint { position:absolute; bottom:0; left:0; right:0; text-align:center; font-size:9px; color:rgba(255,255,255,.85); padding:3px 0; background:linear-gradient(transparent,rgba(0,0,0,.45)); pointer-events:none; letter-spacing:.02em; }
+/* Shared "drag to reposition / scroll to zoom" image widget — used for both
+   the hole-sign banner image (hs/banner.js) and the main sign background
+   image (hs/design.js). The wrap's aspect-ratio is set inline per instance
+   to match the actual box the image renders into (the banner strip, or the
+   full sign) so panning/zooming here lines up with the real crop — see
+   layoutImgDragThumb (image-box.js). Deliberately no min-height: the pan
+   clamp (coverImgBox) assumes this element's rendered pixel aspect ratio
+   exactly matches that real box, and a height floor that overrides the
+   aspect-ratio on a short banner would silently break that assumption —
+   the clamp would allow drags the real (narrower) crop can't actually fit,
+   showing the same gap this widget exists to prevent. A short banner just
+   gets a thin widget instead. */
+.hs-img-drag-wrap { position:relative; width:100%; border-radius:6px; overflow:hidden; cursor:grab; border:1px solid var(--gray-200); margin-top:6px; touch-action:none; }
+.hs-img-drag-wrap:active { cursor:grabbing; }
+.hs-img-drag-thumb { position:absolute; inset:0; background-repeat:no-repeat; }
+.hs-img-drag-hint { position:absolute; bottom:0; left:0; right:0; text-align:center; font-size:9px; color:rgba(255,255,255,.85); padding:3px 0; background:linear-gradient(transparent,rgba(0,0,0,.45)); pointer-events:none; letter-spacing:.02em; }
 .tl-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:4px; }
 .tl-switch { position:relative; display:inline-block; width:34px; height:20px; flex-shrink:0; }
 .tl-switch input { opacity:0; width:0; height:0; }
 .tl-switch-slider { position:absolute; cursor:pointer; inset:0; background:var(--gray-200); border-radius:20px; transition:background .15s; }
 .tl-switch-slider::before { position:absolute; content:""; height:14px; width:14px; left:3px; top:3px; background:white; border-radius:50%; transition:transform .15s; box-shadow:0 1px 2px rgba(0,0,0,.2); }
-.tl-switch input:checked + .tl-switch-slider { background:var(--accent); }
+.tl-switch input:checked + .tl-switch-slider { background:var(--toggle-on); }
 .tl-switch input:checked + .tl-switch-slider::before { transform:translateX(14px); }
-
-.tl-slot-toolbar { position:absolute; z-index:120; background:var(--white); border:1px solid var(--gray-100); border-radius:6px; padding:3px; display:flex; gap:2px; box-shadow:0 4px 12px rgba(0,0,0,.14); }
-.tl-tb-btn { padding:6px 12px; background:transparent; border:none; border-radius:4px; font-size:12px; font-weight:500; cursor:pointer; color:var(--gray-700); font-family:inherit; }
-.tl-tb-btn:hover { background:var(--gray-50); color:var(--black); }
-.tl-tb-btn.danger:hover { background:#fee2e2; color:#dc2626; }
 
 /* ── Free text layer overlays ──────────────────────────────── */
 .hs-tl-overlay {
@@ -923,13 +1155,33 @@ input[type=file] { display:none; }
   cursor: grab;
   user-select: none;
   border-radius: 2px;
+  /* Base/fallback tier — stays unconditionally above the frame (matches
+     hole-sign-render.js's `layer.aboveFrame || layer.dock`). Applies to
+     docked layers and the static top/bottom banner-zone overlays (see
+     banner.js), neither of which carries the .above-frame/.below-frame pair
+     below since their paint position isn't user-toggleable. A free (non-
+     docked) layer always gets one of those two classes instead — see
+     paintTextLayerOverlays in design.js — so this value is never what a free
+     layer actually renders at. */
   z-index: 20;
+}
+/* A free text layer's own arrange state (paintTextLayerOverlays/design.js) —
+   below-frame drops it under .dz-frame-overlay (5) so "send backward" is
+   actually visible on the live canvas, not just in exported output; above-
+   frame is folded into the shared top tier below (with logos/flags text). */
+.hs-tl-overlay.below-frame { z-index: 3; }
+/* While a layer is docking into an existing banner (design.js), the layer
+   itself and any siblings it displaces reflow live via inline left/top/width
+   — this eases those moves instead of snapping, without affecting ordinary
+   pixel-locked free dragging (which never gets this class). */
+.hs-tl-overlay.hs-dock-reflow {
+  transition: left .14s ease, top .14s ease, width .14s ease;
 }
 /* box-shadow (not border) for the hover/selected outline — a real border would
    eat into the content box, shrinking the wrap width of the % -sized text/image
    children below it (the bug this replaced: see .tl-slot-imgclip's inset fix). */
 .hs-tl-overlay:hover {
-  box-shadow: inset 0 0 0 1.5px rgba(59, 130, 246, 0.55);
+  box-shadow: inset 0 0 0 1.5px rgba(122, 122, 114, 0.55);
 }
 .hs-tl-overlay.selected {
   box-shadow: inset 0 0 0 1.5px var(--guides);
@@ -944,13 +1196,17 @@ input[type=file] { display:none; }
 .hs-tl-overlay:active {
   cursor: grabbing;
 }
+/* Quick-edit (Variations page, not the full pencil editor): click swaps
+   straight into inline text editing, no drag — pointer cursor, not grab. */
+.hs-tl-overlay.locked, .hs-tl-overlay.locked:active {
+  cursor: pointer;
+}
 .hs-tl-editor-wrap {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.07);
 }
 .hs-tl-editor {
   outline: none;
@@ -960,6 +1216,9 @@ input[type=file] { display:none; }
   white-space: pre-wrap;
   word-break: break-word;
   cursor: text;
+}
+.hs-tl-editor::selection {
+  background: rgba(168, 124, 237, .35);
 }
 
 /* ── Text layer toolbar ────────────────────────────────────── */
@@ -1000,6 +1259,7 @@ input[type=file] { display:none; }
 }
 .hs-tl-tb-btn:hover { background: rgba(255, 255, 255, .12); color: white; }
 .hs-tl-tb-btn.active { background: rgba(255, 255, 255, .18); border-color: transparent; color: white; }
+.hs-tl-tb-btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .hs-tl-tb-select {
   height: 28px;
   border: 1px solid rgba(255, 255, 255, .15);
@@ -1092,7 +1352,7 @@ input[type=file] { display:none; }
   display: block;
   width: 4px;
   height: 18px;
-  background: #3b82f6;
+  background: var(--guides);
   border-radius: 2px;
   pointer-events: none;
 }
@@ -1121,7 +1381,11 @@ input[type=file] { display:none; }
 }
 
 /* On-canvas banner height / text-spacing drag handles — thin lines the user
-   grabs directly instead of the sidebar's Height / Text spacing sliders. */
+   grabs directly instead of the sidebar's Height / Text spacing sliders.
+   z-index must beat .hs-tl-overlay (20): the spacing handle sits right at the
+   boundary between two stacked docked text layers, whose overlay boxes butt
+   up against it with only `banner.spacing` of gap — with a lower z-index here
+   those overlays would swallow the click before it ever reached the handle. */
 .hs-banner-height-handle,
 .hs-banner-spacing-handle {
   position: absolute;
@@ -1133,7 +1397,24 @@ input[type=file] { display:none; }
   align-items: center;
   justify-content: center;
   cursor: ns-resize;
-  z-index: 15;
+  z-index: 25;
+  opacity: 1;
+  transition: opacity .15s ease, top .14s ease;
+}
+/* Dragging its own top position every frame (wireBannerHeightHandles/
+   wireBannerSpacingHandles) needs to track the pointer 1:1 — the eased
+   transition above is for when something ELSE (a banner growing/shrinking
+   live as text docks/undocks) moves or hides the handle out from under it. */
+.hs-banner-height-handle.dragging,
+.hs-banner-spacing-handle.dragging {
+  transition: opacity .15s ease;
+}
+/* Banner just went away (see syncBannerHandles) — fade the handle out
+   instead of leaving it stranded at its last position. */
+.hs-banner-height-handle.hs-banner-handle-hidden,
+.hs-banner-spacing-handle.hs-banner-handle-hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 .hs-banner-height-handle::after,
 .hs-banner-spacing-handle::after {
@@ -1150,7 +1431,7 @@ input[type=file] { display:none; }
 .hs-banner-height-handle.dragging::after,
 .hs-banner-spacing-handle:hover::after,
 .hs-banner-spacing-handle.dragging::after {
-  background: #3b82f6;
+  background: var(--guides);
   height: 5px;
 }
 .hs-tl-tb-color {
@@ -1202,19 +1483,12 @@ input[type=file] { display:none; }
 /* Wrapping flex grid, not a fixed-column grid — fixed-width items (100px)
    naturally wrap to at least 4 across at the modal's width. */
 .tl-lib-grid { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:12px; }
-.tl-lp-item { flex:0 0 100px; height:70px; border:1.5px solid var(--gray-100); border-radius:4px; display:flex; align-items:center; justify-content:center; cursor:pointer; overflow:hidden; background:var(--gray-50); }
+.tl-lp-item { flex:0 0 100px; height:70px; border:1.5px solid var(--gray-100); border-radius:4px; display:flex; align-items:center; justify-content:center; cursor:pointer; overflow:hidden; background:var(--gray-300); }
 .tl-lp-item:hover { border-color:var(--accent); }
 .tl-lp-item img, .tl-lp-item .file-type-badge { max-width:90%; max-height:90%; object-fit:contain; }
 .tl-lp-upload { padding:10px; text-align:center; font-size:12px; font-weight:500; color:var(--accent); border:1.5px dashed var(--gray-200); border-radius:4px; cursor:pointer; }
 .tl-lp-upload:hover { background:var(--accent-tint); border-color:var(--accent); }
 .tl-lp-empty { width:100%; padding:8px; text-align:center; font-size:12px; color:var(--gray-400); margin-bottom:12px; }
-
-.tl-side-panel { position:fixed; top:0; right:0; width:280px; height:100vh; background:var(--white); border-left:1px solid var(--gray-100); box-shadow:-4px 0 16px rgba(0,0,0,.08); z-index:200; display:flex; flex-direction:column; }
-.tl-sp-header { display:flex; align-items:center; justify-content:space-between; padding:1rem 1.25rem; border-bottom:1px solid var(--gray-100); }
-.tl-sp-title { font-size:14px; font-weight:600; }
-.tl-sp-close { width:24px; height:24px; border:none; background:transparent; cursor:pointer; font-size:14px; color:var(--gray-600); padding:0; display:flex; align-items:center; justify-content:center; border-radius:4px; }
-.tl-sp-close:hover { background:var(--gray-50); }
-.tl-sp-body { padding:1.25rem; display:flex; flex-direction:column; gap:1rem; overflow-y:auto; }
 
 /* ── Customer section ──────────────────────────────────────── */
 .cs-wrap { padding:.75rem 1.5rem; }

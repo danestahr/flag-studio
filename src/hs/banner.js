@@ -1,13 +1,47 @@
 import { HS, UI, eyedropperBtn, getEffectiveState, getEffectiveVariation } from './state.js';
 import { renderStep1, updateStep1Preview, stripSlotImages, repositionToolbar } from './design.js';
 import { hideHsToolbar } from './logo-utils.js';
-import { ensureTlSlots, snapTlSlotsToDefaults, tlSource } from './template-logos.js';
-import { renderEditor } from './var-editor.js';
+import { deselectTlSlots, ensureTlSlots, snapTlSlotsToDefaults, tlSource } from './template-logos.js';
+import { beginQuickEdit, renderEditor } from './var-editor.js';
 import { renderVariationPreview } from './var-canvas.js';
-import { HS_BANNER_MAX_H, HS_BANNER_MIN_H, HS_FONTS, HS_H, HS_MARGIN, HS_W, emptyBanner } from '../hole-sign-data.js';
-import { dockedLayerPositions, dockedLayers, getBannerRect, getLogoZone, getTemplateLogoSlots, getTextRegions, renderHoleSignInto } from '../hole-sign-render.js';
+import { saveDraftInternal } from './draft.js';
+import { HS_BANNER_DEFAULT_H, HS_BANNER_MAX_H, HS_BANNER_MIN_H, HS_BANNER_MIN_SPACING, HS_FONTS, HS_H, HS_MARGIN, HS_W, emptyBanner } from '../hole-sign-data.js';
+import { bannerFitHeight, dockedLayerPositions, dockedLayers, getBannerRect, getLogoZone, getTemplateLogoSlots, getTextRegions, renderHoleSignInto } from '../hole-sign-render.js';
+import { textLayerSource } from './text-layers.js';
 import { uploadLogo } from '../supabase.js';
 import { logoThumbHtml } from '../media-utils.js';
+import { commitActiveCanvasEdit } from '../dom-utils.js';
+import { clampPanToBg, layoutImgDragThumb, loadNaturalImgSize } from '../image-box.js';
+
+// Clears a selected (not necessarily editing) band-caption zone — the
+// reverse of deselectTlSlots(), called from design.js's template-logo
+// onClick so a selected banner caption and a selected image stay mutually
+// exclusive on this canvas. A plain `window.*` global, not an ES export,
+// since design.js already gets imported by this module — importing this
+// module back into design.js would be circular.
+window.deselectBandZones = function () {
+  document.getElementById('hsBandToolbar')?.remove();
+  if (!UI.canvasSelectedKind) return;
+  UI.canvasSelectedKind = null;
+  document.querySelectorAll('.canvas-edit-zone').forEach(z => z.classList.remove('selected'));
+};
+
+// Debounced autosave for banner edits made directly on Step 1 (HS.bannerTop/
+// HS.bannerBottom) — e.g. via the panel auto-opened by tapping a banner on
+// the canvas. Only applies there: while a per-variation draft is being
+// edited (HS.editingVarId/editingDraft), saveDraftInternal() wouldn't persist
+// the draft anyway (see draft.js) — that path is committed explicitly via
+// applyEditVar()/the full editor's own save, not autosaved here.
+let bannerAutosaveTimer = null;
+function scheduleBannerAutosave() {
+  clearTimeout(bannerAutosaveTimer);
+  bannerAutosaveTimer = setTimeout(() => {
+    saveDraftInternal().then(() => {
+      const el = document.getElementById('saveStatus');
+      if (el) { el.textContent = 'Saved'; setTimeout(() => { el.textContent = ''; }, 1500); }
+    }).catch(() => {});
+  }, 600);
+}
 
 // ── Banner controls ───────────────────────────────────────
 // Like tlSource(): Step 1 edits HS.bannerTop/HS.bannerBottom; the per-variation
@@ -24,12 +58,34 @@ export function bannerSource(which = 'top') {
 }
 
 export function redrawBannerStructural() {
-  if (HS.editingVarId) { renderEditor(); renderVariationPreview(); }
-  else renderStep1();
+  // UI.hsFullEditorOpen distinguishes the full pencil-editor session from a
+  // quick-edit draft (see beginQuickEdit in var-editor.js) — the latter also
+  // sets HS.editingVarId but must not pop the side-panel editor open.
+  if (UI.hsFullEditorOpen) { renderEditor(); renderVariationPreview(); }
+  else if (HS.editingVarId) { renderVariationPreview(); }
+  else { renderStep1(); scheduleBannerAutosave(); }
 }
 export function redrawBannerPreview() {
   if (HS.editingVarId) renderVariationPreview();
-  else updateStep1Preview();
+  else { updateStep1Preview(); scheduleBannerAutosave(); }
+}
+
+// Same list buildBackgroundSection() (design.js) offers for the main sign
+// background image, mirrored here for banner background images.
+const HS_BLEND_MODES = ['normal','multiply','screen','overlay','darken','lighten','color-dodge','color-burn','hard-light','soft-light','difference','color','luminosity'];
+
+// The banner's true (sign-unit) container dimensions — full sign width x
+// its current effective height. Used both for the drag/zoom preview's
+// aspect ratio (so a drag there maps onto the same crop the real render
+// produces) and, more importantly, as the exact clamp bounds for the image
+// pan itself (see clampPanToBg/layoutImgDragThumb in image-box.js) — a
+// rendered pixel measurement of the preview widget would do for the aspect
+// ratio, but carries enough rounding error on a very short/wide banner to
+// silently cut the clamp a hair short of the image's actual edge.
+function bannerContainerDims(which) {
+  const state = getEffectiveState(HS.editingVarId ? HS.variations.find(v => v.id === HS.editingVarId) : null);
+  const rect = getBannerRect(state, which);
+  return rect ? { w: rect.w, h: rect.h } : null;
 }
 
 export function renderBannerSection(which) {
@@ -37,31 +93,81 @@ export function renderBannerSection(which) {
   const label = which === 'top' ? 'Top banner' : 'Bottom banner';
   const cap = which === 'bottom' ? 'Bot' : 'Top';
   const enabled = !!b.enabled;
+  const bannerRect = enabled ? bannerContainerDims(which) : null;
 
   const toggle = `
     <div class="hs-section">
-      <div class="hs-section-title">${label} <span class="hs-optional">(full-width strip)</span></div>
-      <div class="hs-bg-toggle">
-        <button class="hs-tog-btn${enabled ? ' active' : ''}" onclick="setBannerEnabled('${which}',true)">On</button>
-        <button class="hs-tog-btn${!enabled ? ' active' : ''}" onclick="setBannerEnabled('${which}',false)">Off</button>
+      <div class="tl-row">
+        <div class="hs-section-title">${label}</div>
+        <label class="tl-switch"><input type="checkbox"${enabled ? ' checked' : ''} onchange="setBannerEnabled('${which}',this.checked)"><span class="tl-switch-slider"></span></label>
       </div>
     </div>`;
   if (!enabled) return toggle;
 
-  const heightPct = Math.round((b.height - HS_BANNER_MIN_H) / (HS_BANNER_MAX_H - HS_BANNER_MIN_H) * 100);
   const bg = b.bg || {};
   let bgControls;
   if (bg.type === 'image') {
     if (bg.imageUrl) {
+      const imgOp = bg.imageOpacity ?? 100;
+      const overlayOn = !!bg.overlayEnabled;
+      const overlayColor = bg.overlayColor || '#000000';
+      const overlayOp = bg.overlayOpacity ?? 50;
+      const tintControls = `
+        <div class="tl-row" style="margin-top:10px">
+          <div class="tl-row-label">Opacity</div>
+          <div class="tl-size-slider">
+            <input type="range" min="0" max="100" value="${imgOp}" oninput="setBannerImgOpacity('${which}',this.value)">
+            <span class="tl-size-value" id="hsBanner${cap}ImgOpLbl">${imgOp}%</span>
+          </div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-row-label">Greyscale</div>
+          <label class="tl-switch"><input type="checkbox"${bg.imageGreyscale ? ' checked' : ''} onchange="setBannerImgGreyscale('${which}',this.checked)"><span class="tl-switch-slider"></span></label>
+        </div>
+        <div class="tl-row" style="margin-top:10px">
+          <div class="tl-row-label" style="font-size:12px;font-weight:600;color:var(--black)">Color overlay</div>
+          <label class="tl-switch"><input type="checkbox"${overlayOn ? ' checked' : ''} onchange="setBannerOverlayEnabled('${which}',this.checked)"><span class="tl-switch-slider"></span></label>
+        </div>
+        ${overlayOn ? `
+        <div class="color-row" style="margin-top:6px">
+          <input type="color" class="hs-color-swatch" id="hsBanner${cap}OvColorSwatch" value="${overlayColor}" oninput="setBannerOverlayColor('${which}',this.value)">
+          <input type="text" class="hexin" style="flex:1" maxlength="7" value="${overlayColor}" oninput="setBannerOverlayColorHex('${which}',this.value)" placeholder="#000000">
+          ${eyedropperBtn('hsBanner' + cap + 'OvColorSwatch')}
+        </div>
+        <div class="tl-row">
+          <div class="tl-row-label">Amount</div>
+          <div class="tl-size-slider">
+            <input type="range" min="0" max="100" value="${overlayOp}" oninput="setBannerOverlayOpacity('${which}',this.value)">
+            <span class="tl-size-value" id="hsBanner${cap}OvOpLbl">${overlayOp}%</span>
+          </div>
+        </div>
+        <div class="tl-row">
+          <div class="tl-row-label">Blend</div>
+          <select class="hs-editor-select" style="flex:1" onchange="setBannerOverlayBlend('${which}',this.value)">
+            ${HS_BLEND_MODES.map(m => `<option value="${m}"${(bg.overlayBlend || 'normal') === m ? ' selected' : ''}>${m.charAt(0).toUpperCase() + m.slice(1).replace(/-/g,' ')}</option>`).join('')}
+          </select>
+        </div>` : ''}`;
+      const bannerAspect = bannerRect ? `${bannerRect.w}/${bannerRect.h}` : `${HS_W}/${HS_BANNER_DEFAULT_H}`;
       bgControls = `
-        <div class="banner-img-drag-wrap" id="bannerImgWrap${cap}"
+        <div class="hs-img-drag-wrap" id="bannerImgWrap${cap}" style="aspect-ratio:${bannerAspect}"
              onpointerdown="bannerImgDragStart(event,'${which}')"
              onwheel="bannerImgWheel(event,'${which}')">
-          <div class="banner-img-drag-thumb" id="bannerImgThumb${cap}"
-               style="background-image:url('${bg.imageUrl.replace(/'/g,'%27')}');background-position:${bg.imageX??50}% ${bg.imageY??50}%;background-size:${bg.imageScale??100}% auto;"></div>
-          <div class="banner-img-drag-hint">Drag to reposition · Scroll to scale</div>
+          <div class="hs-img-drag-thumb" id="bannerImgThumb${cap}"
+               style="background-image:url('${bg.imageUrl.replace(/'/g,'%27')}')"></div>
+          <div class="hs-img-drag-hint">Drag to reposition · Scroll to scale</div>
         </div>
-        <button class="btn sm" style="margin-top:6px" onclick="removeBannerImage('${which}')">Remove image</button>`;
+        <button class="btn sm" style="margin-top:6px" onclick="removeBannerImage('${which}')">Remove image</button>
+        ${tintControls}`;
+      // Deferred so the wrap has been inserted (and laid out via the
+      // aspect-ratio above) by the time this reads its actual pixel size.
+      // The onNaturalSizeLoaded callback only ever fires for an image
+      // saved before natural-size capture existed (see layoutImgDragThumb)
+      // — redraw once it backfills so the canvas picks up the image's real
+      // pan range too, not just this thumb.
+      {
+        const dims = bannerRect || { w: HS_W, h: HS_BANNER_DEFAULT_H };
+        requestAnimationFrame(() => layoutImgDragThumb(document.getElementById('bannerImgWrap' + cap), document.getElementById('bannerImgThumb' + cap), bg, dims.w, dims.h, redrawBannerPreview));
+      }
     } else {
       bgControls = `
         <div style="margin-top:4px">
@@ -84,18 +190,6 @@ export function renderBannerSection(which) {
   return `
     ${toggle}
     <div class="hs-section">
-      <div class="hs-section-title">Height <span id="hsBanner${cap}HeightVal" class="hs-optional">${heightPct}%</span></div>
-      <div class="hs-canvas-hint">Drag the line on the banner's edge in the canvas to resize.</div>
-    </div>
-    <div class="hs-section">
-      <div class="hs-section-title">Text alignment <span class="hs-optional">(within the banner)</span></div>
-      <div class="hs-bg-toggle">
-        <button class="hs-tog-btn${valign === 'top' ? ' active' : ''}" onclick="setBannerValign('${which}','top')">Top</button>
-        <button class="hs-tog-btn${valign === 'center' ? ' active' : ''}" onclick="setBannerValign('${which}','center')">Center</button>
-        <button class="hs-tog-btn${valign === 'bottom' ? ' active' : ''}" onclick="setBannerValign('${which}','bottom')">Bottom</button>
-      </div>
-    </div>
-    <div class="hs-section">
       <div class="hs-section-title">Background</div>
       <div class="hs-bg-toggle">
         <button class="hs-tog-btn${(bg.type || 'color') === 'color' ? ' active' : ''}" onclick="setBannerBgType('${which}','color')">Color</button>
@@ -104,12 +198,42 @@ export function renderBannerSection(which) {
       ${bgControls}
     </div>
     <div class="hs-section">
-      <div class="hs-section-title">Text spacing <span id="hsBanner${cap}SpacingVal" class="hs-optional">${b.spacing || 0}</span></div>
-      <div class="hs-canvas-hint">Drag a free text layer into this banner to dock it — drag the line between stacked layers in the canvas to adjust their spacing.</div>
+      <div class="hs-section-title">Text alignment <span class="hs-optional">(within the banner)</span></div>
+      <div class="hs-bg-toggle">
+        <button class="hs-tog-btn${valign === 'top' ? ' active' : ''}" onclick="setBannerValign('${which}','top')">Top</button>
+        <button class="hs-tog-btn${valign === 'center' ? ' active' : ''}" onclick="setBannerValign('${which}','center')">Center</button>
+        <button class="hs-tog-btn${valign === 'bottom' ? ' active' : ''}" onclick="setBannerValign('${which}','bottom')">Bottom</button>
+      </div>
     </div>`;
 }
 
-window.setBannerEnabled = function (which, on) { bannerSource(which).enabled = !!on; redrawBannerStructural(); };
+// Turning a banner on can drop its colored strip right on top of free text
+// that was previously just floating on the (empty) edge of the sign — dock
+// any such overlapping text into the banner instead of leaving it stranded
+// under/behind the new strip. Docked layers use the banner's own `spacing`
+// field automatically, so this doesn't need to pick any spacing itself.
+function autoDockOverlappingText(which) {
+  const state = getEffectiveState(HS.editingVarId ? HS.variations.find(v => v.id === HS.editingVarId) : null);
+  const rect = getBannerRect(state, which);
+  if (!rect) return;
+  const overlapping = textLayerSource().filter(l => {
+    if (l.dock || !l.text || !l.text.trim()) return false;
+    const w = l.w || Math.round(HS_W * 0.8);
+    const h = (l.size || 200) * 1.1; // rough single-line estimate — good enough for an overlap test
+    const cx = l.x + w / 2, cy = l.y + h / 2;
+    return cx >= rect.x && cx <= rect.x + rect.w && cy >= rect.y && cy <= rect.y + rect.h;
+  });
+  if (!overlapping.length) return;
+  overlapping.sort((a, b) => a.y - b.y); // stack in the order they already read top-to-bottom
+  let order = getDockedSiblings(state, which, null).length;
+  overlapping.forEach(l => { l.dock = which; l.dockOrder = order++; });
+}
+window.setBannerEnabled = function (which, on) {
+  const b = bannerSource(which);
+  b.enabled = !!on;
+  if (b.enabled) autoDockOverlappingText(which);
+  redrawBannerStructural();
+};
 window.setBannerHeight = function (which, val) {
   const cap = which === 'bottom' ? 'Bot' : 'Top';
   const b = bannerSource(which);
@@ -136,6 +260,21 @@ window.handleBannerImageUpload = async function (which, e) {
     const b = bannerSource(which);
     b.bg.imageUrl = logo.src;
     b.bg.storagePath = logo.storagePath;
+    // Captured once here (rather than derived on the fly) so the renderer
+    // (hole-sign-render.js) and this drag control can both do a real
+    // "cover" fit — knowing which axis actually has slack to pan through —
+    // without either of them needing to load the image themselves.
+    b.bg.imageNaturalW = null;
+    b.bg.imageNaturalH = null;
+    // The canvas render this triggers below runs before this resolves, so it
+    // falls back to the old (locked-until-zoomed) box model — redraw once
+    // natural size actually lands so the real pan range appears on its own,
+    // without needing the user to nudge the image first to "unstick" it.
+    loadNaturalImgSize(logo.src, (w, h) => {
+      b.bg.imageNaturalW = w;
+      b.bg.imageNaturalH = h;
+      redrawBannerPreview();
+    });
     redrawBannerStructural();
   } catch (err) { console.error('Banner image upload failed', err); }
 };
@@ -143,6 +282,51 @@ window.removeBannerImage = function (which) {
   const b = bannerSource(which);
   b.bg.imageUrl = null;
   b.bg.storagePath = null;
+  redrawBannerStructural();
+};
+window.setBannerImgOpacity = function (which, val) {
+  const cap = which === 'bottom' ? 'Bot' : 'Top';
+  bannerSource(which).bg.imageOpacity = parseInt(val, 10);
+  const lbl = document.getElementById('hsBanner' + cap + 'ImgOpLbl');
+  if (lbl) lbl.textContent = val + '%';
+  redrawBannerPreview();
+};
+window.setBannerImgGreyscale = function (which, on) {
+  bannerSource(which).bg.imageGreyscale = !!on;
+  redrawBannerPreview();
+};
+window.setBannerOverlayColor = function (which, val) {
+  const cap = which === 'bottom' ? 'Bot' : 'Top';
+  bannerSource(which).bg.overlayColor = val;
+  const hex = document.getElementById('hsBanner' + cap + 'OvColorSwatch');
+  if (hex) hex.nextElementSibling.value = val;
+  redrawBannerPreview();
+};
+window.setBannerOverlayColorHex = function (which, val) {
+  const c = val.startsWith('#') ? val : '#' + val;
+  if (!/^#[0-9A-Fa-f]{6}$/.test(c)) return;
+  const cap = which === 'bottom' ? 'Bot' : 'Top';
+  bannerSource(which).bg.overlayColor = c;
+  const swatch = document.getElementById('hsBanner' + cap + 'OvColorSwatch');
+  if (swatch) swatch.value = c;
+  redrawBannerPreview();
+};
+window.setBannerOverlayOpacity = function (which, val) {
+  const cap = which === 'bottom' ? 'Bot' : 'Top';
+  bannerSource(which).bg.overlayOpacity = parseInt(val, 10);
+  const lbl = document.getElementById('hsBanner' + cap + 'OvOpLbl');
+  if (lbl) lbl.textContent = val + '%';
+  redrawBannerPreview();
+};
+window.setBannerOverlayBlend = function (which, val) {
+  bannerSource(which).bg.overlayBlend = val;
+  redrawBannerPreview();
+};
+window.setBannerOverlayEnabled = function (which, on) {
+  const b = bannerSource(which);
+  b.bg.overlayEnabled = !!on;
+  // Default the amount to 50% when first enabling so it's immediately visible.
+  if (on && !(b.bg.overlayOpacity > 0)) b.bg.overlayOpacity = 50;
   redrawBannerStructural();
 };
 window.setBannerImagePos = function (which, key, val) {
@@ -156,13 +340,14 @@ window.setBannerImagePos = function (which, key, val) {
 };
 window.bannerImgDragStart = function (e, which) {
   e.preventDefault();
-  const cap = which === 'bottom' ? 'Bottom' : 'Top';
+  const cap = which === 'bottom' ? 'Bot' : 'Top';
   const wrap  = document.getElementById('bannerImgWrap'  + cap);
   const thumb = document.getElementById('bannerImgThumb' + cap);
   if (!wrap || !thumb) return;
   const b = bannerSource(which);
   if (!b.bg) b.bg = {};
   const bg = b.bg;
+  const dims = bannerContainerDims(which) || { w: HS_W, h: HS_BANNER_DEFAULT_H };
   const x0 = e.clientX, y0 = e.clientY;
   const ix0 = bg.imageX ?? 50, iy0 = bg.imageY ?? 50;
   wrap.setPointerCapture(e.pointerId);
@@ -172,15 +357,17 @@ window.bannerImgDragStart = function (e, which) {
     raf = requestAnimationFrame(() => { raf = null; });
     const dx = (ev.clientX - x0) / wrap.offsetWidth  * 100;
     const dy = (ev.clientY - y0) / wrap.offsetHeight * 100;
-    bg.imageX = Math.max(0, Math.min(100, ix0 - dx));
-    bg.imageY = Math.max(0, Math.min(100, iy0 - dy));
-    thumb.style.backgroundPosition = `${bg.imageX}% ${bg.imageY}%`;
-    if (HS.editingVarId) renderVariationPreview(); else updateStep1Preview();
+    const p = clampPanToBg(dims.w, dims.h, bg, ix0 - dx, iy0 - dy);
+    bg.imageX = p.x;
+    bg.imageY = p.y;
+    const redrawCanvas = () => { if (HS.editingVarId) renderVariationPreview(); else updateStep1Preview(); };
+    layoutImgDragThumb(wrap, thumb, bg, dims.w, dims.h, redrawCanvas);
+    redrawCanvas();
   }
   function onUp() {
     wrap.removeEventListener('pointermove', onMove);
     wrap.removeEventListener('pointerup', onUp);
-    if (HS.editingVarId) renderVariationPreview(); else updateStep1Preview();
+    redrawBannerPreview();
   }
   wrap.addEventListener('pointermove', onMove);
   wrap.addEventListener('pointerup', onUp);
@@ -188,18 +375,23 @@ window.bannerImgDragStart = function (e, which) {
 
 window.bannerImgWheel = function (e, which) {
   e.preventDefault();
-  const cap = which === 'bottom' ? 'Bottom' : 'Top';
+  const cap = which === 'bottom' ? 'Bot' : 'Top';
+  const wrap  = document.getElementById('bannerImgWrap'  + cap);
   const thumb = document.getElementById('bannerImgThumb' + cap);
   const b = bannerSource(which);
   if (!b.bg) b.bg = {};
   const bg = b.bg;
+  const dims = bannerContainerDims(which) || { w: HS_W, h: HS_BANNER_DEFAULT_H };
   const delta = e.deltaY > 0 ? -5 : 5;
   bg.imageScale = Math.max(100, Math.min(300, (bg.imageScale ?? 100) + delta));
-  if (thumb) thumb.style.backgroundSize = `${bg.imageScale}% auto`;
+  // Zooming out can shrink the valid pan range below the current position —
+  // re-clamp now rather than leaving a gap until the next drag touches it.
+  const p = clampPanToBg(dims.w, dims.h, bg, bg.imageX, bg.imageY);
+  bg.imageX = p.x;
+  bg.imageY = p.y;
+  layoutImgDragThumb(wrap, thumb, bg, dims.w, dims.h, redrawBannerPreview);
   clearTimeout(window._bannerWheelT);
-  window._bannerWheelT = setTimeout(() => {
-    if (HS.editingVarId) renderVariationPreview(); else updateStep1Preview();
-  }, 80);
+  window._bannerWheelT = setTimeout(redrawBannerPreview, 80);
 };
 
 window.setBannerValign = function (which, val) {
@@ -208,19 +400,39 @@ window.setBannerValign = function (which, val) {
 };
 window.setBannerSpacing = function (which, val) {
   const cap = which === 'bottom' ? 'Bot' : 'Top';
-  bannerSource(which).spacing = parseInt(val, 10) || 0;
+  const b = bannerSource(which);
+  b.spacing = Math.max(HS_BANNER_MIN_SPACING, parseInt(val, 10) || HS_BANNER_MIN_SPACING);
   const lbl = document.getElementById('hsBanner' + cap + 'SpacingVal');
-  if (lbl) lbl.textContent = parseInt(val, 10) || 0;
+  if (lbl) lbl.textContent = b.spacing;
   redrawBannerPreview();
 };
 
 window.quickAdd = function (kind, position) {
   const editing = !!(HS.editingVarId && HS.editingDraft);
   if (kind === 'banner') {
-    const openMenu = editing ? window.openHsVarMenu : window.openHsMenu;
-    const b = bannerSource(position);  // position is 'top' | 'bottom'
-    b.enabled = true;
-    openMenu(position === 'bottom' ? 'bannerBottom' : 'bannerTop');
+    const key = position === 'bottom' ? 'bannerBottom' : 'bannerTop';
+    if (editing) {
+      // Navigate (and snapshot the section's pre-mutation state, for that
+      // section's own Cancel — see openHsVarMenu in var-editor.js) *before*
+      // enabling the banner below, not after — otherwise the snapshot would
+      // already carry enabled:true, and Cancel right after a fresh quick-add
+      // would have nothing to revert to (the banner would stick around).
+      window.openHsVarMenu(key);
+      const b = bannerSource(position);
+      b.enabled = true;
+      autoDockOverlappingText(position);
+      // openHsVarMenu only repaints the sidebar's #hsVarList, not the
+      // separate #hsSignPreview canvas — without these, the just-enabled
+      // banner wouldn't actually show up (or become editable) on the sign
+      // until some other action happened to trigger a preview repaint.
+      renderEditor();
+      renderVariationPreview();
+    } else {
+      const b = bannerSource(position);  // position is 'top' | 'bottom'
+      b.enabled = true;
+      autoDockOverlappingText(position);
+      window.openHsMenu(key); // rebuilds the whole Step-1 panel, canvas included
+    }
   }
 };
 
@@ -286,7 +498,7 @@ export function beginBandSnap(previewEl, kind, e, captureEl) {
     reflowedPos = p;
     tlSource().vAlign = p;
     const st = getEffectiveState(editingVar);
-    const bgVar = (editingVar && !editingVar.logoSrc) ? getEffectiveVariation(editingVar) : null;
+    const bgVar = (editingVar && !editingVar.logos?.length) ? getEffectiveVariation(editingVar) : null;
     const tmp = document.createElement('div');
     // Strip free text layers + top/bottom text from the SVG the same way the
     // main render does — otherwise, since their DOM overlays stay on top
@@ -377,11 +589,32 @@ function syncTextZones(previewEl, st) {
 // Step-1 "Variation logo" placeholder and the Variations step's live drop
 // zone need to resize with it in real time, not just snap into place once the
 // drag ends.
-function syncLogoZone(previewEl, st) {
+export function syncLogoZone(previewEl, st) {
   const lz = getLogoZone(st, st.templateStyle);
   if (!lz) return;
   const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
   previewEl.querySelectorAll('.dzone').forEach(dzone => {
+    dzone.classList.remove('hs-logo-zone-previewing');
+    dzone.style.left = pct(lz.x, HS_W);
+    dzone.style.top = pct(lz.y, HS_H);
+    dzone.style.width = pct(lz.w, HS_W);
+    dzone.style.height = pct(lz.h, HS_H);
+  });
+}
+
+// Preview variant of syncLogoZone for design.js's free-text-layer drag: while
+// hovering within HS_BANNER_EDGE_PX of an edge whose banner isn't enabled
+// yet, simulate turning that banner on at its default height so the sponsor
+// logo zone eases into the same shrink it'll actually get once the drop
+// enables the banner — without touching the real (not-yet-committed) state.
+export function previewLogoZoneShrink(previewEl, state, which) {
+  const key = which === 'bottom' ? 'bannerBottom' : 'bannerTop';
+  const preview = { ...state, [key]: { ...(state[key] || emptyBanner()), enabled: true, height: HS_BANNER_DEFAULT_H } };
+  const lz = getLogoZone(preview, preview.templateStyle);
+  if (!lz) return;
+  const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
+  previewEl.querySelectorAll('.dzone').forEach(dzone => {
+    dzone.classList.add('hs-logo-zone-previewing');
     dzone.style.left = pct(lz.x, HS_W);
     dzone.style.top = pct(lz.y, HS_H);
     dzone.style.width = pct(lz.w, HS_W);
@@ -421,24 +654,104 @@ export function hitTestDockZone(state, cx, cy, stickyTo) {
   return null;
 }
 
-export function showDockHighlight(previewEl, state, which) {
-  const rect = getBannerRect(state, which);
-  if (!rect) { clearDockHighlight(previewEl); return; }
+// Screen-pixel depth the dragged box's edge must overlap into an already-
+// enabled banner's rect before design.js's free-text-layer drag treats it as
+// docked — and, symmetrically, the overlap it must drop back below to
+// undock. A simpler, symmetric alternative to hitTestDockZone's center-point
+// + one-sided hysteresis test, used only for that drag's live dock/reflow
+// trigger (see dockOverlapHit).
+export const HS_DOCK_OVERLAP_PX = 8;
+
+// `boxY`/`boxH` are the dragged box's vertical extent in sign coords; `sy` is
+// the sign-to-screen scale factor (screen px per sign unit), used to convert
+// HS_DOCK_OVERLAP_PX into sign-space units. Banners always span the full
+// sign width (see getBannerRect), so unlike hitTestDockZone this only needs
+// to check vertical overlap depth, not a horizontal bound too.
+//
+// `stickyTo`/`layerId`: when this layer is already docked to a zone, that
+// zone's overlap is measured against the layer's OWN current stacked slot
+// (from dockedLayerPositions), not the whole banner rect. The banner rect
+// can be much taller than this one line of text — a manually-set banner
+// height, or other docked siblings padding it out — so testing against the
+// full rect makes undocking feel like it "takes a while" (still plenty of
+// overlap left even once the box has visibly left its own slot). Entering a
+// zone this layer isn't already in still tests against the full rect, since
+// there's no slot of its own to compare against yet.
+export function dockOverlapHit(state, boxY, boxH, sy, stickyTo, layerId) {
+  const thresh = HS_DOCK_OVERLAP_PX / sy;
+  for (const which of ['top', 'bottom']) {
+    const rect = stickyTo === which ? dockedLayerPositions(state, which)[layerId] : getBannerRect(state, which);
+    if (!rect) continue;
+    const overlap = Math.min(boxY + boxH, rect.y + rect.h) - Math.max(boxY, rect.y);
+    if (overlap >= thresh) return which;
+  }
+  return null;
+}
+
+// Fakes a smooth collapse of the banner's colored background band when a
+// docked layer leaves it (design.js's free-text-layer drag) — shrinking the
+// band, or killing it outright if that was the last docked layer. reflowBannerSvg
+// already commits the new, correct layout for everything else (remaining
+// docked siblings, logo zone, template logos) via a full SVG replace, so
+// rather than also trying to interpolate all of that, this lays a plain
+// colored div over where the OLD (taller) band used to be and eases it down
+// to the NEW rect (or to zero height, anchored at the banner's own edge, if
+// it was killed) — the already-final content underneath is revealed exactly
+// as the ghost shrinks away from it. `oldRect`/`newRect` are getBannerRect's
+// results from just before/after the layer left; `newRect` is null when the
+// banner was killed.
+export function showBannerShrinkGhost(previewEl, which, oldRect, newRect, color) {
+  if (!oldRect) return;
   const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
-  let el = previewEl.querySelector('.hs-dock-highlight');
+  previewEl.querySelectorAll(`.hs-banner-shrink-ghost[data-which="${which}"]`).forEach(el => el.remove());
+  const el = document.createElement('div');
+  el.className = 'hs-banner-shrink-ghost';
+  el.dataset.which = which;
+  el.style.cssText = 'position:absolute;left:0;width:100%;z-index:3;pointer-events:none;';
+  el.style.background = color;
+  el.style.top = pct(oldRect.y, HS_H);
+  el.style.height = pct(oldRect.h, HS_H);
+  previewEl.appendChild(el);
+  const targetY = newRect ? newRect.y : (which === 'bottom' ? HS_H : 0);
+  const targetH = newRect ? newRect.h : 0;
+  // Double rAF: the first lets the browser paint the "old" box (so it has a
+  // real prior state to transition from instead of animating in from
+  // nothing), the second then sets the target the CSS transition eases to.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    el.style.top = pct(targetY, HS_H);
+    el.style.height = pct(targetH, HS_H);
+  }));
+  el.addEventListener('transitionend', () => el.remove(), { once: true });
+  // Belt-and-suspenders: a full re-render can remove/replace previewEl's
+  // children before transitionend ever fires, so also clear it on a timer.
+  setTimeout(() => el.remove(), 400);
+}
+
+// Temporary "ghost" banner strip shown while a free text layer is dragged
+// within HS_BANNER_EDGE_PX of the top/bottom edge on a side whose banner
+// isn't enabled yet (see design.js's free-text-layer drag handler) — previews
+// where it'll land (and that the banner will switch on) if dropped there.
+export function showBannerPreview(previewEl, which) {
+  const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
+  let el = previewEl.querySelector('.hs-banner-preview');
   if (!el) {
     el = document.createElement('div');
-    el.className = 'hs-dock-highlight band-drop-target active';
+    el.className = 'hs-banner-preview band-drop-target active';
     el.style.cssText = 'position:absolute;left:0;width:100%;z-index:4;';
     previewEl.appendChild(el);
   }
-  el.style.top = pct(rect.y, HS_H);
-  el.style.height = pct(rect.h, HS_H);
+  el.style.top = which === 'bottom' ? pct(HS_H - HS_BANNER_DEFAULT_H, HS_H) : '0%';
+  el.style.height = pct(HS_BANNER_DEFAULT_H, HS_H);
 }
 
-export function clearDockHighlight(previewEl) {
-  previewEl.querySelector('.hs-dock-highlight')?.remove();
+export function clearBannerPreview(previewEl) {
+  previewEl.querySelector('.hs-banner-preview')?.remove();
 }
+
+// Pixel (screen) distance from the top/bottom canvas edge within which
+// dragging a free text layer previews + drops it into that side's banner,
+// enabling the banner if it wasn't already on. See design.js.
+export const HS_BANNER_EDGE_PX = 16;
 
 // Repositions every currently-docked layer's DOM overlay to match
 // dockedLayerPositions() — called from reflowBannerSvg/beginBandSnap's
@@ -483,14 +796,27 @@ function syncBannerHandles(previewEl, st) {
     const banner = which === 'bottom' ? st.bannerBottom : st.bannerTop;
     const rect = getBannerRect(st, which);
     const heightHandle = previewEl.querySelector(`.hs-banner-height-handle[data-which="${which}"]`);
-    if (heightHandle && rect) {
-      const edgeY = which === 'bottom' ? rect.y : rect.y + rect.h;
-      heightHandle.style.top = pct(edgeY, HS_H);
+    if (heightHandle) {
+      if (rect) {
+        heightHandle.classList.remove('hs-banner-handle-hidden');
+        const edgeY = which === 'bottom' ? rect.y : rect.y + rect.h;
+        heightHandle.style.top = pct(edgeY, HS_H);
+      } else {
+        // Banner just went away (its last docked layer left, or it never had
+        // one) — fade the handle out instead of leaving it stranded at its
+        // last position, since nothing below updates it again until the next
+        // full render (see wireBannerHeightHandles's own !banner?.enabled
+        // guard, which only runs on that next render, not live).
+        heightHandle.classList.add('hs-banner-handle-hidden');
+      }
     }
     const spacingHandle = previewEl.querySelector(`.hs-banner-spacing-handle[data-which="${which}"]`);
     if (spacingHandle && rect && banner) {
       const mid = dockGapMid(st, which);
-      if (mid != null) spacingHandle.style.top = pct(mid, HS_H);
+      if (mid != null) { spacingHandle.classList.remove('hs-banner-handle-hidden'); spacingHandle.style.top = pct(mid, HS_H); }
+      else spacingHandle.classList.add('hs-banner-handle-hidden');
+    } else if (spacingHandle) {
+      spacingHandle.classList.add('hs-banner-handle-hidden');
     }
   });
 }
@@ -499,9 +825,9 @@ function syncBannerHandles(previewEl, st) {
 // untouched) so live drags get real layout feedback — same technique as
 // beginBandSnap's reflowTo. Returns the fresh effective state so callers can
 // reposition their own handle from it.
-function reflowBannerSvg(previewEl, editingVar) {
+export function reflowBannerSvg(previewEl, editingVar) {
   const st = getEffectiveState(editingVar);
-  const bgVar = (editingVar && !editingVar.logoSrc) ? getEffectiveVariation(editingVar) : null;
+  const bgVar = (editingVar && !editingVar.logos?.length) ? getEffectiveVariation(editingVar) : null;
   const tmp = document.createElement('div');
   // Strip free text layers (including any docked to a banner) + top/bottom
   // text from the SVG the same way the main render does — their DOM overlays
@@ -522,9 +848,26 @@ function reflowBannerSvg(previewEl, editingVar) {
   return st;
 }
 
+// Manual dblclick detection, keyed per which — same rationale as design.js's
+// checkWidthHandleDblClick: a plain click's pointerup calls redrawBannerStructural(),
+// which fully re-renders the overlay tree and replaces this handle's DOM node,
+// so a native 'dblclick' listener would rarely see both clicks land on the
+// same element. Module-level (not per-render) so the timestamp survives that
+// re-render.
+const hsBannerHeightDblClickAt = { top: 0, bottom: 0 };
+function checkHeightHandleDblClick(which) {
+  const now = Date.now();
+  const prev = hsBannerHeightDblClickAt[which];
+  if (prev && now - prev < 400) { hsBannerHeightDblClickAt[which] = 0; return true; }
+  hsBannerHeightDblClickAt[which] = now;
+  return false;
+}
+
 // On-canvas drag handle for banner height — a small line at the banner's free
 // edge (bottom edge for the top banner, top edge for the bottom banner) that
-// drags the height directly, in place of the sidebar slider.
+// drags the height directly, in place of the sidebar slider. Double-clicking
+// it instead collapses the banner to "hug" its docked text content (see
+// bannerFitHeight).
 export function wireBannerHeightHandles(previewEl) {
   const editingVar = HS.editingVarId ? HS.variations.find(v => v.id === HS.editingVarId) : null;
   const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
@@ -542,11 +885,17 @@ export function wireBannerHeightHandles(previewEl) {
     handle.className = 'hs-banner-height-handle';
     handle.dataset.which = which;
     handle.style.top = pct(edgeY, HS_H);
-    handle.title = 'Drag to resize banner height';
+    handle.title = 'Drag to resize · double-click to hug content';
 
     let startY, startHeight;
     handle.addEventListener('pointerdown', e => {
       e.stopPropagation();
+      if (checkHeightHandleDblClick(which)) {
+        e.preventDefault();
+        bannerSource(which).height = bannerFitHeight(getEffectiveState(editingVar), which);
+        redrawBannerStructural();
+        return;
+      }
       handle.setPointerCapture(e.pointerId);
       startY = e.clientY;
       startHeight = bannerSource(which).height || 0;
@@ -612,9 +961,14 @@ export function wireBannerSpacingHandles(previewEl) {
     handle.addEventListener('pointermove', e => {
       if (!handle.hasPointerCapture(e.pointerId)) return;
       const sy = previewEl.offsetHeight / HS_H;
-      const dy = (e.clientY - startY) / sy;
+      // Bottom banner's stack sits against the sign's bottom edge, so dragging
+      // toward that edge (down) should read as squeezing the gap shut, and
+      // dragging away from it (up) as pulling it open — the opposite sign from
+      // the top banner, whose stack sits against the top edge instead.
+      const dir = which === 'bottom' ? -1 : 1;
+      const dy = (e.clientY - startY) / sy * dir;
       const b = bannerSource(which);
-      b.spacing = Math.max(0, Math.min(500, Math.round(startSpacing + dy * 2)));
+      b.spacing = Math.max(HS_BANNER_MIN_SPACING, Math.min(500, Math.round(startSpacing + dy * 2)));
       const lbl = document.getElementById('hsBanner' + cap + 'SpacingVal');
       if (lbl) lbl.textContent = b.spacing;
       reflowBannerSvg(previewEl, editingVar); // also repositions this handle + the height handle
@@ -660,11 +1014,24 @@ export function selectAll(el) {
   sel.addRange(range);
 }
 
-export function wireCanvasTextEditing(previewEl) {
+export function wireCanvasTextEditing(previewEl, { locked = false } = {}) {
   const editing = HS.editingVarId && HS.editingDraft;
-  const state = getEffectiveState(editing ? HS.variations.find(v => v.id === HS.editingVarId) : null);
-  // Keep the active text band alive even if its text is momentarily cleared,
-  // so clearing the text doesn't dismiss the editor.
+  // `editing` above is a snapshot at wire-time, fine for the read-only layout
+  // math below; writes (setText/setProp) need the live value since locked
+  // mode's first click starts a draft (beginQuickEdit) *after* this function
+  // has already been wired, mid-interaction.
+  const isNowEditing = () => !!(HS.editingVarId && HS.editingDraft);
+  // Locked (quick-edit) mode hasn't necessarily started a draft yet (that only
+  // happens on the first click, via beginQuickEdit in startEdit below) — until
+  // then, read this variation's already-merged effective state (template +
+  // its own overrides) via HS.activeVarId, not the empty global template.
+  const stateVarId = editing ? HS.editingVarId : (locked ? HS.activeVarId : null);
+  const state = getEffectiveState(stateVarId ? HS.variations.find(v => v.id === stateVarId) : null);
+  // Keep the active text band alive while it's being typed into, even if that
+  // leaves it momentarily empty, so clearing the text mid-edit doesn't dismiss
+  // the editor out from under the user. Deleting via the toolbar/Delete key
+  // while merely *selected* (not editing) is deliberately not forced here —
+  // that should kill the band immediately, not leave an empty placeholder.
   const forceableKinds = ['top', 'bottom'];
   const forceText = (UI.canvasEdit && forceableKinds.includes(UI.canvasEdit.kind)) ? [UI.canvasEdit.kind] : [];
   const regions = getTextRegions(state, state.templateStyle, forceText);
@@ -685,12 +1052,12 @@ export function wireCanvasTextEditing(previewEl) {
     return getTextRegions(liveState, liveState.templateStyle, forceText)[targetKind];
   };
   const setText = (kind, value) => {
-    const obj = editing ? HS.editingDraft : HS;
+    const obj = isNowEditing() ? HS.editingDraft : HS;
     const k = kind === 'top' ? 'topText' : 'bottomText';
     obj[k] = { ...obj[k], text: value };
     // Per-variation overrides (HS.editingDraft) aren't part of the Step-1
     // template-switch carry-over logic, so only the main design state counts.
-    if (!editing) {
+    if (!isNowEditing()) {
       const slot = kind === 'top' ? 'primary' : 'secondary';
       HS.captionsEdited[slot] = true;
     }
@@ -699,14 +1066,15 @@ export function wireCanvasTextEditing(previewEl) {
   // toolbar (setText's text-only path stays separate since inline typing has
   // its own commit flow).
   const setProp = (kind, prop, value) => {
-    const obj = editing ? HS.editingDraft : HS;
+    const obj = isNowEditing() ? HS.editingDraft : HS;
     const k = kind === 'top' ? 'topText' : 'bottomText';
     obj[k] = { ...obj[k], [prop]: value };
   };
   // Live: re-render the preview only (re-runs this wiring, which restores the
-  // input below). Final: also refresh the side controls.
-  const rerenderLive = () => { UI.canvasRerendering = true; if (editing) renderVariationPreview(); else updateStep1Preview(); UI.canvasRerendering = false; };
-  const rerenderFinal = () => { if (editing) { renderEditor(); renderVariationPreview(); } else updateStep1Preview(); };
+  // input below). Final: also refresh the side controls — except in locked
+  // (quick-edit) mode, which has no side panel to refresh.
+  const rerenderLive = () => { UI.canvasRerendering = true; if (locked || isNowEditing()) renderVariationPreview(); else updateStep1Preview(); UI.canvasRerendering = false; };
+  const rerenderFinal = () => { if (locked) renderVariationPreview(); else if (isNowEditing()) { renderEditor(); renderVariationPreview(); } else updateStep1Preview(); };
 
   // ── On-canvas toolbar (font/size/color/align/remove) ─────────────────────
   // Mirrors the free text-layer toolbar (`.hs-tl-toolbar`, same CSS) so band
@@ -814,7 +1182,8 @@ export function wireCanvasTextEditing(previewEl) {
     // The SVG copy of this band is hidden while editing (no halo), so the
     // input itself must show the real text color.
     const textColor = textObj(kind).color || '#111110';
-    input.style.cssText = `width:100%;height:100%;box-sizing:border-box;outline:none;display:flex;align-items:center;${fontStyle(kind)}caret-color:${textColor};`;
+    input.style.cssText = `width:100%;height:100%;box-sizing:border-box;outline:none;cursor:text;display:flex;align-items:center;${fontStyle(kind)}caret-color:${textColor};`;
+    input.dataset.baseSize = t.size || 200;
     // The SVG text for this band is hidden while editing (no halo), so the live
     // editor sits over the band background without needing an opaque cover.
     // Only the hotspot is replaced — the resize-corner handles are siblings
@@ -833,7 +1202,11 @@ export function wireCanvasTextEditing(previewEl) {
       UI.canvasEdit = null;
       setText(kind, input.textContent);
       closeBandToolbar();
-      rerenderFinal();
+      // Locked (quick-edit) mode: persist straight to this variation's
+      // override and drop back out of the draft — applyEditVar() already
+      // re-renders the canvas, so no separate rerenderFinal() call.
+      if (locked) window.applyEditVar();
+      else rerenderFinal();
     };
     input.addEventListener('input', () => {
       UI.canvasEdit = { kind, caret: caretOffset(input) };
@@ -867,33 +1240,60 @@ export function wireCanvasTextEditing(previewEl) {
       // Don't commit if focus moved to the floating toolbar — the user is
       // changing font/size/color/align while still editing.
       if (e.relatedTarget?.closest?.('#hsBandToolbar')) return;
-      setTimeout(() => {
-        // A corner-handle drag or toolbar change can trigger a re-render (and
-        // thus this same blur) synchronously; by the time this deferred check
-        // runs, a newer edit session may have already replaced this input via
-        // the "restore in-progress edit" logic below. Don't finalize a stale one.
-        if (!input.isConnected) return;
-        if (document.activeElement?.closest?.('#hsBandToolbar')) return;
-        if (!UI.canvasRerendering) finalize();
-      }, 100);
+      // Commit synchronously, not deferred: finalize()'s rerender needs to land
+      // *before* the click that caused this blur reaches its own target, so that
+      // click re-hits the freshly rebuilt element instead of one about to be torn
+      // down. A deferred commit was landing after the user had already selected
+      // something else, clobbering that selection and forcing a second click.
+      // isConnected/canvasRerendering are still meaningful checked synchronously:
+      // a corner-handle drag's live rerender removes+replaces this input (firing
+      // this same blur) *before* control returns here, so a stale input is
+      // already disconnected and UI.canvasRerendering already true by this point.
+      if (!input.isConnected) return;
+      if (document.activeElement?.closest?.('#hsBandToolbar')) return;
+      if (!UI.canvasRerendering) finalize();
     });
+
+    // Belt-and-suspenders for the blur handler above: plenty of other canvas
+    // surfaces (a logo's empty drop zone, a template-logo slot, the
+    // background quick-swap zone) aren't focusable, so clicking them never
+    // fires a native blur on this input at all — nothing then commits the
+    // edit, leaving HS.editingDraft dangling. From then on getEffectiveState
+    // keeps preferring that stale draft over the variation's real saved
+    // content on every future read, which is what looks like text
+    // "reverting to the template" and the band staying highlighted forever.
+    // A capture-phase outside click always fires regardless of what (if
+    // anything) the clicked element's own handler does, so use it as the
+    // catch-all commit point instead of chasing every call site.
+    setTimeout(() => {
+      const outsideCommit = ev => {
+        if (ev.target.closest?.('.canvas-edit-input, #hsBandToolbar')) return;
+        document.removeEventListener('click', outsideCommit, true);
+        if (!UI.canvasRerendering) finalize();
+      };
+      document.addEventListener('click', outsideCommit, true);
+    }, 0);
   };
 
   Object.entries(regions).forEach(([kind, rect]) => {
     const t = textObj(kind);
     const hasText = !!(t.text && t.text.trim());
-    const isActive = UI.canvasEdit?.kind === kind;
+    const isEditingThis = UI.canvasEdit?.kind === kind;
+    const isActive = isEditingThis || UI.canvasSelectedKind === kind;
     const zone = document.createElement('div');
     // hs-tl-overlay reuses the free text-layer's hover/selected border + the
     // resize-corner hover-reveal CSS (same purple `--guides` selected color).
     zone.className = 'canvas-edit-zone hs-tl-overlay' + (isActive ? ' selected' : '');
     zone.dataset.kind = kind;
-    // Empty text bands get a subtle grey background so the zone is visible.
-    const zoneBg = !hasText ? 'background:rgba(0,0,0,0.05);border-radius:6px;' : '';
+    // Empty text bands get a subtle grey background so the zone is visible —
+    // but not while actively being typed into: hasText flips true/false with
+    // every keystroke as the field empties/fills, which would otherwise flash
+    // the background on and off as you type.
+    const zoneBg = (!hasText && !isEditingThis) ? 'background:rgba(0,0,0,0.05);border-radius:6px;' : '';
     // Zones match the text alignment so the hotspot / editor sits at the same
     // edge as the rendered SVG text.
     const zoneJc = alignJc(t.align || 'center');
-    zone.style.cssText = `position:absolute;left:${pct(rect.x, HS_W)};top:${pct(rect.y, HS_H)};width:${pct(rect.w, HS_W)};height:${pct(rect.h, HS_H)};z-index:3;cursor:text;display:flex;align-items:center;justify-content:${zoneJc};${zoneBg}`;
+    zone.style.cssText = `position:absolute;left:${pct(rect.x, HS_W)};top:${pct(rect.y, HS_H)};width:${pct(rect.w, HS_W)};height:${pct(rect.h, HS_H)};z-index:3;cursor:pointer;display:flex;align-items:center;justify-content:${zoneJc};${zoneBg}`;
 
     // Hotspot over the text. Top/bottom bands hide their SVG copy (see
     // hideText) and use this element as the only visual, so hover/idle/drag
@@ -903,26 +1303,96 @@ export function wireCanvasTextEditing(previewEl) {
     const hot = document.createElement('div');
     hot.className = 'canvas-edit-hotspot';
     const hotColor = hasText ? (t.color || '#111110') : 'rgba(0,0,0,0.28)';
-    hot.style.cssText = `max-width:96%;cursor:text;${fontStyle(kind)}color:${hotColor};`;
+    hot.style.cssText = `max-width:96%;cursor:pointer;${fontStyle(kind)}color:${hotColor};`;
+    hot.dataset.baseSize = t.size || 200;
     const phText = kind === 'top' ? 'Sponsored by…' : 'Club name, tagline…';
     hot.textContent = hasText ? t.text : phText;
     const startEdit = e => {
       e.stopPropagation();
+      // A free text layer's own pointerdown preventDefaults (for its custom
+      // drag), which suppresses the browser's native click-elsewhere blur —
+      // so an in-progress free-text edit wouldn't otherwise notice this click.
+      commitActiveCanvasEdit(zone);
+      deselectTlSlots();
+      hideHsToolbar();
+      if (UI.activeTextLayerId) {
+        UI.activeTextLayerId = null;
+        document.querySelectorAll('.hs-tl-overlay').forEach(el => el.classList.remove('selected'));
+        window.closeTextLayerToolbar?.();
+      }
+      // Fire even when this zone is already mid-edit (the early-returns below
+      // skip everything else on a repeat click) — a sidebar section opened by
+      // clicking a different canvas element in between (e.g. a template logo)
+      // still needs to close, since a lingering inline text editor here means
+      // this element was never actually deselected.
+      if (!locked && !isNowEditing()) window.closeHsMenuSection?.(true);
       if (UI.tlJustDragged || zone.querySelector('.canvas-edit-input')) return;
+      if (locked && !isNowEditing()) {
+        const v = HS.variations.find(v => v.id === HS.activeVarId);
+        if (v) beginQuickEdit(v);
+      }
+      UI.canvasSelectedKind = null;
       UI.canvasEdit = { kind, caret: null };
       enterEdit(zone, kind);
     };
+    // Unlocked (full pencil editor): mirrors the free text-layer overlay —
+    // a single click/tap anywhere in the zone (the box, not just the glyphs,
+    // since the hotspot doesn't cover the full padded box) just selects and
+    // highlights it; a second, double-click drops into inline editing.
+    // Locked (quick-edit, Variations page): no drag/select step at all, same
+    // as the free text-layer's locked mode — a single tap edits immediately.
+    const selectZone = e => {
+      e.stopPropagation();
+      if (UI.tlJustDragged || zone.querySelector('.canvas-edit-input')) return;
+      // Tapping an already-selected zone again (not a fast double-click, just
+      // a second separate tap) drops into edit mode with the text highlighted
+      // — enterEdit's default (no remembered caret) selects all of it.
+      if (UI.canvasSelectedKind === kind) { startEdit(e); return; }
+      // See startEdit's matching call: a free text layer's own edit doesn't
+      // blur on its own when this zone is clicked instead.
+      commitActiveCanvasEdit(zone);
+      deselectTlSlots();
+      hideHsToolbar();
+      if (UI.activeTextLayerId) {
+        UI.activeTextLayerId = null;
+        document.querySelectorAll('.hs-tl-overlay').forEach(el => el.classList.remove('selected'));
+        window.closeTextLayerToolbar?.();
+      }
+      window.closeHsMenuSection?.(true);
+      document.querySelectorAll('.canvas-edit-zone').forEach(z => z.classList.remove('selected'));
+      zone.classList.add('selected');
+      UI.canvasSelectedKind = kind;
+      openBandToolbar(kind, zone);
+      setTimeout(() => {
+        const close = ev => {
+          if (ev.target.closest('#hsBandToolbar') || ev.target.closest('.canvas-edit-zone')) return;
+          closeBandToolbar();
+          UI.canvasSelectedKind = null;
+          document.querySelectorAll('.canvas-edit-zone').forEach(z => z.classList.remove('selected'));
+          document.removeEventListener('click', close, true);
+        };
+        document.addEventListener('click', close, true);
+      }, 0);
+    };
     hot.addEventListener('pointerdown', e => e.stopPropagation());
-    hot.addEventListener('click', startEdit);
     zone.appendChild(hot);
-    // Clicking the empty area of the text band also edits it.
-    zone.addEventListener('click', startEdit);
+    if (locked) {
+      hot.addEventListener('click', startEdit);
+      zone.addEventListener('click', startEdit);
+    } else {
+      hot.addEventListener('click', selectZone);
+      zone.addEventListener('click', selectZone);
+      hot.addEventListener('dblclick', startEdit);
+      zone.addEventListener('dblclick', startEdit);
+    }
 
     // Edge handles — drag either side to adjust the box width. The box is
     // always centered within the sign's margins (there's no stored x position,
     // just a width), so both handles grow/shrink it symmetrically from the
     // center rather than sliding one edge independently — that way the live
     // drag preview lands exactly where the centered re-render will put it.
+    // Skipped entirely in locked mode: positions/sizes stay fixed there.
+    if (!locked) {
     const makeEdge = (cls, sign) => {
       const eh = document.createElement('div');
       eh.className = `hs-tl-resize-${cls}`;
@@ -980,8 +1450,9 @@ export function wireCanvasTextEditing(previewEl) {
           setProp(kind, 'size', newSize);
           const fsPx = Math.max(9, Math.round(newSize * sc));
           hot.style.fontSize = fsPx + 'px';
+          hot.dataset.baseSize = newSize;
           const liveInput = zone.querySelector('.canvas-edit-input');
-          if (liveInput) liveInput.style.fontSize = fsPx + 'px';
+          if (liveInput) { liveInput.style.fontSize = fsPx + 'px'; liveInput.dataset.baseSize = newSize; }
 
           // Scale the box width along with the font size (same ratio, centered),
           // and recompute the box height via the same layout math the SVG uses
@@ -1014,14 +1485,37 @@ export function wireCanvasTextEditing(previewEl) {
       zone.appendChild(makeCorner('bl', -1,  1));
       zone.appendChild(makeCorner('br',  1,  1));
     }
+    }
 
     previewEl.appendChild(zone);
   });
 
-  // Restore an in-progress inline edit after a live re-render.
+  // Restore an in-progress inline edit, or a plain selection (box highlighted,
+  // toolbar open, not yet editing), after a live re-render. Mutually exclusive.
   if (UI.canvasEdit) {
     const zone = previewEl.querySelector(`.canvas-edit-zone[data-kind="${UI.canvasEdit.kind}"]`);
     if (zone) enterEdit(zone, UI.canvasEdit.kind);
     else UI.canvasEdit = null;
+  } else if (UI.canvasSelectedKind) {
+    const zone = previewEl.querySelector(`.canvas-edit-zone[data-kind="${UI.canvasSelectedKind}"]`);
+    if (zone) openBandToolbar(UI.canvasSelectedKind, zone);
+    else { UI.canvasSelectedKind = null; closeBandToolbar(); }
   }
 }
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
+// Mirrors the free text-layer's Delete/Backspace handling (text-layers.js) —
+// a selected-but-not-editing band clears its text the same way a free layer
+// removes itself. The toolbar's own "Remove" button (built in
+// wireCanvasTextEditing, above) does the exact same setText('')+rerender via
+// its own closure; reusing that button here (rather than re-deriving the
+// closure) keeps the two triggers guaranteed in sync — the toolbar only
+// exists while UI.canvasSelectedKind is set, via selectZone/the restore block
+// above.
+document.addEventListener('keydown', e => {
+  if (!UI.canvasSelectedKind) return;
+  if (document.activeElement?.closest?.('.canvas-edit-input, #hsBandToolbar, [contenteditable]')) return;
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  e.preventDefault();
+  document.querySelector('#hsBandToolbar .hs-tl-tb-delete')?.click();
+});

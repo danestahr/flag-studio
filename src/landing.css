@@ -39,6 +39,8 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 .beta-tag { font-family:'DM Sans',sans-serif; font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#fff; background:#06b6d4; border-radius:4px; padding:3px 7px; line-height:1.4; align-self:center; flex-shrink:0; }
 .back-link { color:rgba(255,255,255,.6); font-size:13px; text-decoration:none; transition:color .15s; }
 .back-link:hover { color:var(--chrome-text); }
+.header-cta-btn { background:#FFFFFF; color:#1B1B18; font-family:'DM Sans',sans-serif; font-size:13px; font-weight:600; padding:8px 18px; border-radius:20px; text-decoration:none; transition:opacity .15s; }
+.header-cta-btn:hover { opacity:.85; }
 
 .landing-main { max-width:960px; margin:0 auto; padding:3rem 2rem; }
 
@@ -70,6 +72,9 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 .draft-card-tool { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:6px; font-size:12px; font-weight:500; text-decoration:none; background:var(--gray-50); border:1.5px solid var(--gray-100); color:var(--gray-600); transition:border-color .15s, color .15s; }
 .draft-card-tool:hover { border-color:var(--gray-400); color:var(--black); }
 .draft-card-tool.configured { border-color:var(--accent); color:var(--accent); background:var(--accent-tint); }
+
+.draft-card-delete { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:6px; background:var(--gray-50); border:1.5px solid var(--gray-100); color:var(--gray-400); cursor:pointer; transition:border-color .15s, color .15s; }
+.draft-card-delete:hover { border-color:#c0392b; color:#c0392b; }
 
 .drafts-empty { font-size:14px; color:var(--gray-400); padding:.5rem 0; }
 
@@ -179,4 +184,24 @@ div.draft-card { cursor:pointer; }
 
 /* ── Form status/error text (profile page) ──────────────────── */
 .login-error { font-size:13px; color:#c0392b; background:#fee2e2; border-radius:6px; padding:8px 12px; line-height:1.4; margin-top:1rem; }
+
+/* ── Public template gallery (template-gallery.js) ──────────── */
+.tg-picker-title { font-size:22px; font-family:'DM Serif Display',serif; margin-bottom:1.25rem; }
+.tg-picker-options { display:grid; grid-template-columns:repeat(2,1fr); gap:16px; margin-bottom:2rem; }
+.tg-picker-card { position:relative; display:flex; flex-direction:column; align-items:flex-start; gap:6px; text-align:left; padding:1.5rem; border:1.5px solid var(--gray-200); border-radius:var(--rl); background:var(--white); font-family:inherit; cursor:pointer; transition:border-color .15s, box-shadow .15s, background .15s; }
+.tg-picker-card:hover { border-color:var(--accent); box-shadow:0 4px 16px rgba(0,0,0,.09); }
+.tg-picker-name { font-size:15px; font-weight:600; color:var(--black); }
+.tg-picker-desc { font-size:12px; color:var(--gray-500); line-height:1.4; }
+
+/* Browse-page-only: order.css's .flag-tmpl-* rules (3-col, no hover fx) stay
+   as-is for the order-form template picker; these scoped overrides give the
+   public gallery its own denser 2-col layout and hover treatment. */
+#templateGalleryRoot .flag-tmpl-grid { grid-template-columns:repeat(2,1fr); }
+#templateGalleryRoot .flag-tmpl-thumb { position:relative; }
+#templateGalleryRoot .flag-tmpl-thumb-img { position:absolute; inset:0; }
+#templateGalleryRoot .flag-tmpl-thumb::after { content:''; position:absolute; inset:0; z-index:1; background:rgba(0,0,0,0); transition:background .15s; pointer-events:none; }
+#templateGalleryRoot .flag-tmpl-card:hover .flag-tmpl-thumb::after { background:rgba(0,0,0,.28); }
+#templateGalleryRoot .flag-tmpl-start-btn { position:absolute; z-index:2; left:50%; top:50%; transform:translate(-50%,-50%); padding:0 16px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:8px; background:var(--black); color:var(--white); font-size:12px; font-weight:600; white-space:nowrap; opacity:0; transition:opacity .15s; pointer-events:none; }
+#templateGalleryRoot .flag-tmpl-card:hover .flag-tmpl-start-btn { opacity:1; }
+
 .login-notice { font-size:13px; color:var(--gray-700); background:var(--gray-50); border-radius:6px; padding:8px 12px; line-height:1.4; margin-top:1rem; }

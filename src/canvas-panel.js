@@ -128,14 +128,18 @@ export function createCanvasPanel({
     if (!wiredResize.has(scrollId)) {
       wiredResize.add(scrollId);
       let raf = null;
+      // A bare window resize changes the wrap's fitted px size exactly like a
+      // zoom does (fitCanvas takes both into account), so it needs the same
+      // onApply refresh (text overlay font rescale, image-box/text-layer clip
+      // refresh) a zoom gets — not just refit()'s width/height update.
       window.addEventListener('resize', () => {
         if (raf) cancelAnimationFrame(raf);
-        raf = requestAnimationFrame(refit);
+        raf = requestAnimationFrame(() => { refit(); onApply?.(); });
       });
       // Web fonts swapping in after the initial refit below can reflow
       // surrounding chrome and shift this panel's top offset — redo it once
       // fonts have actually settled.
-      document.fonts?.ready.then(refit);
+      document.fonts?.ready.then(() => { refit(); onApply?.(); });
     }
   }
 
@@ -143,8 +147,10 @@ export function createCanvasPanel({
   // Nothing else forces an initial fit — without this the canvas would sit
   // at its natural (unconstrained) CSS size until the first resize/zoom
   // interaction, which is exactly what showed up as a clipped-looking canvas
-  // on first load.
-  refit();
+  // on first load. apply() (not a bare refit()) so a non-100 initial getZoom()
+  // — a tool that opens pre-zoomed-out — gets its label/reset-button synced
+  // too, not just the canvas size itself.
+  apply(getZoom());
   return { apply, setZoom: setZoomClamped, refit };
 }
 

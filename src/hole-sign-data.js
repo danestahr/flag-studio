@@ -11,9 +11,7 @@ export const HS_FONTS = [
 ];
 
 export const HS_TEMPLATES = [
-  { id: 'hole-sign-1',            name: 'Standard',     description: 'Logo centered, optional top & bottom text', supportsText: true  },
-  { id: 'hole-sign-logo-only',    name: 'Logo only',    description: 'Logo fills the entire sign',               supportsText: false },
-  { id: 'hole-sign-full-graphic', name: 'Full graphic', description: 'Pre-designed graphic fills the entire canvas — banners, text, and images layer on top', supportsText: false },
+  { id: 'hole-sign-1', name: 'Standard', description: 'Logo centered, optional top & bottom text', supportsText: true },
 ];
 
 // Template-logo slot height range (in sign coordinates, HS_H = 5475).
@@ -47,12 +45,18 @@ export function emptyTemplateLogos() {
 export const HS_BANNER_MIN_H = 300;
 export const HS_BANNER_MAX_H = HS_H; // up to the full sign height
 export const HS_BANNER_DEFAULT_H = 700;
+// Floor for banner.spacing (sign coords) — at a typical editor canvas scale
+// this renders as roughly 8 real screen px, enough that the on-canvas spacing
+// drag handle (see wireBannerSpacingHandles in hs/banner.js) always has a
+// visible, grabbable gap between the two stacked text layers instead of them
+// sitting flush against each other.
+export const HS_BANNER_MIN_SPACING = 60;
 
 export function emptyBanner() {
   return {
     enabled: false,
     height: HS_BANNER_DEFAULT_H,
-    spacing: 16, // gap between adjacent stacked docked text layers
+    spacing: HS_BANNER_MIN_SPACING, // gap between adjacent stacked docked text layers
     valign: 'center', // vertical position of the docked text stack within the banner — 'top' | 'center' | 'bottom'
     bg: { type: 'color', color: '#E5E5E5', imageUrl: null, storagePath: null, imageX: 50, imageY: 50, imageScale: 100 },
   };
@@ -84,56 +88,22 @@ export function migrateBannerCaptions(legacyBanner, which) {
   return specs;
 }
 
+// A template's banner caption specs — either its own `bannerTopTextLayers`/
+// `bannerBottomTextLayers` seed arrays (new-shape templates) or migrated from
+// a legacy `bannerTop.topText`/`subText` pair (older "My templates" entries).
+// Shared by every "apply this template" path (global Design step, the
+// per-variation full editor, and the Variations-page quick template picker)
+// so a template's default text positions resolve identically everywhere.
+export function bannerDockSpecsFor(tmpl) {
+  const top = Array.isArray(tmpl.bannerTopTextLayers) ? tmpl.bannerTopTextLayers : migrateBannerCaptions(tmpl.bannerTop, 'top');
+  const bottom = Array.isArray(tmpl.bannerBottomTextLayers) ? tmpl.bannerBottomTextLayers : migrateBannerCaptions(tmpl.bannerBottom, 'bottom');
+  return [...top, ...bottom];
+}
+
 // Global starter templates for the hole-sign Design step — same shape as a
 // saved "My templates" (localStorage) entry, but shipped with the app so
 // every project gets them instead of just the browser that saved them.
 // Promoted from staff-designed "My templates" entries; each one's assets
 // (background images etc.) must live in public/ rather than a project's
 // Supabase Storage folder, so the template stays valid for every project.
-export const HS_DEFAULT_TEMPLATES = [
-  {
-    id: 'default-1',
-    name: 'Template 1',
-    templateStyle: 'hole-sign-1',
-    background: { type: 'color', color: '#ffffff', imageUrl: null, storagePath: null },
-    topText:    { text: 'Hole Sponsored by', font: 'dm-serif', size: 331, color: '#000000' },
-    bottomText: { text: '[Tournament Name]', font: 'dm-serif', size: 184, color: '#6e6e6e' },
-    bannerTop:    emptyBanner(),
-    bannerBottom: emptyBanner(),
-    templateLogos: { ...emptyTemplateLogos(), size: 560, vAlign: 'bottom', hAlign: 'spread' },
-  },
-  {
-    id: 'default-2',
-    name: 'Template 2',
-    templateStyle: 'hole-sign-1',
-    background: {
-      type: 'image', color: '#ffffff',
-      imageUrl: '/hole-signs/templates/template-2-bg.jpg', storagePath: null,
-      imageOpacity: 41, overlayEnabled: false,
-    },
-    topText:    { text: 'Hole Sponsored by', font: 'dm-serif', size: 331, color: '#000000' },
-    bottomText: { text: '', font: 'dm-serif', size: 184, color: '#6e6e6e' },
-    bannerTop:    emptyBanner(),
-    bannerBottom: emptyBanner(),
-    templateLogos: { ...emptyTemplateLogos(), size: 560, vAlign: 'bottom', hAlign: 'spread' },
-  },
-  {
-    id: 'default-4',
-    name: 'Template 3',
-    templateStyle: 'hole-sign-1',
-    background: { type: 'color', color: '#ffffff', imageUrl: null, storagePath: null },
-    topText:    { text: '', font: 'dm-serif', size: 331, color: '#000000' },
-    bottomText: { text: '', font: 'dm-serif', size: 184, color: '#6e6e6e' },
-    bannerTop:    { ...emptyBanner(), enabled: true, height: 1134 },
-    bannerBottom: { ...emptyBanner(), height: 925 },
-    // Seed docked text layers for this template's banners — same partial-spec
-    // shape as migrateBannerCaptions() output. Merged into HS.textLayers by
-    // applyDefaultTemplate/applyCustomTemplate (design.js) since banners no
-    // longer carry caption text of their own.
-    bannerTopTextLayers: [
-      { text: 'Hole Sponsored By', font: 'dm-serif', size: 260, color: '#111110', align: 'center', dock: 'top', dockOrder: 0, aboveFrame: true },
-    ],
-    bannerBottomTextLayers: [],
-    templateLogos: { ...emptyTemplateLogos(), count: 2, size: 560, vAlign: 'bottom', hAlign: 'center' },
-  },
-];
+export const HS_DEFAULT_TEMPLATES = [];

@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { esc, wrapEmailHtml, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
 // SENDGRID_API_KEY_2 is the current key; SENDGRID_API_KEY is kept as a fallback
 // during rotation and can be removed once SENDGRID_API_KEY_2 is confirmed live everywhere.
@@ -14,15 +15,26 @@ const CORS = {
   'Access-Control-Allow-Headers': 'authorization, content-type, apikey',
 };
 
-function esc(s: unknown): string {
-  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
 function safeHex(h: unknown): string {
   return /^#[0-9A-Fa-f]{3,6}$/.test(String(h)) ? String(h) : '#cccccc';
 }
 
+// Customer-entered (the GolfStatus event URL pasted into the sync pre-step) —
+// only allow it into an href if it actually parses as http(s), same reasoning
+// as safeHex above.
+function safeUrl(u: unknown): string | null {
+  const s = String(u ?? '').trim();
+  if (!s) return null;
+  try {
+    const parsed = new URL(s);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? s : null;
+  } catch {
+    return null;
+  }
+}
+
 interface Shipping {
+  attn?: string;
   addressLine1: string;
   addressLine2?: string;
   city: string;
@@ -37,13 +49,17 @@ interface OrderPayload {
   courseName?: string;
   eventName: string;
   eventDate: string;
+  eventUrl?: string;
   shipping?: Shipping;
   flagStyle: string;
   flagStyleName?: string;
-  flagColors: Array<{ name: string; hex: string }>;
+  flagPreviewUrl?: string;
+  flagColors: Array<{ name: string; hex: string; label?: string; zone?: string }>;
   flagSetup?: string;
   flagQty?: number;
   designNotes?: string;
+  frontDesignNotes?: string;
+  backDesignNotes?: string;
   logoFileNames?: string[];
   projectId: string;
 }
@@ -85,6 +101,7 @@ function daysUntil(isoDate: string): number {
 function formatShipping(s: Shipping | undefined): string {
   if (!s) return '—';
   return [
+    s.attn ? `ATTN: ${s.attn}` : '',
     s.addressLine1,
     s.addressLine2 || '',
     [s.city, s.stateProvince, s.postalCode].filter(Boolean).join(', '),
@@ -93,8 +110,8 @@ function formatShipping(s: Shipping | undefined): string {
 }
 
 function formatSetup(s: string | undefined): string {
-  if (s === 'different') return 'Different front &amp; back';
-  if (s === 'same') return 'Same front &amp; back';
+  if (s === 'different') return 'Different Front &amp; Back';
+  if (s === 'same') return 'Same Front &amp; Back';
   return '—';
 }
 
@@ -115,27 +132,14 @@ function buildHtml(p: OrderPayload): string {
          </tr>`
       : '';
 
-  const colorRows = (p.flagColors ?? []).filter(Boolean).map(c =>
-    row('', `<span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${safeHex(c.hex)};vertical-align:middle;margin-right:7px;border:1px solid #ddd;"></span>${esc(c.name)} <span style="color:#aaa;font-size:12px;">${safeHex(c.hex)}</span>`)
+  const colorRows = (p.flagColors ?? []).filter(Boolean).filter(c => c.zone !== 'zone-border').map(c =>
+    row(c.label ? esc(c.label) : '', `<span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:${safeHex(c.hex)};vertical-align:middle;margin-right:7px;border:1px solid #ddd;"></span>${esc(c.name)} <span style="color:#aaa;font-size:12px;">${safeHex(c.hex)}</span>`)
   ).join('');
 
   const logoFiles = (p.logoFileNames ?? []).filter(Boolean);
+  const previewUrl = safeUrl(p.flagPreviewUrl);
 
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;margin:0;padding:32px 16px;">
-<div style="max-width:580px;margin:0 auto;">
-
-  <!-- Header -->
-  <div style="background:#1A4A2E;border-radius:12px 12px 0 0;padding:28px 32px;">
-    <p style="margin:0 0 4px;color:rgba(255,255,255,.55);font-size:12px;text-transform:uppercase;letter-spacing:.08em;">GolfStatus Design Studio</p>
-    <h1 style="color:#fff;margin:0;font-size:22px;font-weight:600;">Order Confirmed</h1>
-  </div>
-
-  <!-- Body -->
-  <div style="background:#fff;padding:32px;">
-    <p style="margin:0 0 24px;color:#333;font-size:15px;line-height:1.6;">
+  const body = `<p style="margin:0 0 24px;color:#333;font-size:15px;line-height:1.6;">
       Hi ${esc(p.contactName)}, thanks for submitting your order! We've received everything and will be in touch once your proof is ready for review.
     </p>
 
@@ -158,22 +162,34 @@ function buildHtml(p: OrderPayload): string {
 
     <table style="width:100%;border-collapse:collapse;margin-top:8px;">
 
-      <tr><td colspan="2" style="padding:6px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Event</td></tr>
-      ${row('Event name', esc(p.eventName))}
-      ${p.courseName ? row('Course', esc(p.courseName)) : ''}
-      ${row('Date', esc(formatDate(p.eventDate)))}
+      <tr><td colspan="2" style="padding:6px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Event Details</td></tr>
+      ${row('Event Name', esc(p.eventName))}
+      ${p.courseName ? row('Course Name', esc(p.courseName)) : ''}
+      ${row('Event Date', esc(formatDate(p.eventDate)))}
+      ${(() => {
+        const url = safeUrl(p.eventUrl);
+        return url ? row('Event URL', `<a href="${esc(url)}" style="color:#1a1a2e;">${esc(url)}</a>`) : '';
+      })()}
 
       <tr><td colspan="2" style="padding:14px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Contact &amp; Shipping</td></tr>
-      ${row('Name', esc(p.contactName))}
+      ${row('Full Name', esc(p.contactName))}
       ${row('Email', esc(p.contactEmail))}
-      ${row('Ship to', formatShipping(p.shipping), { vtop: true })}
+      ${row('Address', formatShipping(p.shipping), { vtop: true })}
 
-      <tr><td colspan="2" style="padding:14px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Design</td></tr>
-      ${row('Flag style', esc(p.flagStyleName || p.flagStyle))}
+      <tr><td colspan="2" style="padding:14px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Flag &amp; Colors</td></tr>
+      ${previewUrl ? `
+      <tr>
+        <td colspan="2" style="padding:10px 0 0;border-top:1px solid #f0f0f0;">
+          <img src="${esc(previewUrl)}" alt="${esc(p.flagStyleName || p.flagStyle)}" style="display:block;width:100%;max-width:100%;height:auto;border-radius:8px;border:1px solid #eee;">
+        </td>
+      </tr>` : ''}
       ${colorRows}
-      ${row('Setup', formatSetup(p.flagSetup))}
-      ${p.flagQty ? row('Quantity', `${esc(String(p.flagQty))} flag${p.flagQty === 1 ? '' : 's'}`) : ''}
-      ${p.designNotes ? row('Notes', esc(p.designNotes), { vtop: true }) : ''}
+      ${row('Flag', esc(p.flagStyleName || p.flagStyle))}
+      ${p.flagQty ? row('Quantity', `${esc(String(p.flagQty))} Flag${p.flagQty === 1 ? '' : 's'}`) : ''}
+      ${row('Flag Setup', formatSetup(p.flagSetup))}
+      ${p.designNotes ? row('Flag Design', esc(p.designNotes), { vtop: true }) : ''}
+      ${p.frontDesignNotes ? row('Flag Design - Front', esc(p.frontDesignNotes), { vtop: true }) : ''}
+      ${p.backDesignNotes ? row('Flag Design - Back', esc(p.backDesignNotes), { vtop: true }) : ''}
 
       ${logoFiles.length ? `
       <tr><td colspan="2" style="padding:14px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Logos</td></tr>
@@ -188,17 +204,9 @@ function buildHtml(p: OrderPayload): string {
 
     <p style="margin:28px 0 0;color:#999;font-size:13px;line-height:1.6;">
       You'll receive another email when your proof is ready. If you have questions, just reply to this email.
-    </p>
-  </div>
+    </p>`;
 
-  <!-- Footer -->
-  <div style="padding:16px 32px;background:#f9f9f9;border-radius:0 0 12px 12px;border-top:1px solid #eee;">
-    <p style="margin:0;color:#ccc;font-size:12px;">GolfStatus Design Studio &middot; design@gsds.space<br>8545 S 78th St, Lincoln, NE 68516</p>
-  </div>
-
-</div>
-</body>
-</html>`;
+  return wrapEmailHtml({ title: 'Order Confirmed', bodyHtml: body });
 }
 
 function buildText(p: OrderPayload): string {
@@ -218,33 +226,39 @@ function buildText(p: OrderPayload): string {
   }
 
   lines.push('ORDER SUMMARY', '');
-  lines.push(`Event name: ${p.eventName}`);
-  if (p.courseName) lines.push(`Course: ${p.courseName}`);
-  lines.push(`Date: ${formatDate(p.eventDate)}`, '');
+  lines.push('EVENT DETAILS');
+  lines.push(`Event Name: ${p.eventName}`);
+  if (p.courseName) lines.push(`Course Name: ${p.courseName}`);
+  lines.push(`Event Date: ${formatDate(p.eventDate)}`);
+  if (safeUrl(p.eventUrl)) lines.push(`Event URL: ${p.eventUrl!.trim()}`);
+  lines.push('');
 
-  lines.push(`Name: ${p.contactName}`, `Email: ${p.contactEmail}`);
+  lines.push('CONTACT & SHIPPING');
+  lines.push(`Full Name: ${p.contactName}`, `Email: ${p.contactEmail}`);
   if (p.shipping) {
     const s = p.shipping;
-    const shipLine = [s.addressLine1, s.addressLine2, [s.city, s.stateProvince, s.postalCode].filter(Boolean).join(', '), s.country === 'CA' ? 'Canada' : 'USA']
-      .filter(Boolean).join(', ');
-    lines.push(`Ship to: ${shipLine}`);
+    const addrLines = [s.attn ? `ATTN: ${s.attn}` : '', s.addressLine1, s.addressLine2, [s.city, s.stateProvince, s.postalCode].filter(Boolean).join(', '), s.country === 'CA' ? 'Canada' : 'USA']
+      .filter(Boolean);
+    lines.push('Address:', ...addrLines.map(l => `  ${l}`));
   }
   lines.push('');
 
-  lines.push(`Flag style: ${p.flagStyleName || p.flagStyle}`);
-  if (p.flagColors?.length) lines.push(`Colors: ${p.flagColors.map(c => c.name).join(', ')}`);
-  if (p.flagSetup) lines.push(`Setup: ${p.flagSetup === 'different' ? 'Different front & back' : 'Same front & back'}`);
-  if (p.flagQty) lines.push(`Quantity: ${p.flagQty} flag${p.flagQty === 1 ? '' : 's'}`);
-  if (p.designNotes) lines.push(`Notes: ${p.designNotes}`);
-  if (p.logoFileNames?.length) lines.push('', 'Logos:', ...p.logoFileNames.map(n => `- ${n}`));
+  lines.push('FLAG & COLORS');
+  const textColors = (p.flagColors ?? []).filter(c => c.zone !== 'zone-border');
+  if (textColors.length) lines.push(`Colors: ${textColors.map(c => c.label ? `${c.label}: ${c.name}` : c.name).join(', ')}`);
+  lines.push(`Flag: ${p.flagStyleName || p.flagStyle}`);
+  if (p.flagQty) lines.push(`Quantity: ${p.flagQty} Flag${p.flagQty === 1 ? '' : 's'}`);
+  if (p.flagSetup) lines.push(`Flag Setup: ${p.flagSetup === 'different' ? 'Different Front & Back' : 'Same Front & Back'}`);
+  if (p.designNotes) lines.push(`Flag Design: ${p.designNotes}`);
+  if (p.frontDesignNotes) lines.push(`Flag Design - Front: ${p.frontDesignNotes}`);
+  if (p.backDesignNotes) lines.push(`Flag Design - Back: ${p.backDesignNotes}`);
+  if (p.logoFileNames?.length) lines.push('', 'LOGOS', ...p.logoFileNames.map(n => `- ${n}`));
 
   lines.push(
     '',
     `You'll receive another email when your proof is ready. If you have questions, just reply to this email.`,
     '',
-    'GolfStatus Design Studio',
-    'design@gsds.space',
-    '8545 S 78th St, Lincoln, NE 68516',
+    PLAIN_TEXT_FOOTER,
   );
 
   return lines.join('\n');

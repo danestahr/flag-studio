@@ -1,6 +1,25 @@
-import { HS_W, HS_H, HS_MARGIN, HS_GAP, HS_FONTS, normalizeTplLogoSize } from './hole-sign-data.js';
+import { HS_W, HS_H, HS_MARGIN, HS_GAP, HS_FONTS, HS_BANNER_MIN_H, normalizeTplLogoSize } from './hole-sign-data.js';
 import { isDisplayableImage, fileTypeLabel } from './media-utils.js';
 import { wrapText } from './text-utils.js';
+import { coverFitBox } from './image-box.js';
+
+// Cover-fit box for a background/banner image: true "background-size:cover"
+// (scaled by whichever axis is tighter, so the OTHER axis has real slack to
+// pan through) using the natural size captured at upload time
+// (bg.imageNaturalW/imageNaturalH — see handleBannerImageUpload/
+// handleBgImageUpload in hs/banner.js/hs/design.js). Falls back to the old
+// box-scales-with-container model for an image saved before that capture
+// existed (no natural size on record) — cover-accurate the moment it's
+// re-uploaded (the sidebar drag/zoom control uses the identical fallback,
+// see coverImgBox in image-box.js, so the two never disagree either way).
+function bgCoverBox(bg, containerW, containerH) {
+  const scale = bg.imageScale ?? 100;
+  if (bg.imageNaturalW && bg.imageNaturalH) {
+    return coverFitBox(containerW, containerH, bg.imageNaturalW, bg.imageNaturalH, scale);
+  }
+  const s = scale / 100;
+  return { w: containerW * s, h: containerH * s };
+}
 
 // makeHoleSignSvg (below) is the ONLY place that composes hole-sign visual
 // content — the interactive canvas, the Variations sidebar thumbnail, the
@@ -164,6 +183,15 @@ export function dockedLayerPositions(state, which) {
 // zone grows automatically as text wraps. A banner's own `height` only sets a
 // *minimum* while its colored background is switched on — with the banner
 // off, the zone tight-fits whatever's docked (or is 0 when nothing is).
+// Minimum height that fits `which`'s currently-docked text with the same
+// padding bannerEffectiveHeight enforces — the "hug content" target for the
+// on-canvas height handle's double-click shortcut (see banner.js).
+export function bannerFitHeight(state, which) {
+  const block = dockedTextBlock(state, which);
+  if (block.total <= 0) return HS_BANNER_MIN_H;
+  return Math.max(HS_BANNER_MIN_H, Math.round(block.total + bannerTextVPad(block) * 2));
+}
+
 function bannerEffectiveHeight(state, which) {
   const banner = which === 'bottom' ? state.bannerBottom : state.bannerTop;
   const block = dockedTextBlock(state, which);
@@ -397,12 +425,28 @@ function renderBanner(state, which, uid) {
   parts.push(`<clipPath id="${clipId}"><rect x="0" y="${y}" width="${HS_W}" height="${h}"/></clipPath>`);
   parts.push(`<rect x="0" y="${y}" width="${HS_W}" height="${h}" fill="${escXml(bg.color || '#E5E5E5')}"/>`);
   if (bg.type === 'image' && bg.imageUrl) {
-    const scale = (bg.imageScale ?? 100) / 100;
-    const imgW = HS_W * scale;
-    const imgH = h * scale;
+    const { w: imgW, h: imgH } = bgCoverBox(bg, HS_W, h);
     const cx = (bg.imageX ?? 50) / 100 * HS_W;
     const cy = y + (bg.imageY ?? 50) / 100 * h;
-    parts.push(`<image href="${escXml(bg.imageUrl)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"/>`);
+    const imgOp = (bg.imageOpacity ?? 100) / 100;
+    const opacityAttr = imgOp < 1 ? ` opacity="${imgOp.toFixed(3)}"` : '';
+    let filterAttr = '';
+    if (bg.imageGreyscale) {
+      const greyId = (which === 'bottom' ? 'bannerBotGrey' : 'bannerTopGrey') + '-' + uid;
+      parts.push(`<filter id="${greyId}"><feColorMatrix type="saturate" values="0"/></filter>`);
+      filterAttr = ` filter="url(#${greyId})"`;
+    }
+    parts.push(`<image href="${escXml(bg.imageUrl)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"${filterAttr}${opacityAttr}/>`);
+    // Unlike the main sign background (whose overlay defaults on at 50%
+    // black), this defaults OFF — enabling it retroactively on every existing
+    // banner image the moment this shipped would silently darken proofs/print
+    // sheets nobody asked to change.
+    const overlayAlpha = bg.overlayEnabled ? (bg.overlayOpacity ?? 50) / 100 : 0;
+    if (overlayAlpha > 0) {
+      const blend = bg.overlayBlend || 'normal';
+      const blendStyle = blend !== 'normal' ? ` style="mix-blend-mode:${escXml(blend)}"` : '';
+      parts.push(`<rect x="0" y="${y}" width="${HS_W}" height="${h}" fill="${escXml(bg.overlayColor || '#000000')}" fill-opacity="${overlayAlpha.toFixed(3)}" clip-path="url(#${clipId})"${blendStyle}/>`);
+    }
   }
   return parts;
 }
@@ -461,6 +505,13 @@ export function makeHoleSignSvg(state, variation) {
   if (bg.imageUrl && bg.imageGreyscale) {
     svgDefs.push(`<filter id="${bgGreyId}"><feColorMatrix type="saturate" values="0"/></filter>`);
   }
+  // Panning/zooming (imageX/imageY/imageScale) can push the scaled image box
+  // past the sign's own bounds — clip it back to the sign the same way
+  // renderBanner() clips its image to the banner strip.
+  const bgImgClipId = 'hsBgImgClip-' + uid;
+  if (bg.imageUrl) {
+    svgDefs.push(`<clipPath id="${bgImgClipId}"><rect x="0" y="0" width="${HS_W}" height="${HS_H}"/></clipPath>`);
+  }
   if (svgDefs.length) parts.push(`<defs>${svgDefs.join('')}</defs>`);
 
   // Background is built into its own buckets (instead of pushed straight
@@ -480,10 +531,15 @@ export function makeHoleSignSvg(state, variation) {
   // a variation logo sent "Below Background"), or to the color itself.
   const bgImageParts = [];
   if (bg.imageUrl) {
+    // Same cover-fit box as renderBanner()'s image, just against the whole
+    // sign instead of one banner strip — see bgCoverBox above.
+    const { w: imgW, h: imgH } = bgCoverBox(bg, HS_W, HS_H);
+    const cx = (bg.imageX ?? 50) / 100 * HS_W;
+    const cy = (bg.imageY ?? 50) / 100 * HS_H;
     const imgOp = (bg.imageOpacity ?? 100) / 100;
     const filterAttr = bg.imageGreyscale ? ` filter="url(#${bgGreyId})"` : '';
     const opacityAttr = imgOp < 1 ? ` opacity="${imgOp.toFixed(3)}"` : '';
-    bgImageParts.push(`<image href="${escXml(bg.imageUrl)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid slice"${filterAttr}${opacityAttr}/>`);
+    bgImageParts.push(`<image href="${escXml(bg.imageUrl)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${bgImgClipId})"${filterAttr}${opacityAttr}/>`);
     const overlayAlpha = (bg.overlayEnabled !== false) ? (bg.overlayOpacity ?? 50) / 100 : 0;
     if (overlayAlpha > 0) {
       const blend = bg.overlayBlend || 'normal';
@@ -532,14 +588,19 @@ export function makeHoleSignSvg(state, variation) {
 
   // Template logos (drawn into the strip carved out by computeLayout) — part
   // of the template itself (set up once, shared by every variation), so they
-  // belong in the frame group: they default to painting above the per-
-  // variation content added below, same as the banner/text blocks.
+  // belong in the frame group by default: they paint above the per-variation
+  // content added below, same as the banner/text blocks. A slot can opt into
+  // slot.aboveFrame (see the arrange toolbar in template-logos.js) to instead
+  // paint above the rest of the template's own content — never below the
+  // background though, unlike variation content's belowBackground option.
   const tplSlots = getTemplateLogoSlots(state, templateId);
   if (tplSlots.length && state.templateLogos?.slots) {
     state.templateLogos.slots.forEach((slot, i) => {
       const rect = tplSlots[i];
       if (!rect) return;
-      frameParts.push(renderTemplateLogoSlot(slot, rect, `tlc${i}-${uid}`));
+      const markup = renderTemplateLogoSlot(slot, rect, `tlc${i}-${uid}`);
+      if (slot?.aboveFrame) aboveParts.push(markup);
+      else frameParts.push(markup);
     });
   }
 
@@ -558,33 +619,45 @@ export function makeHoleSignSvg(state, variation) {
     variationParts.push(isDisplayableImage(src)
       ? `<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`
       : filePlaceholderSvg(0, 0, HS_W, HS_H, fileTypeLabel(src)));
-  } else if (variation && variation.logoSrc && templateId === 'hole-sign-full-graphic') {
-    const src = variation.logoSrcTight || variation.logoSrc;
-    if (isDisplayableImage(src)) {
-      variationParts.push(`<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`);
-    } else {
-      variationParts.push(filePlaceholderSvg(0, 0, HS_W, HS_H, fileTypeLabel(src)));
-    }
-  } else if (variation && variation.logoSrc) {
-    const src = variation.logoSrcTight || variation.logoSrc;
-    // Use getLogoZone so positioning matches the DOM dzone exactly, including
-    // the carve-out for any template logo strip. The zone rect is only a
-    // placement suggestion though (not a hard boundary — the editor lets a
-    // logo be dragged/scaled past it, clipped only by the sign canvas itself),
-    // so don't clip the image to it here either or an oversized/repositioned
-    // logo gets cropped that the editor shows in full.
-    const lz = getLogoZone(state, templateId);
-    if (isDisplayableImage(src)) {
-      const ld = variation.logoData || { x: 50, y: 50, w: 90 };
-      const logoW = lz.w * (ld.w / 100);
-      const aspect = variation.logoAspect != null ? variation.logoAspect : 1;
-      const logoImgH = logoW * aspect;
-      const cx = lz.x + (ld.x / 100) * lz.w;
-      const cy = lz.y + (ld.y / 100) * lz.h;
-      variationParts.push(`<image href="${escXml(src)}" x="${Math.round(cx - logoW / 2)}" y="${Math.round(cy - logoImgH / 2)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}" preserveAspectRatio="xMidYMid meet"/>`);
-    } else {
-      variationParts.push(filePlaceholderSvg(lz.x, lz.y, lz.w, lz.h, fileTypeLabel(src)));
-    }
+  } else if (variation && (variation.logos || []).length) {
+    // Each logo is an independent layer (see var-canvas.js) — its own image,
+    // its own position/size, its own below-bg/above-frame stacking tier.
+    // The full-graphic template still only has room for one meaningful
+    // full-bleed image (see addLogoLayer's isFullGraphic branch), but every
+    // consumer of this array (this loop included) stays generic per-layer.
+    (variation.logos || []).forEach(layer => {
+      const layerParts = [];
+      const src = layer.logoSrcTight || layer.logoSrc;
+      if (templateId === 'hole-sign-full-graphic') {
+        if (isDisplayableImage(src)) {
+          layerParts.push(`<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`);
+        } else {
+          layerParts.push(filePlaceholderSvg(0, 0, HS_W, HS_H, fileTypeLabel(src)));
+        }
+      } else {
+        // Use getLogoZone so positioning matches the DOM dzone exactly, including
+        // the carve-out for any template logo strip. The zone rect is only a
+        // placement suggestion though (not a hard boundary — the editor lets a
+        // logo be dragged/scaled past it, clipped only by the sign canvas itself),
+        // so don't clip the image to it here either or an oversized/repositioned
+        // logo gets cropped that the editor shows in full.
+        const lz = getLogoZone(state, templateId);
+        if (isDisplayableImage(src)) {
+          const ld = layer;
+          const logoW = lz.w * (ld.w / 100);
+          const aspect = layer.logoAspect != null ? layer.logoAspect : 1;
+          const logoImgH = logoW * aspect;
+          const cx = lz.x + (ld.x / 100) * lz.w;
+          const cy = lz.y + (ld.y / 100) * lz.h;
+          layerParts.push(`<image href="${escXml(src)}" x="${Math.round(cx - logoW / 2)}" y="${Math.round(cy - logoImgH / 2)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}" preserveAspectRatio="xMidYMid meet"/>`);
+        } else {
+          layerParts.push(filePlaceholderSvg(lz.x, lz.y, lz.w, lz.h, fileTypeLabel(src)));
+        }
+      }
+      if (layer.belowBackground) belowBgParts.push(...layerParts);
+      else if (layer.aboveFrame) aboveParts.push(...layerParts);
+      else parts.push(...layerParts);
+    });
   } else if (variation && variation.sponsorText && variation.sponsorText.text && variation.sponsorText.text.trim()) {
     const st = variation.sponsorText;
     const lz = getLogoZone(state, templateId);

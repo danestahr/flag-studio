@@ -1,14 +1,13 @@
-import { HS, UI, eyedropperBtn } from './state.js';
+import { HS, UI, eyedropperBtn, HS_FRAME_LAYER_ORDER, getVariationLayer, setVariationLayer } from './state.js';
 import { renderStep1, updateStep1Preview } from './design.js';
 import { renderEditor } from './var-editor.js';
 import { renderVariationPreview } from './var-canvas.js';
-import { prepareLogo } from './logo-utils.js';
+import { prepareLogo, removeBgFromLogo } from './logo-utils.js';
 import { HS_H, HS_TPL_LOGO_DEFAULT, HS_TPL_LOGO_MAX, HS_TPL_LOGO_MIN, HS_W, emptyTemplateLogos, normalizeTplLogoSize } from '../hole-sign-data.js';
 import { HS_TPL_LOGO_SAFE_FRAC, escXml, getTemplateLogoSlots, slotWidthForRatio } from '../hole-sign-render.js';
 import { uploadLogo } from '../supabase.js';
 import { logoThumbHtml } from '../media-utils.js';
-import { clipToCanvas } from '../image-box.js';
-import { ensureAlignGuides, findAxisSnap, hideAlignGuides } from '../align-guides.js';
+import { positionFloatingToolbar } from '../dom-utils.js';
 
 // Delete/Backspace removes every selected image entirely, unless the user is
 // typing in a text field or editing a text layer (own keydown handling).
@@ -137,8 +136,13 @@ function getDefaultSlotRects(tl) {
 // thumbnails, so we re-render the whole controls panel in addition to the
 // preview.
 export function redrawTplStructural() {
-  if (HS.editingVarId) {
+  // UI.hsFullEditorOpen distinguishes the full pencil-editor session from a
+  // quick-edit draft (see beginQuickEdit in var-editor.js) — the latter also
+  // sets HS.editingVarId but must not pop the side-panel editor open.
+  if (UI.hsFullEditorOpen) {
     renderEditor();
+    renderVariationPreview();
+  } else if (HS.editingVarId) {
     renderVariationPreview();
   } else {
     renderStep1();
@@ -263,182 +267,10 @@ export function applyTlSlotImgStyle(img, slot) {
   img.style.pointerEvents = 'none';
 }
 
-// Drag and resize the slot box itself (sets per-slot freeX/freeY/freeW/freeH).
-// Pointer on slot body → move (the whole current multi-selection moves
-// together if this slot is part of one); pointer on a corner handle →
-// resize this slot only, anchored at the opposite corner (matching the
-// text-layer resize feel — grabbing any corner grows the box away from it
-// rather than always from top-left).
-// `handles` is { tl, tr, bl, br } — `allRects` is every slot's current rect
-// in sign coords at wire-time (used both as this slot's own starting rect,
-// allRects[idx], and as alignment targets for the OTHER slots during move).
-// onTap(shiftKey) fires on a no-drag pointerup.
-export function wireTlSlotFreeDrag(overlay, handles, idx, allRects, onTap) {
-  const signRect = allRects[idx] || { x: 0, y: 0, w: 0, h: 0 };
-  let mode = null, activeCorner = null, startClientX, startClientY;
-  let startSignX, startSignY, startSignW, startSignH;
-  let groupIndices = [idx], groupStarts = {};
-  const pct = (v, total) => (v / total * 100).toFixed(4) + '%';
-  const handleList = Object.values(handles).filter(Boolean);
-
-  overlay.addEventListener('pointerdown', e => {
-    if (e.target.closest('.tl-slot-handle,.tl-slot-hover-actions')) return;
-    if (e.button !== 0) return;
-    mode = 'move';
-    overlay.setPointerCapture(e.pointerId);
-    startClientX = e.clientX; startClientY = e.clientY;
-    // Dragging a slot that's part of the current multi-selection moves the
-    // whole selection together; otherwise it's just this one slot.
-    groupIndices = (UI.tlSelectedIdxs.has(idx) && UI.tlSelectedIdxs.size > 1) ? [...UI.tlSelectedIdxs] : [idx];
-    groupStarts = {};
-    groupIndices.forEach(gIdx => {
-      const gs = tlSource().slots[gIdx];
-      const gRect = allRects[gIdx] || { x: 0, y: 0, w: 0, h: 0 };
-      groupStarts[gIdx] = { x: gs?.freeX ?? gRect.x, y: gs?.freeY ?? gRect.y };
-    });
-    startSignX = groupStarts[idx].x;
-    startSignY = groupStarts[idx].y;
-    e.preventDefault();
-    e.stopPropagation();
-  });
-
-  Object.entries(handles).forEach(([corner, handle]) => {
-    if (!handle) return;
-    handle.addEventListener('pointerdown', e => {
-      if (e.button !== 0) return;
-      mode = 'resize';
-      activeCorner = corner;
-      handle.setPointerCapture(e.pointerId);
-      startClientX = e.clientX; startClientY = e.clientY;
-      const s = tlSource().slots[idx];
-      startSignX = s?.freeX ?? signRect.x;
-      startSignY = s?.freeY ?? signRect.y;
-      startSignW = s?.freeW ?? signRect.w;
-      startSignH = s?.freeH ?? signRect.h;
-      e.stopPropagation();
-      e.preventDefault();
-    });
-  });
-
-  const activeHandle = () => (activeCorner ? handles[activeCorner] : null);
-
-  const onMove = e => {
-    // hasPointerCapture guards against a dropped/lost pointerup leaving `mode`
-    // stuck set — without it, a later hover-only pointermove would move/resize
-    // the slot using the stale start point from the previous gesture.
-    if (!mode) return;
-    if (mode === 'move' && !overlay.hasPointerCapture(e.pointerId)) return;
-    if (mode === 'resize' && !activeHandle()?.hasPointerCapture(e.pointerId)) return;
-    const container = overlay.parentElement;
-    const pr = container?.getBoundingClientRect();
-    const scaleX = pr ? pr.width / HS_W : 1;
-    const scaleY = pr ? pr.height / HS_H : 1;
-    const dxSign = (e.clientX - startClientX) / scaleX;
-    const dySign = (e.clientY - startClientY) / scaleY;
-    if (Math.hypot(dxSign, dySign) > 5) UI.tlJustDragged = true;
-
-    if (mode === 'move') {
-      // Move every slot in the group by the same raw delta first.
-      groupIndices.forEach(gIdx => {
-        let gs = tlSource().slots[gIdx];
-        if (gs == null) { tlSource().slots[gIdx] = {}; gs = tlSource().slots[gIdx]; }
-        const gRect = allRects[gIdx] || signRect;
-        gs.freeW = gs.freeW ?? gRect.w;
-        gs.freeH = gs.freeH ?? gRect.h;
-        gs.freeX = groupStarts[gIdx].x + dxSign;
-        gs.freeY = groupStarts[gIdx].y + dySign;
-      });
-
-      // Alignment snap — based on the primary dragged slot only, against the
-      // sign's own center plus every OTHER (non-group) slot's edges/center,
-      // so the whole group rides along with whatever correction it finds.
-      const s = tlSource().slots[idx];
-      const others = allRects.filter((_, j) => !groupIndices.includes(j));
-      const candX = [HS_W / 2, ...others.flatMap(r => [r.x, r.x + r.w / 2, r.x + r.w])];
-      const candY = [HS_H / 2, ...others.flatMap(r => [r.y, r.y + r.h / 2, r.y + r.h])];
-      const tolX = 5 / scaleX, tolY = 5 / scaleY;
-      const snapX = findAxisSnap(candX, s.freeX, s.freeW, tolX);
-      const snapY = findAxisSnap(candY, s.freeY, s.freeH, tolY);
-      const dSnapX = snapX ? snapX.newPos - s.freeX : 0;
-      const dSnapY = snapY ? snapY.newPos - s.freeY : 0;
-      if (dSnapX || dSnapY) {
-        groupIndices.forEach(gIdx => {
-          const gs = tlSource().slots[gIdx];
-          gs.freeX += dSnapX;
-          gs.freeY += dSnapY;
-        });
-      }
-
-      // Reposition every group member's overlay (siblings looked up by index
-      // since this function only holds a direct reference to its own).
-      groupIndices.forEach(gIdx => {
-        const gs = tlSource().slots[gIdx];
-        const gOverlay = gIdx === idx ? overlay : container?.querySelector(`.tl-slot[data-idx="${gIdx}"]`);
-        if (gOverlay) {
-          gOverlay.style.left = pct(gs.freeX, HS_W);
-          gOverlay.style.top  = pct(gs.freeY, HS_H);
-          const gVisual = gOverlay.querySelector('.tl-slot-img');
-          if (gVisual && container) clipToCanvas(gVisual, container);
-        }
-      });
-
-      if (container) {
-        const { v, h } = ensureAlignGuides(container);
-        v.style.left = pct(snapX ? snapX.value : 0, HS_W);
-        v.classList.toggle('show', !!snapX);
-        h.style.top = pct(snapY ? snapY.value : 0, HS_H);
-        h.classList.toggle('show', !!snapY);
-      }
-    } else {
-      let s = tlSource().slots[idx];
-      if (s == null) { tlSource().slots[idx] = {}; s = tlSource().slots[idx]; }
-      const isLeft = activeCorner === 'tl' || activeCorner === 'bl';
-      const isTop  = activeCorner === 'tl' || activeCorner === 'tr';
-      const dxEff = isLeft ? -dxSign : dxSign;
-      const ratio = startSignW / Math.max(1, startSignH);
-      const newW = Math.max(300, startSignW + dxEff);
-      const newH = newW / ratio;
-      const anchorRight  = startSignX + startSignW;
-      const anchorBottom = startSignY + startSignH;
-      s.freeW = newW;
-      s.freeH = newH;
-      s.freeX = isLeft ? anchorRight  - newW : startSignX;
-      s.freeY = isTop  ? anchorBottom - newH : startSignY;
-      overlay.style.left   = pct(s.freeX, HS_W);
-      overlay.style.top    = pct(s.freeY, HS_H);
-      overlay.style.width  = pct(s.freeW, HS_W);
-      overlay.style.height = pct(s.freeH, HS_H);
-      const visual = overlay.querySelector('.tl-slot-img');
-      if (visual && container) clipToCanvas(visual, container);
-    }
-  };
-
-  overlay.addEventListener('pointermove', onMove);
-  handleList.forEach(h => h.addEventListener('pointermove', onMove));
-
-  const onUp = e => {
-    if (!mode) return;
-    const wasDrag = UI.tlJustDragged;
-    if (wasDrag) tlSource().customPositions = true;
-    mode = null;
-    activeCorner = null;
-    setTimeout(() => { UI.tlJustDragged = false; }, 0);
-    if (overlay.parentElement) hideAlignGuides(overlay.parentElement);
-    // Fire onTap before redrawTplPreview so the overlay is still in the DOM
-    // when the picker reads getBoundingClientRect() for positioning.
-    if (!wasDrag && onTap) onTap(e.shiftKey);
-    redrawTplPreview();
-  };
-  overlay.addEventListener('pointerup', onUp);
-  handleList.forEach(h => h.addEventListener('pointerup', onUp));
-  overlay.addEventListener('pointercancel', onUp);
-  handleList.forEach(h => h.addEventListener('pointercancel', onUp));
-}
-
 // Centered modal (not anchored to whatever was clicked) so it reads as a
 // deliberate "pick a logo" step — used both right after adding a new image
 // and when tapping an empty slot placeholder.
-export function openTlLibPicker(idx) {
+export function openTlLibPicker(idx, { onAssigned } = {}) {
   closeTlLibPicker();
   const backdrop = document.createElement('div');
   backdrop.className = 'tl-lib-modal-backdrop';
@@ -459,7 +291,7 @@ export function openTlLibPicker(idx) {
   modal.querySelectorAll('.tl-lp-item').forEach(el => {
     el.addEventListener('click', () => {
       const logo = HS.library.find(l => l.id === el.dataset.lid);
-      if (logo) assignTlSlot(idx, logo);
+      if (logo) { assignTlSlot(idx, logo); onAssigned?.(); }
       closeTlLibPicker();
     });
   });
@@ -472,6 +304,7 @@ export function openTlLibPicker(idx) {
       const logo = await uploadLogo(HS.projectId, file);
       HS.library.push(logo);
       assignTlSlot(idx, logo);
+      onAssigned?.();
     } catch (err) { console.error('Upload failed', err); }
     closeTlLibPicker();
   });
@@ -486,41 +319,58 @@ export function closeTlLibPicker() {
   if (UI.tlPickerEl) { UI.tlPickerEl.remove(); UI.tlPickerEl = null; }
 }
 
+// The dark floating action bar for a selected (filled) template-logo slot —
+// same `.dz-toolbar`/`.dz-tb-btn` component as the flag/hole-sign Variations
+// logo toolbars, so a template logo now has the same on-canvas interaction
+// as any other placed image: Replace/Fine-tune/Remove instead of jumping
+// straight to the sidebar's slot-options panel on every click.
 export function openTlSlotToolbar(idx, anchorEl) {
   closeTlSlotToolbar();
   const tb = document.createElement('div');
   tb.id = 'tlSlotToolbar';
-  tb.className = 'tl-slot-toolbar';
+  tb.className = 'dz-toolbar';
   tb.innerHTML = `
-    <button class="tl-tb-btn" data-act="replace">Replace</button>
-    <button class="tl-tb-btn" data-act="finetune">Fine-tune</button>
-    <button class="tl-tb-btn danger" data-act="remove">Remove</button>`;
+    <button class="dz-tb-btn" id="tlTbFill" title="Fill zone"><i class="fa-solid fa-expand"></i></button>
+    <div class="dz-tb-sep"></div>
+    <button class="dz-tb-btn" id="tlTbRemoveBg" title="Remove Background"><i class="fa-solid fa-wand-magic-sparkles"></i> Remove Background</button>
+    <div class="dz-tb-sep"></div>
+    <button class="dz-tb-btn" id="tlTbReplace"><i class="fa-solid fa-arrows-rotate"></i> Replace</button>
+    <div class="dz-tb-sep"></div>
+    <button class="dz-tb-btn" id="tlTbFinetune" title="Fine-tune"><i class="fa-solid fa-sliders"></i> Fine-tune</button>
+    <div class="dz-tb-sep"></div>
+    <button class="dz-tb-btn" id="tlTbRemove" title="Remove"><i class="fa-solid fa-trash"></i></button>`;
   document.body.appendChild(tb);
+  // .dz-toolbar defaults to display:none in CSS (shared with hsZoneToolbar,
+  // which flips it on itself in showHsToolbar) — without this it's built and
+  // positioned correctly but never actually rendered.
+  tb.style.display = 'flex';
 
-  tb.addEventListener('click', e => {
-    const act = e.target.dataset?.act;
-    if (!act) return;
+  document.getElementById('tlTbFill').addEventListener('click', () => {
+    fillTlSlot(idx);
+  });
+  document.getElementById('tlTbRemoveBg').addEventListener('click', () => {
+    removeTlSlotBg(idx);
+  });
+  document.getElementById('tlTbReplace').addEventListener('click', () => {
     closeTlSlotToolbar();
-    if (act === 'replace')   openTlLibPicker(idx);
-    if (act === 'finetune')  openTlSidePanel(idx);
-    if (act === 'remove')    removeTlSlot(idx);
+    openTlLibPicker(idx);
+  });
+  document.getElementById('tlTbFinetune').addEventListener('click', () => {
+    closeTlSlotToolbar();
+    openTlSidePanel(idx);
+  });
+  document.getElementById('tlTbRemove').addEventListener('click', () => {
+    closeTlSlotToolbar();
+    window.removeTlSlot(idx);
   });
 
-  const r = anchorEl.getBoundingClientRect();
-  // Default above; flip below if there's not enough headroom.
-  const th = tb.offsetHeight;
-  const tw = tb.offsetWidth;
-  const placeAbove = r.top > th + 12;
-  const top  = placeAbove ? (r.top + window.scrollY - th - 6) : (r.bottom + window.scrollY + 6);
-  const left = Math.max(8, Math.min(window.scrollX + window.innerWidth - tw - 8,
-    r.left + window.scrollX + r.width / 2 - tw / 2));
-  tb.style.top  = top + 'px';
-  tb.style.left = left + 'px';
+  const container = anchorEl.closest('.hs-design-preview-col');
+  positionFloatingToolbar(tb, anchorEl, container, { gap: 6, toDocument: true });
 
   setTimeout(() => {
     const close = ev => {
-      if (!ev.target.closest('#tlSlotToolbar') && !ev.target.closest('.tl-slot') && !ev.target.closest('.tl-lib-modal-backdrop') && !ev.target.closest('#tlSidePanel')) {
-        closeTlSlotToolbar();
+      if (!ev.target.closest('#tlSlotToolbar') && !ev.target.closest('.dz-logo-wrap') && !ev.target.closest('.tl-lib-modal-backdrop')) {
+        deselectTlSlots();
         document.removeEventListener('click', close);
       }
     };
@@ -531,6 +381,75 @@ export function openTlSlotToolbar(idx, anchorEl) {
 export function closeTlSlotToolbar() {
   const tb = document.getElementById('tlSlotToolbar');
   if (tb) tb.remove();
+}
+
+// Clears template-logo slot selection (state + the .selected outline + the
+// floating toolbar) — distinct from closeTlSlotToolbar, which only hides the
+// toolbar and is also used mid-selection when swapping it for the Fine-tune
+// side panel or the Replace picker, where the slot should stay selected.
+// Call this whenever selection is genuinely moving elsewhere on the canvas
+// (a text layer, the background, another editor) so a stale selected slot
+// doesn't keep hogging the toolbar over content the user has since moved on
+// from.
+export function deselectTlSlots() {
+  closeTlSlotToolbar();
+  if (!UI.tlSelectedIdxs.size) return;
+  UI.tlSelectedIdxs = new Set();
+  document.querySelectorAll('.dz-logo-wrap[data-tl-idx]').forEach(w => w.classList.remove('selected'));
+}
+
+// Resets this one slot's box back to its computed default rect (position +
+// size for the current template/ratio/layout) — the box-based equivalent of
+// the Variations logo toolbar's "Fill zone", which instead resizes a free-
+// floating logo to fill its assigned zone. Only this slot is touched; other
+// slots keep whatever position they're at (same single-slot scope as Replace/
+// assignTlSlot above — template-logo slots, unlike variation logos, are never
+// cross-referenced by id from elsewhere, so there's nothing else to update).
+function fillTlSlot(idx) {
+  const tl = tlSource();
+  const slot = tl.slots[idx];
+  if (!slot) return;
+  const dr = getDefaultSlotRects(tl)[idx];
+  if (!dr) return;
+  slot.freeX = dr.x; slot.freeY = dr.y; slot.freeW = dr.w; slot.freeH = dr.h;
+  closeTlSlotToolbar();
+  redrawTplPreview();
+}
+
+// Same background-removal flow as the Variations logo toolbar's Remove
+// Background (hs/var-toolbar.js) — replace the library entry in place and
+// re-run prepareLogo for the fresh artwork bounds/aspect — but scoped to just
+// this slot, matching assignTlSlot's single-slot scope (no HS.variations
+// cross-reference to update: a template-logo slot's logoId isn't shared the
+// way a variation logo layer's is).
+async function removeTlSlotBg(idx) {
+  const tl = tlSource();
+  const slot = tl.slots[idx];
+  if (!slot?.logoSrc) return;
+  const btn = document.getElementById('tlTbRemoveBg');
+  const origHTML = btn?.innerHTML;
+  if (btn) { btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Removing…'; btn.disabled = true; }
+  const anchorEl = document.querySelector(`.dz-logo-wrap[data-tl-idx="${idx}"]`);
+  const spinner = document.createElement('div');
+  spinner.className = 'logo-processing-spinner';
+  anchorEl?.appendChild(spinner);
+  try {
+    const oldId = slot.logoId;
+    const logo = HS.library.find(l => l.id === oldId) || { src: slot.logoSrc, name: 'logo.png' };
+    const newLogo = await removeBgFromLogo(logo, s => {
+      if (btn) btn.innerHTML = s === 'uploading' ? '<i class="fa-solid fa-arrow-up-from-bracket"></i> Uploading…' : '<i class="fa-solid fa-spinner fa-spin"></i> Removing…';
+    });
+    const origIdx = HS.library.findIndex(l => l.id === oldId);
+    if (origIdx >= 0) HS.library.splice(origIdx, 1, newLogo);
+    else HS.library.push(newLogo);
+    slot.logoId = newLogo.id;
+    slot.logoSrc = newLogo.src;
+    delete slot.logoSrcTight; delete slot.logoAspect; delete slot.logoArtworkBounds;
+    await prepareLogo(slot, newLogo.src);
+  } catch (err) { console.error('BG removal failed', err); }
+  spinner.remove();
+  closeTlSlotToolbar();
+  redrawTplPreview();
 }
 
 export function assignTlSlot(idx, logo) {
@@ -551,20 +470,69 @@ export function assignTlSlot(idx, logo) {
     logoSrc: logo.src,
     fit: 'width',
     tx: 50, ty: 50, scale: 100,
+    // Default to the uploaded image's own aspect rather than forcing 2:1 —
+    // a user who's already picked a specific ratio for this slot keeps it
+    // across a Replace.
+    ratio: existing?.ratio || 'fit',
     border: { color: '#D1D5DB' },
     ...freePos,
   };
   tl.slots[idx] = slot;
   UI.tlSelectedIdxs = new Set([idx]);
-  prepareLogo(slot, logo.src).then(() => redrawTplPreview()).catch(() => {});
+  prepareLogo(slot, logo.src).then(() => {
+    // logoAspect is only known once the artwork loads — resize the box to
+    // match it now, same math as switching ratio to 'fit' by hand.
+    if (slot.ratio === 'fit' && slot.freeH != null) {
+      slot.freeW = Math.round(slotWidthForRatio(slot, slot.freeH));
+    }
+    redrawTplPreview();
+  }).catch(() => {});
   redrawTplPreview();
 }
 
 // Renders the slot visual-options body as an HTML string for use in the
 // sidebar menu. Also used by openTlSidePanel for the floating panel variant.
+// Template images are template-owned content — like free text layers, they
+// can move above or below the rest of the template's own content (banners,
+// static top/bottom text, other template images/logos), but can never sink
+// below the background the way variation content can — hence the capped
+// 2-item HS_FRAME_LAYER_ORDER (see state.js) instead of variation logos' full
+// 3-item HS_LAYER_ORDER. Shown regardless of whether a logo has been assigned
+// yet — the slot itself already occupies a paint position.
+function tlSlotArrangeSection(idx, slot) {
+  const tierIdx = HS_FRAME_LAYER_ORDER.indexOf(getVariationLayer(slot));
+  const atBack = tierIdx <= 0;
+  const atFront = tierIdx >= HS_FRAME_LAYER_ORDER.length - 1;
+  return `
+    <div class="hs-editor-section">
+      <div class="hs-editor-label">Arrange</div>
+      <div class="hs-bg-toggle">
+        <button class="hs-tog-btn" title="Move to back" onclick="setTlSlotLayer(${idx}, '${HS_FRAME_LAYER_ORDER[0]}')"${atBack ? ' disabled' : ''}><i class="fa-solid fa-arrows-down-to-line" aria-hidden="true"></i></button>
+        <button class="hs-tog-btn" title="Send backward" onclick="stepTlSlotLayer(${idx}, -1)"${atBack ? ' disabled' : ''}><i class="fa-solid fa-arrow-down" aria-hidden="true"></i></button>
+        <button class="hs-tog-btn" title="Bring forward" onclick="stepTlSlotLayer(${idx}, 1)"${atFront ? ' disabled' : ''}><i class="fa-solid fa-arrow-up" aria-hidden="true"></i></button>
+        <button class="hs-tog-btn" title="Move to front" onclick="setTlSlotLayer(${idx}, '${HS_FRAME_LAYER_ORDER[HS_FRAME_LAYER_ORDER.length - 1]}')"${atFront ? ' disabled' : ''}><i class="fa-solid fa-arrows-up-to-line" aria-hidden="true"></i></button>
+      </div>
+    </div>`;
+}
+
+window.setTlSlotLayer = function (idx, tier) {
+  const slot = activeSlot(idx); if (!slot) return;
+  setVariationLayer(slot, tier);
+  redrawTplPreview();
+  openTlSidePanel(idx);
+};
+window.stepTlSlotLayer = function (idx, dir) {
+  const slot = activeSlot(idx); if (!slot) return;
+  const next = HS_FRAME_LAYER_ORDER.indexOf(getVariationLayer(slot)) + dir;
+  if (next < 0 || next >= HS_FRAME_LAYER_ORDER.length) return;
+  setVariationLayer(slot, HS_FRAME_LAYER_ORDER[next]);
+  redrawTplPreview();
+  openTlSidePanel(idx);
+};
+
 export function renderTplSlotBody(idx) {
   const slot = tlSource().slots[idx];
-  if (!slot?.logoSrc) return '<div class="hs-section" style="font-size:13px;color:var(--gray-400)">No logo assigned to this slot.</div>';
+  if (!slot?.logoSrc) return '<div class="hs-section" style="font-size:13px;color:var(--gray-400)">No logo assigned to this slot.</div>' + tlSlotArrangeSection(idx, slot);
   const hasBg = !!(slot.bg && slot.bg !== 'transparent');
   const bgColor = hasBg ? slot.bg : '#FFFFFF';
   const hasBorder = !!(slot.border && slot.border.color);
@@ -630,15 +598,20 @@ export function renderTplSlotBody(idx) {
         ${eyedropperBtn('tlSpBorderSwatch')}
       </div>` : ''}
     </div>`}
+    ${tlSlotArrangeSection(idx, slot)}
     <div class="hs-editor-section">
       <button class="btn sm" onclick="resetTlSlot(${idx})">Reset position</button>
       <button class="btn sm" style="color:#dc2626;border-color:#fecaca;margin-top:4px" onclick="removeTlSlot(${idx})">Remove logo</button>
     </div>`;
 }
 
+// Opens (or refreshes) the Fine-tune controls for one slot as the 'tplSlot'
+// level of the same sidebar menu every other design control lives in — the
+// same structure renderDesignSection()/renderEditor() already use for
+// Background, Top banner, etc. (see HS_MENU_TITLES['tplSlot']).
 export function openTlSidePanel(idx) {
-  // If the slot-options level is already open in the sidebar menu, refresh in-place
-  // rather than opening a competing floating panel.
+  // Already at the tplSlot level — refresh its body in place instead of a
+  // full sidebar re-render, so a slider drag doesn't also re-init the canvas.
   if (!HS.editingVarId && UI.hsMenu === 'tplSlot') {
     UI.hsMenuSlotIdx = idx;
     window._refreshDesignTplSlot?.();
@@ -649,27 +622,16 @@ export function openTlSidePanel(idx) {
     window._refreshVarTplSlot?.();
     return;
   }
-  // Floating panel fallback (used when accessed from canvas hover-Edit button
-  // before navigating to the tplSlot menu level).
-  closeTlSidePanel();
-  const slot = tlSource().slots[idx];
-  if (!slot) return;
-  const panel = document.createElement('div');
-  panel.id = 'tlSidePanel';
-  panel.className = 'tl-side-panel';
-  panel.innerHTML = `
-    <div class="tl-sp-header">
-      <div class="tl-sp-title">Slot ${idx + 1}</div>
-      <button class="tl-sp-close" onclick="closeTlSidePanel()" aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
-    </div>
-    <div class="tl-sp-body">${renderTplSlotBody(idx)}</div>`;
-  document.body.appendChild(panel);
+  // Not yet navigated into the tplSlot level (e.g. Fine-tune clicked straight
+  // from the canvas toolbar) — same entry point addTplImage() already uses.
+  if (HS.editingVarId) {
+    UI.hsVarMenuSlotIdx = idx;
+    window.openHsVarMenu?.('tplSlot');
+  } else {
+    UI.hsMenuSlotIdx = idx;
+    window.openHsMenu?.('tplSlot');
+  }
 }
-
-window.closeTlSidePanel = function () {
-  const p = document.getElementById('tlSidePanel');
-  if (p) p.remove();
-};
 
 export function activeSlot(idx) { return tlSource().slots[idx]; }
 
@@ -720,7 +682,6 @@ window.removeTlSlot = function (idx) {
     if (UI.hsMenu === 'tplSlot' && UI.hsMenuSlotIdx == null) UI.hsMenu = 'logos';
   }
 
-  closeTlSidePanel();
   closeTlSlotToolbar();
   redrawTplStructural();
 };

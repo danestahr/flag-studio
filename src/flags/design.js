@@ -1,8 +1,8 @@
 import '../style.css';
 import '../icons.js';
-import { requireAuth } from '../auth.js';
+import { requireAuth, isStaffOrAdmin } from '../auth.js';
 
-await requireAuth();
+const session = await requireAuth();
 
 import { S, setDragLogoId, DEFAULT_COLORS } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
@@ -19,12 +19,12 @@ import { eyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
 import { esc } from '../dom-utils.js';
 import { logoThumbHtml } from '../media-utils.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
-import { renderCanvasPanel, fitSidePanel } from '../canvas-panel.js';
+import { renderCanvasPanel } from '../canvas-panel.js';
 import { refreshImageBoxClips } from '../image-box.js';
 
 let isDirty = false;
 let _baseZoom = 100;
-let _flagExpZoom = 100;
+let _flagExpZoom = 75;
 function safeHex(h) { return /^#[0-9A-Fa-f]{3,6}$/.test(h) ? h : '#cccccc'; }
 
 renderCanvasPanel(document.getElementById('flagExpCanvasPanel'), {
@@ -36,8 +36,6 @@ renderCanvasPanel(document.getElementById('flagExpCanvasPanel'), {
   aspect: 7519 / 4669,
   getZoom: () => _flagExpZoom,
   setZoom: v => { _flagExpZoom = v; },
-  headerName: '—',
-  headerNameId: 'flagExpName',
   canvasContentHtml: '<div class="flag-exp-preview" id="flagExpPreview"><div class="flag-exp-placeholder">Select a style →</div></div>',
 });
 
@@ -95,7 +93,6 @@ function renderFlagGrid() {
 function showFlagExpanded(id) {
   const flag = FLAGS.find(f => f.id === id);
   if (!flag) return;
-  document.getElementById('flagExpName').textContent = flag.name;
   document.querySelectorAll('.flag-card').forEach(c => c.classList.remove('selected'));
   document.getElementById('fc-' + id)?.classList.add('selected');
   refreshFlagExpanded();
@@ -126,7 +123,6 @@ window.pickFlag = function (id) {
   renderP1Colors();
   checkStep1();
   syncSidebar();
-  fitSidePanel('p1ControlsCol');
   markDirty();
 };
 
@@ -199,7 +195,6 @@ window.toggleGsTag = function (checked) {
   if (text) text.textContent = checked ? 'On' : 'Off';
   refreshFlagPreviews();
   refreshColorPrev();
-  fitSidePanel('p1ControlsCol');
   markDirty();
 };
 
@@ -514,7 +509,9 @@ function renderCustomerSection(intake) {
         <div class="cs-row"><span class="cs-label">Ship to</span><span class="cs-value">${esc(addr)}</span></div>
         <div class="cs-row"><span class="cs-label">Setup</span><span class="cs-value">${intake.flag_setup === 'different' ? 'Different front &amp; back' : 'Same front &amp; back'}</span></div>
         ${colors.length ? `<div class="cs-row"><span class="cs-label">Colors</span><div class="cs-colors">${colors.map(c => `<div class="cs-swatch" style="background:${safeHex(c.hex || c)}" title="${esc(c.name || c)}"></div>`).join('')}</div></div>` : ''}
-        ${intake.design_notes ? `<div class="cs-row"><span class="cs-label">Notes</span><span class="cs-notes">${esc(intake.design_notes)}</span></div>` : ''}
+        ${intake.design_notes ? `<div class="cs-row"><span class="cs-label">Design Description</span><span class="cs-notes">${esc(intake.design_notes)}</span></div>` : ''}
+        ${intake.front_design_notes ? `<div class="cs-row"><span class="cs-label">Front Notes</span><span class="cs-notes">${esc(intake.front_design_notes)}</span></div>` : ''}
+        ${intake.back_design_notes ? `<div class="cs-row"><span class="cs-label">Back Notes</span><span class="cs-notes">${esc(intake.back_design_notes)}</span></div>` : ''}
       </div>
     </div>`;
   el.style.display = '';
@@ -546,7 +543,7 @@ window.saveDraft = async function () {
 
 window.goToVariations = async function () {
   await window.saveDraft();
-  if (S.projectId) window.location.href = 'flags-variations.html?project=' + S.projectId;
+  if (S.projectId) window.location.href = 'flags-variations?project=' + S.projectId;
 };
 
 // ── Init ──────────────────────────────────────────────────
@@ -564,7 +561,7 @@ renderSidebar(document.getElementById('sidebar'), {
         const p = new URLSearchParams(window.location.search).get('project');
         if (!p) return;
         await window.saveDraft?.();
-        window.location.href = 'flags-variations.html?project=' + p;
+        window.location.href = 'flags-variations?project=' + p;
       },
     },
     {
@@ -573,7 +570,7 @@ renderSidebar(document.getElementById('sidebar'), {
         const p = new URLSearchParams(window.location.search).get('project');
         if (!p) return;
         await window.saveDraft?.();
-        window.location.href = 'flags-gallery.html?project=' + p;
+        window.location.href = 'flags-gallery?project=' + p;
       },
     },
   ],
@@ -583,7 +580,6 @@ await loadAllFlags(FLAGS);
 renderFlagGrid();
 renderP1Colors();
 syncGsTagUI();
-fitSidePanel('p1ControlsCol');
 
 const _urlProject = new URLSearchParams(window.location.search).get('project');
 if (_urlProject) {
@@ -594,6 +590,18 @@ if (_urlProject) {
       loadFlagConfig(_urlProject).catch(() => null),
       loadOrderIntake(_urlProject).catch(() => null),
     ]);
+
+    // Customers can only edit while draft/needs_changes - once the project
+    // is submitted/under review/approved, send them to the read-only
+    // Gallery & export view instead of the editor. Staff/admin are never
+    // blocked (see CLAUDE.md's "staff edits don't reset status" rule) - RLS
+    // is the real boundary either way, this is just UI-convenience so a
+    // locked customer never even sees the editor load.
+    if (!(await isStaffOrAdmin(session)) && !['draft', 'needs_changes'].includes(project.status)) {
+      window.location.href = `flags-gallery?project=${_urlProject}`;
+      await new Promise(() => {});
+    }
+
     S.projectId = project.id;
     S.projectName = project.name || '';
     S.library = logos;
@@ -633,7 +641,12 @@ if (_urlProject) {
       }
     }
     setSidebarProjectName(S.projectName, S.projectId);
-    if (!S.flagId) S.flagId = 'plain';
+    if (!S.flagId) {
+      // Arrived from the public template gallery / event-info step with a
+      // template already chosen there (?template=<id>).
+      const templateParam = new URLSearchParams(window.location.search).get('template');
+      S.flagId = (templateParam && FLAGS.some(f => f.id === templateParam)) ? templateParam : 'plain';
+    }
     showFlagExpanded(S.flagId);
     renderP1Colors();
     refreshFlagPreviews();

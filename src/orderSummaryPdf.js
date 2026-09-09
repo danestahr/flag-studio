@@ -293,7 +293,13 @@ export async function buildOrderSummaryPdf({
     drawRowPair(cursor, [designEntries[i], designEntries[i + 1] || null], { labelFont: bold, valueFont: reg });
   }
   if (ci.design_notes) {
-    drawRow(cursor, 'Notes', ci.design_notes, { labelFont: bold, valueFont: reg, size: 10 });
+    drawRow(cursor, 'Design Description', ci.design_notes, { labelFont: bold, valueFont: reg, size: 10 });
+  }
+  if (ci.front_design_notes) {
+    drawRow(cursor, 'Front Design Notes', ci.front_design_notes, { labelFont: bold, valueFont: reg, size: 10 });
+  }
+  if (ci.back_design_notes) {
+    drawRow(cursor, 'Back Design Notes', ci.back_design_notes, { labelFont: bold, valueFont: reg, size: 10 });
   }
   cursor.moveY(-10);
 

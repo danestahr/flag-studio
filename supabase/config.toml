@@ -228,15 +228,20 @@ otp_length = 6
 # Number of seconds before the email OTP expires (defaults to 1 hour).
 otp_expiry = 3600
 
-# Use a production-ready SMTP server
-# [auth.email.smtp]
-# enabled = true
-# host = "smtp.sendgrid.net"
-# port = 587
-# user = "apikey"
-# pass = "env(SENDGRID_API_KEY)"
-# admin_email = "admin@email.com"
-# sender_name = "Admin"
+# Routes local auth emails (signup confirmation, password recovery) through
+# Mailtrap's Email Sandbox instead of Inbucket/Mailpit, so you can preview the
+# actual branded HTML templates (supabase/templates/*.html) the way a real
+# mail client would render them. Credentials come from supabase/.env (gitignored),
+# not committed here: MAILTRAP_SMTP_USER / MAILTRAP_SMTP_PASS from the sandbox
+# inbox's SMTP settings in the Mailtrap dashboard.
+[auth.email.smtp]
+enabled = true
+host = "sandbox.smtp.mailtrap.io"
+port = 2525
+user = "env(MAILTRAP_SMTP_USER)"
+pass = "env(MAILTRAP_SMTP_PASS)"
+admin_email = "design@gsds.space"
+sender_name = "GolfStatus Design Studio"
 
 # Uncomment to customize email template
 # [auth.email.template.invite]

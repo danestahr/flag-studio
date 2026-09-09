@@ -1,8 +1,8 @@
 import '../style.css';
 import '../icons.js';
-import { requireAuth } from '../auth.js';
+import { requireAuth, isStaffOrAdmin } from '../auth.js';
 
-await requireAuth();
+const session = await requireAuth();
 
 import { S, setDragLogoId } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
@@ -20,7 +20,7 @@ import { esc } from '../dom-utils.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 import { renderLogoTray } from '../logo-tray.js';
 import { renderVariationList, refreshVariationThumbs } from '../variation-list.js';
-import { renderCanvasPanel, fitSidePanel } from '../canvas-panel.js';
+import { renderCanvasPanel } from '../canvas-panel.js';
 import { refreshImageBoxClips } from '../image-box.js';
 
 let isDirty = false;
@@ -271,7 +271,7 @@ window.setLogoLayout = function (layout) {
   markDirty();
 };
 
-let _flagZoom = 100;
+let _flagZoom = 75;
 
 const flagCanvas = renderCanvasPanel(document.getElementById('flagCanvasPanel'), {
   panelId: 'flagCanvasPanel',
@@ -282,8 +282,6 @@ const flagCanvas = renderCanvasPanel(document.getElementById('flagCanvasPanel'),
   aspect: 7519 / 4669,
   getZoom: () => _flagZoom,
   setZoom: v => { _flagZoom = v; },
-  headerName: 'Variation 1',
-  headerNameId: 'activeVarName',
   onAdd: e => window.openVarAddMenu(e),
   addBtnId: 'varAddBtn',
   noteHtml: `
@@ -313,8 +311,6 @@ const flagCanvas = renderCanvasPanel(document.getElementById('flagCanvasPanel'),
   description: "Drag from library into a zone. Logos placed in the grey bleed margin will be trimmed off and won't appear on the printed flag.",
 });
 
-fitSidePanel('varListPanel');
-
 const varThumbId = v => 'vt-' + v.id;
 const paintVarThumb = (el, v) => renderInto(el, v.logos || [], 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
 
@@ -324,7 +320,7 @@ function renderVarList() {
     thumbId: varThumbId,
     renderThumb: paintVarThumb,
     feedbackFor: v => S.feedback?.find(f => f.variation_id === v.id),
-    onSelect: v => selectVar(v.id),
+    onSelect: v => openVarEdit(v.id),
     onRename: (v, name) => renameVar(v.id, name),
     onEdit: v => openVarEdit(v.id),
     onDuplicate: v => dupVar(v.id),
@@ -426,6 +422,15 @@ function renderVarFlagRow(v) {
 
   el.innerHTML = `
     <div class="ve-editor">
+      <div class="ve-section">
+        <div class="ve-section-title"><span>Quantity</span></div>
+        <div class="qty-stepper">
+          <button class="qty-btn" type="button" onclick="veQtyChange(-1)" aria-label="Decrease quantity"><i class="fa-solid fa-minus" aria-hidden="true"></i></button>
+          <input class="var-qty-input" type="number" min="1" step="1" id="veQtyInput" value="${v.qty ?? 1}" onchange="veQtySet(this.value)">
+          <button class="qty-btn" type="button" onclick="veQtyChange(1)" aria-label="Increase quantity"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+        </div>
+      </div>
+
       ${colorZones.length ? `
       <div class="ve-section">
         <div class="ve-section-title">
@@ -556,6 +561,25 @@ window.veToggleBorderMatch = function (matches) {
   refreshVarThumbs();
   refreshEditPanel();
   markDirty();
+};
+
+function commitVeQty(next) {
+  const v = S.variations.find(v => v.id === editingVarId);
+  if (!v) return;
+  v.qty = Math.max(1, next);
+  const input = document.getElementById('veQtyInput');
+  if (input) input.value = v.qty;
+  renderVarList();
+  markDirty();
+}
+
+window.veQtyChange = function (delta) {
+  const base = parseInt(document.getElementById('veQtyInput')?.value, 10) || 1;
+  commitVeQty(base + delta);
+};
+
+window.veQtySet = function (val) {
+  commitVeQty(parseInt(val, 10) || 1);
 };
 
 window.veClearAllColors = function () {
@@ -726,18 +750,15 @@ function renderBackMirrorPreview(v, varFlag, varColors, gsTagOpts) {
 
 function renderVarCanvas() {
   const v = S.variations.find(v => v.id === S.activeVarId);
-  const nameEl = document.getElementById('activeVarName');
   const emptyEl = document.getElementById('varCanvasEmpty');
   const zoomWrap = document.getElementById('flagZoomWrap');
   if (!v) {
-    if (nameEl) nameEl.textContent = '—';
     if (emptyEl) emptyEl.style.display = '';
     if (zoomWrap) zoomWrap.style.display = 'none';
     return;
   }
   if (emptyEl) emptyEl.style.display = 'none';
   if (zoomWrap) zoomWrap.style.display = '';
-  if (nameEl) nameEl.textContent = v.name;
 
   const varFlag = getVarFlag(v);
   if (!varFlag) return;
@@ -919,13 +940,9 @@ function delVar(id) {
   markDirty();
 }
 
-function selectVar(id) { S.activeVarId = id; renderVarList(); renderVarCanvas(); }
-
 function renameVar(id, name) {
   const v = S.variations.find(v => v.id === id);
   if (v) v.name = name;
-  const nameEl = document.getElementById('activeVarName');
-  if (S.activeVarId === id && nameEl) nameEl.textContent = name;
   if (editingVarId === id) {
     const titleEl = document.getElementById('varEditPanelTitle');
     if (titleEl) titleEl.textContent = name;
@@ -960,7 +977,7 @@ window.saveDraft = async function () {
 
 window.goToGallery = async function () {
   await window.saveDraft();
-  if (S.projectId) window.location.href = 'flags-gallery.html?project=' + S.projectId;
+  if (S.projectId) window.location.href = 'flags-gallery?project=' + S.projectId;
 };
 
 // ── Init ──────────────────────────────────────────────────
@@ -975,7 +992,7 @@ renderSidebar(document.getElementById('sidebar'), {
       onClick: async () => {
         const p = new URLSearchParams(window.location.search).get('project');
         await window.saveDraft?.();
-        window.location.href = 'flags.html' + (p ? '?project=' + p : '');
+        window.location.href = 'flags' + (p ? '?project=' + p : '');
       },
     },
     { id: 'navVariations', label: 'Variations', desc: 'Build combinations' },
@@ -985,7 +1002,7 @@ renderSidebar(document.getElementById('sidebar'), {
         const p = new URLSearchParams(window.location.search).get('project');
         if (!p) return;
         await window.saveDraft?.();
-        window.location.href = 'flags-gallery.html?project=' + p;
+        window.location.href = 'flags-gallery?project=' + p;
       },
     },
   ],
@@ -1002,6 +1019,13 @@ try {
     loadLogosForProject(_urlProject),
     loadFlagConfig(_urlProject).catch(() => null),
   ]);
+
+  // Same customer lock as design.js - see the comment there.
+  if (!(await isStaffOrAdmin(session)) && !['draft', 'needs_changes'].includes(project.status)) {
+    window.location.href = `flags-gallery?project=${_urlProject}`;
+    await new Promise(() => {});
+  }
+
   S.projectId = project.id;
   S.projectName = project.name || '';
   S.library = logos;

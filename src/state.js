@@ -6,6 +6,8 @@ export const DEFAULT_COLORS = { 'zone-primary': '#FFFFFF', 'zone-secondary': '#1
 export const S = {
   projectId: null,
   projectName: '',
+  projectStatus: null,     // projects.status — see status-labels.js / project_is_editable()
+  hasHoleSignConfig: false, // whether this project already has a hole_sign_config row (gallery.js cross-sell check)
   flagId: null,
   colors: { ...DEFAULT_COLORS },
   library: [],

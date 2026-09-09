@@ -64,6 +64,16 @@ export function hideZoneToolbar() {
   _ctx = null;
 }
 
+// Moves the given ids to the very back/front of the stack, preserving their
+// relative order, so a multi-selection (or a single hover-action layer)
+// reorders as a block.
+function moveLogosToEdge(logos, ids, toFront) {
+  const selected = logos.filter(l => ids.has(l.id));
+  const rest = logos.filter(l => !ids.has(l.id));
+  logos.length = 0;
+  logos.push(...(toFront ? [...rest, ...selected] : [...selected, ...rest]));
+}
+
 // Removes every selected logo (batch, when multi-selected).
 function removeActiveLogo() {
   if (_addActive || !_selectedIds.size || !_ctx) return;
@@ -121,11 +131,11 @@ function renderLibPicker() {
       const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
       const lid = el.dataset.lid;
       if (isAdd) {
-        // Default new logos above the frame (border + GS tag): the border can be
-        // set to match the flag's primary color, which makes it fully opaque but
-        // visually invisible — a logo left below it silently loses whatever part
-        // falls under the border band, reading as an inexplicable crop.
-        logos.push({ id: 'pl-' + Date.now(), logoId: lid, x: 50, y: 50, w: 75, aboveFrame: true });
+        // New logos default below the frame (border + GS tag) — as forward
+        // as possible without covering the template's own border/tag. A
+        // fully-opaque border color can still clip part of the logo; the
+        // Frame toggle in the zone toolbar is the escape hatch for that case.
+        logos.push({ id: 'pl-' + Date.now(), logoId: lid, x: 50, y: 50, w: 75, aboveFrame: false });
       } else if (singleId) {
         const l = logos.find(l => l.id === singleId);
         if (l) l.logoId = lid;
@@ -153,8 +163,20 @@ function showToolbar(anchorEl, isAdd) {
   document.getElementById('dzTbReplace').style.display = multi ? 'none' : '';
   document.getElementById('dzTbBack').style.display = showOrder ? '' : 'none';
   document.getElementById('dzTbFront').style.display = showOrder ? '' : 'none';
+  // Single-step reorder only makes sense against one selected image.
+  const showStep = showOrder && !multi;
+  const stepBackwardBtn = document.getElementById('dzTbBackward');
+  const stepForwardBtn = document.getElementById('dzTbForward');
+  stepBackwardBtn.style.display = showStep ? '' : 'none';
+  stepForwardBtn.style.display = showStep ? '' : 'none';
+  if (showStep) {
+    const logos = _ctx?.logos || [];
+    const idx = logos.findIndex(l => _selectedIds.has(l.id));
+    stepBackwardBtn.disabled = idx <= 0;
+    stepForwardBtn.disabled = idx < 0 || idx >= logos.length - 1;
+  }
   document.getElementById('dzTbOrderSep').style.display = showOrder ? '' : 'none';
-  document.getElementById('dzTbReplace').textContent  = isAdd ? 'Add logo ▾' : 'Replace ▾';
+  document.getElementById('dzTbReplace').innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> ' + (isAdd ? 'Add logo ▾' : 'Replace ▾');
 
   const frameBtn = document.getElementById('dzTbFrame');
   const frameSep = document.getElementById('dzTbFrameSep');
@@ -178,19 +200,21 @@ function ensureToolbar() {
   t.id = 'dzToolbar';
   t.className = 'dz-toolbar';
   t.innerHTML = `
-    <button class="dz-tb-btn" id="dzTbBack" title="Send to back"><i class="fa-solid fa-arrow-down"></i> Back</button>
-    <button class="dz-tb-btn" id="dzTbFront" title="Bring to front"><i class="fa-solid fa-arrow-up"></i> Front</button>
+    <button class="dz-tb-btn" id="dzTbBack" title="Send to back"><i class="fa-solid fa-arrows-down-to-line"></i> Back</button>
+    <button class="dz-tb-btn" id="dzTbBackward" title="Send backward"><i class="fa-solid fa-arrow-down"></i></button>
+    <button class="dz-tb-btn" id="dzTbForward" title="Bring forward"><i class="fa-solid fa-arrow-up"></i></button>
+    <button class="dz-tb-btn" id="dzTbFront" title="Send to front"><i class="fa-solid fa-arrows-up-to-line"></i> Front</button>
     <div class="dz-tb-sep" id="dzTbOrderSep"></div>
     <button class="dz-tb-btn" id="dzTbFrame" title="Move relative to the template's border/tag frame"></button>
     <div class="dz-tb-sep" id="dzTbFrameSep"></div>
-    <button class="dz-tb-btn" id="dzTbRemove">Remove</button>
-    <div class="dz-tb-sep" id="dzTbSep"></div>
-    <button class="dz-tb-btn" id="dzTbRemoveBg" title="Remove background"><i class="fa-solid fa-wand-magic-sparkles"></i> Remove BG</button>
+    <button class="dz-tb-btn" id="dzTbRemoveBg" title="Remove Background"><i class="fa-solid fa-wand-magic-sparkles"></i> Remove Background</button>
     <div class="dz-tb-sep" id="dzTbRemoveBgSep"></div>
     <div style="position:relative">
       <button class="dz-tb-btn" id="dzTbReplace">Replace ▾</button>
       <div class="dz-lib-picker" id="dzLibPicker" style="display:none"></div>
     </div>
+    <div class="dz-tb-sep" id="dzTbSep"></div>
+    <button class="dz-tb-btn" id="dzTbRemove" title="Remove"><i class="fa-solid fa-trash"></i></button>
     <input type="file" id="dzReplaceFile" accept="image/*,.pdf,.ai,.eps" style="display:none">`;
   document.body.appendChild(t);
 
@@ -199,10 +223,7 @@ function ensureToolbar() {
   document.getElementById('dzTbBack').addEventListener('click', () => {
     if (_addActive || !_selectedIds.size || !_ctx) return;
     const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
-    const selected = logos.filter(l => _selectedIds.has(l.id));
-    const rest = logos.filter(l => !_selectedIds.has(l.id));
-    logos.length = 0;
-    logos.push(...selected, ...rest);
+    moveLogosToEdge(logos, _selectedIds, false);
     hideZoneToolbar();
     renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
     onChange();
@@ -211,10 +232,31 @@ function ensureToolbar() {
   document.getElementById('dzTbFront').addEventListener('click', () => {
     if (_addActive || !_selectedIds.size || !_ctx) return;
     const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
-    const selected = logos.filter(l => _selectedIds.has(l.id));
-    const rest = logos.filter(l => !_selectedIds.has(l.id));
-    logos.length = 0;
-    logos.push(...rest, ...selected);
+    moveLogosToEdge(logos, _selectedIds, true);
+    hideZoneToolbar();
+    renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
+    onChange();
+  });
+
+  // Single-step reorder — swaps the one selected layer with its immediate
+  // neighbor, unlike Back/Front's jump-to-edge.
+  document.getElementById('dzTbBackward').addEventListener('click', () => {
+    if (_addActive || _selectedIds.size !== 1 || !_ctx) return;
+    const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
+    const idx = logos.findIndex(l => _selectedIds.has(l.id));
+    if (idx <= 0) return;
+    [logos[idx - 1], logos[idx]] = [logos[idx], logos[idx - 1]];
+    hideZoneToolbar();
+    renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
+    onChange();
+  });
+
+  document.getElementById('dzTbForward').addEventListener('click', () => {
+    if (_addActive || _selectedIds.size !== 1 || !_ctx) return;
+    const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
+    const idx = logos.findIndex(l => _selectedIds.has(l.id));
+    if (idx < 0 || idx >= logos.length - 1) return;
+    [logos[idx], logos[idx + 1]] = [logos[idx + 1], logos[idx]];
     hideZoneToolbar();
     renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
     onChange();
@@ -287,7 +329,7 @@ function ensureToolbar() {
       const logo = await uploadLogo(S.projectId, file);
       S.library.push(logo);
       if (_addActive) {
-        logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75, aboveFrame: true });
+        logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75, aboveFrame: false });
       } else if (_selectedIds.size === 1) {
         const l = logos.find(l => l.id === [..._selectedIds][0]);
         if (l) l.logoId = logo.id;
@@ -419,20 +461,9 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
         showToolbar(logoWrap, false);
         document.getElementById('dzLibPicker').style.display = 'none';
       },
-      // Hover shortcuts — select just this one layer and jump straight to the
-      // same toolbar+picker (swap) or removal (remove) a plain click would
-      // reach, without the intermediate select-then-click-Replace step.
-      onSwap: () => {
-        _selectedIds = new Set([layer.id]);
-        _addActive = false;
-        _ctx = { logos, dz, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts };
-        dz.querySelectorAll('.dz-logo-wrap').forEach(w => {
-          w.classList.toggle('selected', _selectedIds.has(w.dataset.layerId));
-        });
-        showToolbar(logoWrap, false);
-        document.getElementById('dzLibPicker').style.display = 'block';
-        renderLibPicker();
-      },
+      // Hover shortcut — select just this one layer and remove it directly,
+      // without the intermediate select-then-click-Remove step. Swap/reorder
+      // now live only in the zone toolbar, not on the image itself.
       onRemove: () => {
         _selectedIds = new Set([layer.id]);
         _addActive = false;
@@ -526,7 +557,7 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
       if (file) {
         try {
           const logo = await uploadDroppedFile(file);
-          ctx.logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75, aboveFrame: true });
+          ctx.logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75, aboveFrame: false });
           renderDropZones(ctx.wrapId, ctx.svgId, ctx.logos, ctx.face, ctx.onChange, ctx.flagOverride, ctx.colorsOverride, ctx.gsTagOpts);
           ctx.onChange();
         } catch (err) { console.error('Logo upload failed', err); }
@@ -535,7 +566,7 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
 
       const dragId = _dragLogoId;
       if (!dragId) return;
-      ctx.logos.push({ id: 'pl-' + Date.now(), logoId: dragId, x: 50, y: 50, w: 75, aboveFrame: true });
+      ctx.logos.push({ id: 'pl-' + Date.now(), logoId: dragId, x: 50, y: 50, w: 75, aboveFrame: false });
       setDragLogoId(null);
       renderDropZones(ctx.wrapId, ctx.svgId, ctx.logos, ctx.face, ctx.onChange, ctx.flagOverride, ctx.colorsOverride, ctx.gsTagOpts);
       ctx.onChange();

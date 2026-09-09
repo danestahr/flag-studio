@@ -9,6 +9,7 @@
 
   --accent: #232323; --accent-hover: #3E3E3E; --accent-contrast: #FFFFFF;
   --accent-tint: rgba(35,35,35,.06);
+  --gold: #C8972A;
 
   --r: 10px;
 }
@@ -31,31 +32,44 @@ body {
   color: var(--black);
   min-height: 100vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
+  flex-direction: column;
 }
+
+/* Header (login.html/signup.html/reset-password*.html) - duplicated from
+   landing.css's header/.logo/.beta-tag/.header-cta-btn/.account-avatar/
+   .sign-out-btn rather than importing that whole stylesheet, same pattern as
+   .tg-side-heading below. Always present so a visitor stuck on any auth
+   screen can still get back to the rest of the app. */
+header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; flex-shrink:0; }
+.logo { font-family:'DM Serif Display',serif; color:#FAFAF8; font-size:20px; display:flex; align-items:center; gap:10px; }
+.logo-mark { width:48px; height:48px; display:block; flex-shrink:0; }
+.beta-tag { font-family:'DM Sans',sans-serif; font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#fff; background:#06b6d4; border-radius:4px; padding:3px 7px; line-height:1.4; align-self:center; flex-shrink:0; }
+.header-cta-btn { background:#FFFFFF; color:#1B1B18; font-family:'DM Sans',sans-serif; font-size:13px; font-weight:600; padding:8px 18px; border-radius:20px; text-decoration:none; transition:opacity .15s; }
+.header-cta-btn:hover { opacity:.85; }
+.account-avatar { width:30px; height:30px; border-radius:50%; background:var(--gold); color:#1B1B18; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; text-decoration:none; font-family:'DM Sans',sans-serif; flex-shrink:0; transition:opacity .15s; }
+.account-avatar:hover { opacity:.85; }
+/* login.js-only header addition (see injectViewProjectsLink) - left of the avatar. */
+.header-view-projects-link { color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; text-decoration:none; transition:color .15s; }
+.header-view-projects-link:hover { color:#fff; text-decoration:underline; }
+.sign-out-btn { background:transparent; border:1px solid rgba(255,255,255,.35); color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; padding:5px 14px; border-radius:20px; cursor:pointer; transition:background .15s,color .15s; }
+.sign-out-btn:hover { background:rgba(255,255,255,.12); color:white; }
 
 .login-wrap {
   width: 100%;
   max-width: 380px;
+  margin: auto; /* centers itself in the remaining space below the header */
+  padding: 1rem;
 }
 
-/* Split-screen layout (login page only) */
-body.split-page {
-  padding: 0;
-  align-items: stretch;
-  justify-content: stretch;
-}
-
+/* Split-screen layout (login/signup pages only) */
 .split-screen {
   display: flex;
   width: 100%;
-  min-height: 100vh;
+  flex: 1; /* fills the space below the sticky header, instead of its own 100vh */
 }
 
 .split-left {
-  flex: 1 1 50%;
+  flex: 1 1 33.333%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -63,7 +77,7 @@ body.split-page {
 }
 
 .split-right {
-  flex: 1 1 50%;
+  flex: 1 1 66.667%;
   position: relative;
   display: flex;
   align-items: center;
@@ -93,6 +107,18 @@ body.split-page {
   font-size: 34px;
   line-height: 1.25;
 }
+
+/* Selected-template preview (login.js/signup.js), replacing the tagline
+   above when a visitor arrives from the public gallery with a template
+   already picked. .split-right is now the wide (2/3) column, so the thumb
+   fills it (width:100%, aspect-ratio set inline per template) rather than
+   sitting at a small fixed size. */
+.split-right-preview { display: flex; flex-direction: column; align-items: center; gap: 1.25rem; width: 100%; max-width: 720px; margin: 0 auto; }
+.split-right-thumb { width: 100%; background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 44px rgba(0,0,0,.4); }
+.split-right-thumb svg { width: 100%; height: 100%; display: block; }
+.split-right-name { font-family: 'DM Serif Display', serif; font-size: 26px; color: #FAFAF8; }
+.split-right-change-link { margin-top: -.75rem; font-size: 13px; color: rgba(250,250,248,.75); text-decoration: underline; text-underline-offset: 2px; }
+.split-right-change-link:hover { color: #FAFAF8; }
 
 @media (max-width: 900px) {
   .split-right {
@@ -203,3 +229,27 @@ body.split-page {
 .login-alt-link-outside {
   margin-top: 1.25rem;
 }
+
+/* Event-info step (gallery-side-panel.js's renderEventInfoStep), swapped
+   into #splitLeftContent's .login-card after sign-in - duplicated from
+   landing.css's .tg-side-heading rather than importing that whole
+   stylesheet for one rule (same pattern landing.css itself uses for
+   style.css's .hs-ob-* rules). Still used for small in-card status text
+   (Loading…/error states) - the step's own title lives in
+   .side-step-heading below, outside the card. */
+.tg-side-heading { font-size: 15px; font-weight: 600; margin-bottom: .85rem; line-height: 1.4; }
+
+/* Step title for the sync/event-info steps (login.js's showEventInfoStep) -
+   sits above .login-card as its own page-level heading rather than inside
+   it, left-aligned to match .login-wrap's block layout. */
+.side-step-heading { font-size: 26px; font-weight: 600; color: var(--black); line-height: 1.25; margin-bottom: 1rem; }
+
+/* Sync-from-GolfStatus step (gallery-side-panel.js's renderSyncStep), shown
+   in the same slot right before the event-info step above. */
+.sync-step-note { font-size: 13px; color: var(--gray-600); line-height: 1.5; margin: 0 0 1rem; }
+.sync-spinner {
+  width: 22px; height: 22px; margin: 4px auto 0;
+  border: 2.5px solid var(--gray-200); border-top-color: var(--accent);
+  border-radius: 50%; animation: sync-spin .7s linear infinite;
+}
+@keyframes sync-spin { to { transform: rotate(360deg); } }

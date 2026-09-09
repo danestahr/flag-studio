@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { esc, wrapEmailHtml, ctaButton, linkFallback, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
 // SENDGRID_API_KEY_2 is the current key; SENDGRID_API_KEY is kept as a fallback
 // during rotation, matching send-proof-ready/send-order-confirmation.
@@ -18,10 +19,6 @@ const CORS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'authorization, content-type, apikey, x-client-info',
 };
-
-function esc(s: unknown): string {
-  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
 
 function json(body: unknown, status: number) {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
@@ -57,34 +54,13 @@ async function projectExists(projectId: string): Promise<boolean> {
 }
 
 function buildHtml(p: { recipientName: string; eventName: string; productLabel: string; signedUrl: string }): string {
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;margin:0;padding:32px 16px;">
-  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);">
-    <div style="background:#1a1a2e;padding:28px 32px;">
-      <h1 style="color:#fff;margin:0;font-size:22px;font-weight:600;">Print-Ready Files Are Ready</h1>
-      <p style="color:#aaa;margin:6px 0 0;font-size:14px;">GolfStatus Design Studio</p>
-    </div>
-    <div style="padding:32px;">
-      <p style="margin:0 0 20px;color:#333;font-size:16px;">Hi ${esc(p.recipientName)},</p>
+  const body = `<p style="margin:0 0 20px;color:#333;font-size:16px;">Hi ${esc(p.recipientName)},</p>
       <p style="margin:0 0 24px;color:#555;font-size:15px;line-height:1.6;">
         The print-ready ${esc(p.productLabel)} files for <strong>${esc(p.eventName)}</strong> are ready to download. This link expires in 7 days.
       </p>
-      <div style="text-align:center;margin:32px 0;">
-        <a href="${esc(p.signedUrl)}" style="display:inline-block;background:#1a1a2e;color:#fff;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:15px;font-weight:600;">
-          Download Files →
-        </a>
-      </div>
-      <p style="margin:0 0 8px;color:#888;font-size:13px;">Or copy this link:</p>
-      <p style="margin:0;font-size:12px;color:#aaa;word-break:break-all;background:#f8f8f8;padding:10px 12px;border-radius:6px;font-family:monospace;">${esc(p.signedUrl)}</p>
-    </div>
-    <div style="padding:20px 32px;background:#fafafa;border-top:1px solid #f0f0f0;">
-      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio · design@gsds.space<br>8545 S 78th St, Lincoln, NE 68516</p>
-    </div>
-  </div>
-</body>
-</html>`;
+      ${ctaButton(esc(p.signedUrl), 'Download Files')}
+      ${linkFallback(esc(p.signedUrl))}`;
+  return wrapEmailHtml({ title: 'Print-Ready Files Are Ready', bodyHtml: body });
 }
 
 function buildText(p: { recipientName: string; eventName: string; productLabel: string; signedUrl: string }): string {
@@ -95,9 +71,7 @@ function buildText(p: { recipientName: string; eventName: string; productLabel: 
     '',
     `Download: ${p.signedUrl}`,
     '',
-    'GolfStatus Design Studio',
-    'design@gsds.space',
-    '8545 S 78th St, Lincoln, NE 68516',
+    PLAIN_TEXT_FOOTER,
   ].join('\n');
 }
 

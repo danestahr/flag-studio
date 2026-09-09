@@ -19,18 +19,43 @@
   </div>
 </header>
 
-<div class="landing-main">
+<div class="landing-main" id="projectHub" style="display:none">
   <div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem">
-      <div class="section-title" style="margin-bottom:0">Projects</div>
       <div style="display:flex;align-items:center;gap:.6rem">
         <input type="search" id="projectSearch" class="project-search" placeholder="Search projects…">
+        <select id="projectStatusFilter" class="project-search" style="width:170px">
+          <option value="">All statuses</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:.6rem">
+        <button class="btn sm" id="browseTemplatesBtn" style="display:none">Browse templates</button>
         <button class="btn primary sm" onclick="newProject()">+ New project</button>
       </div>
     </div>
     <div id="projectsList"><div class="drafts-empty">Loading…</div></div>
     <div id="loadMoreWrap"></div>
   </div>
+</div>
+
+<!-- Delete project confirmation modal -->
+<div id="deleteProjectModal" class="modal-backdrop" style="display:none">
+  <div class="modal-box">
+    <div class="modal-title">Delete project?</div>
+    <p class="modal-body">This permanently removes all logos and designs.</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="window.closeDeleteProjectModal()">Cancel</button>
+      <button id="deleteProjectConfirmBtn" class="btn-danger" onclick="window.confirmDeleteProject()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div class="landing-main" id="publicGallery" style="display:none">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem">
+    <div class="section-title" style="margin-bottom:0">Choose a template to get started</div>
+    <button class="btn sm" id="backToProjectsBtn" style="display:none">← Back to projects</button>
+  </div>
+  <div id="templateGalleryRoot"></div>
 </div>
 
 <script type="module" src="/src/landing.js"></script>

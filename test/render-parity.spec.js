@@ -21,7 +21,7 @@ test('template-logo frame content shows identically across canvas, sidebar thumb
   await page.goto('/test/render-parity.html');
 
   const result = await page.evaluate(async (PIXEL) => {
-    const { HS, getEffectiveState, getEffectiveVariation } = await import('/src/hs/state.js');
+    const { HS, UI, getEffectiveState, getEffectiveVariation } = await import('/src/hs/state.js');
     const { renderHoleSignInto } = await import('/src/hole-sign-render.js');
     const { renderVariationPreview } = await import('/src/hs/var-canvas.js');
     const { renderVarList } = await import('/src/hs/variations.js');
@@ -50,8 +50,8 @@ test('template-logo frame content shows identically across canvas, sidebar thumb
       editingDraft: null,
     });
     HS.variations = [
-      { id: 'v-logo', name: 'Logo Var', logoId: null, logoSrc: PIXEL, logoData: { x: 50, y: 50, w: 90 } },
-      { id: 'v-artboard', name: 'Artboard Var', artboardSrc: PIXEL, logoId: null, logoSrc: null },
+      { id: 'v-logo', name: 'Logo Var', logos: [{ id: 'l1', logoId: null, logoSrc: PIXEL, x: 50, y: 50, w: 90 }] },
+      { id: 'v-artboard', name: 'Artboard Var', artboardSrc: PIXEL, logos: [] },
     ];
 
     // Path A: the shared renderer — exactly what the Gallery grid, print
@@ -75,13 +75,46 @@ test('template-logo frame content shows identically across canvas, sidebar thumb
 
     // Path B: the interactive canvas — renders through the same builder,
     // then re-parents .hs-frame into its own DOM overlay (see var-canvas.js).
+    // Any active variation (whether just selected — the Variations page's
+    // default "quick-edit" locked mode — or actually in the full pencil
+    // editor) strips the frame's slot image out of the SVG copy in favor of
+    // an interactive DOM overlay (locked = plain `.tl-slot` box, click-to-
+    // swap only; unlocked = the same shared image-box.js `.dz-logo-wrap`
+    // component flag/variation logos use, also draggable/resizable) — the
+    // content must never silently go missing from the canvas in either state.
+    const frameOrSlotImage = () =>
+      document.querySelector('#hsSignPreview .dz-frame-overlay image, #hsSignPreview .tl-slot img, #hsSignPreview .dz-logo-wrap .tl-slot-img');
+
     HS.activeVarId = 'v-logo';
     renderVariationPreview();
-    const frameOverlayLogo = document.querySelector('#hsSignPreview .dz-frame-overlay');
+    const quickEditLogoHasImage = !!frameOrSlotImage();
 
     HS.activeVarId = 'v-artboard';
     renderVariationPreview();
-    const frameOverlayArtboard = document.querySelector('#hsSignPreview .dz-frame-overlay');
+    const quickEditArtboardHasImage = !!frameOrSlotImage();
+
+    // Same two variations, but now in the full pencil-editor session (as if
+    // the user clicked the pencil) — still shows the template logo via a
+    // `.tl-slot` DOM overlay (this time with drag/resize handles too), since
+    // an active variation always strips the frame's slot image out of the
+    // SVG copy in favor of *some* interactive overlay — locked or unlocked.
+    UI.hsFullEditorOpen = true;
+
+    HS.activeVarId = 'v-logo';
+    HS.editingVarId = 'v-logo';
+    HS.editingDraft = getEffectiveState(HS.variations[0]);
+    renderVariationPreview();
+    const fullEditLogoHasImage = !!frameOrSlotImage();
+
+    HS.activeVarId = 'v-artboard';
+    HS.editingVarId = 'v-artboard';
+    HS.editingDraft = getEffectiveState(HS.variations[1]);
+    renderVariationPreview();
+    const fullEditArtboardHasImage = !!frameOrSlotImage();
+
+    HS.editingVarId = null;
+    HS.editingDraft = null;
+    UI.hsFullEditorOpen = false;
 
     // Path C: the Variations sidebar thumbnail list.
     renderVarList();
@@ -91,8 +124,10 @@ test('template-logo frame content shows identically across canvas, sidebar thumb
     return {
       paintOrderLogoA: paintOrder(svgLogoA),
       paintOrderArtboardA: paintOrder(svgArtboardA),
-      frameOverlayLogoHasImage: !!frameOverlayLogo?.querySelector('image'),
-      frameOverlayArtboardHasImage: !!frameOverlayArtboard?.querySelector('image'),
+      quickEditLogoHasImage,
+      quickEditArtboardHasImage,
+      fullEditLogoHasImage,
+      fullEditArtboardHasImage,
       thumbLogoHasFrameImage: !!thumbLogo?.querySelector('.hs-frame image'),
       thumbArtboardHasFrameImage: !!thumbArtboard?.querySelector('.hs-frame image'),
     };
@@ -102,9 +137,16 @@ test('template-logo frame content shows identically across canvas, sidebar thumb
   expect(result.paintOrderLogoA).toEqual(['content', 'frame']);
   expect(result.paintOrderArtboardA).toEqual(['content', 'frame']);
 
-  // Path B: canvas shows the template logo for both content types.
-  expect(result.frameOverlayLogoHasImage).toBe(true);
-  expect(result.frameOverlayArtboardHasImage).toBe(true);
+  // Path B, default quick-edit (locked) viewing state: canvas shows the
+  // template logo for both content types, via whichever DOM structure that
+  // state uses.
+  expect(result.quickEditLogoHasImage).toBe(true);
+  expect(result.quickEditArtboardHasImage).toBe(true);
+
+  // Path B, full pencil-editor session: canvas shows the template logo for
+  // both content types too.
+  expect(result.fullEditLogoHasImage).toBe(true);
+  expect(result.fullEditArtboardHasImage).toBe(true);
 
   // Path C: sidebar thumbnail shows the template logo for both content types.
   expect(result.thumbLogoHasFrameImage).toBe(true);
@@ -131,7 +173,7 @@ test('clip-path/filter ids do not collide across multiple hole-sign SVGs rendere
       templateLogos: { count: 1, size: 140, hAlign: 'center', vAlign: 'top', slots: [{ logoSrc: PIXEL, ratio: '1:1' }] },
       textLayers: [],
     };
-    const variation = { logoSrc: PIXEL, logoData: { x: 50, y: 50, w: 90 } };
+    const variation = { logos: [{ id: 'l1', logoSrc: PIXEL, x: 50, y: 50, w: 90 }] };
     renderHoleSignInto(document.getElementById('one'), state, variation);
     renderHoleSignInto(document.getElementById('two'), state, variation);
 
@@ -163,4 +205,61 @@ test('clip-path/filter ids do not collide across multiple hole-sign SVGs rendere
   expect(result.overlap).toEqual([]);
   expect(result.oneSelfContained).toBe(true);
   expect(result.twoSelfContained).toBe(true);
+});
+
+test('a variation can carry multiple independent logo layers, and old single-logo saved data migrates cleanly', async ({ page }) => {
+  await page.goto('/test/render-parity.html');
+
+  const result = await page.evaluate(async (PIXEL) => {
+    const { renderHoleSignInto } = await import('/src/hole-sign-render.js');
+    const { migrateVariationLogos } = await import('/src/hs/logo-utils.js');
+
+    document.body.innerHTML = '<div id="multi"></div>';
+
+    const state = {
+      templateStyle: 'hole-sign-1',
+      background: { type: 'color', color: '#fff' },
+      topText: { text: '' }, bottomText: { text: '' },
+      bannerTop: { enabled: false }, bannerBottom: { enabled: false },
+      templateLogos: { count: 0, slots: [] },
+      textLayers: [],
+    };
+    const variation = {
+      logos: [
+        { id: 'l1', logoSrc: PIXEL, x: 30, y: 50, w: 40 },
+        { id: 'l2', logoSrc: PIXEL, x: 70, y: 50, w: 40, aboveFrame: true },
+      ],
+    };
+    renderHoleSignInto(document.getElementById('multi'), state, variation);
+    const images = Array.from(document.getElementById('multi').querySelectorAll('svg image'));
+
+    // Legacy single-logo shape (pre-array) should fold into a one-element array.
+    const legacy = { logoId: 'lib-1', logoSrc: PIXEL, logoData: { x: 20, y: 60, w: 80 }, aboveFrame: true };
+    migrateVariationLogos(legacy);
+
+    // A variation with no logo content at all should just end up with an empty array.
+    const empty = {};
+    migrateVariationLogos(empty);
+
+    return {
+      imageCount: images.length,
+      imageXs: images.map(img => Number(img.getAttribute('x'))),
+      legacyLogos: legacy.logos,
+      legacyLeftoverFields: ['logoId', 'logoSrc', 'logoData', 'logoAspect', 'logoArtworkBounds']
+        .filter(k => k in legacy),
+      emptyLogos: empty.logos,
+    };
+  }, PIXEL);
+
+  // Two distinct logo layers, each rendered at its own x position.
+  expect(result.imageCount).toBe(2);
+  expect(new Set(result.imageXs).size).toBe(2);
+
+  // Legacy fields fold into one array entry, carrying over id/src/position/tier...
+  expect(result.legacyLogos).toHaveLength(1);
+  expect(result.legacyLogos[0]).toMatchObject({ logoId: 'lib-1', logoSrc: PIXEL, x: 20, y: 60, w: 80, aboveFrame: true });
+  // ...and the old top-level fields are gone once migrated.
+  expect(result.legacyLeftoverFields).toEqual([]);
+
+  expect(result.emptyLogos).toEqual([]);
 });

@@ -19,7 +19,7 @@ export function renderLogoTray(container, {
 }) {
   if (!container) return;
   container.innerHTML = `
-    <button type="button" class="var-upload-btn" title="Upload logo">+</button>
+    <button type="button" class="var-upload-btn" title="Upload logo"><i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i></button>
     <input type="file" id="${fileInputId}" accept="${accept}"${multiple ? ' multiple' : ''} style="display:none">
   `;
   const fileInput = container.querySelector('#' + fileInputId);
@@ -34,7 +34,9 @@ export function renderLogoTray(container, {
     const el = document.createElement('div');
     el.className = `var-lib-item${logo.uploading ? ' uploading' : ''}`;
     el.title = logo.name;
-    el.innerHTML = logoThumbHtml(logo.src, logo.name);
+    el.innerHTML = logo.uploading
+      ? '<div class="hs-vthumb-uploading"><div class="hs-upload-spinner"></div></div>'
+      : logoThumbHtml(logo.src, logo.name);
     container.appendChild(el);
     if (logo.uploading) return;
 

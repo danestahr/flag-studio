@@ -1,4 +1,5 @@
 import '../style.css';
+import '../order.css';
 import '../icons.js';
 import { requireAuth, isStaffOrAdmin } from '../auth.js';
 import JSZip from 'jszip';
@@ -11,16 +12,149 @@ import { FLAGS, COLORS } from '../data.js';
 import { getFlag, renderInto, makeSvg, showGsTagVariant, resolveColors, preloadLogoAspects } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
 import {
-  loadProject, loadFlagConfig, loadLogosForProject,
+  loadProject, loadFlagConfig, loadHoleSignConfig, loadLogosForProject,
   generateShareToken, getFeedback, supabase,
   loadOrderIntake, loadEventName, sendProofReady, sendPrestigeOrder,
   uploadPrintSheet, sendPrintSheetReady,
+  upsertCustomerInfo, submitProjectForReview, sendOrderConfirmation,
 } from '../supabase.js';
 import { buildOrderSummaryPdf } from '../orderSummaryPdf.js';
-import { esc, dl, slug, sanitizeFilename, mapWithConcurrency } from '../dom-utils.js';
+import { esc, dl, slug, sanitizeFilename, mapWithConcurrency, scrollToFirstError } from '../dom-utils.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
+import { STATUS_LABEL } from '../status-labels.js';
+import {
+  renderContactShippingFields, attachContactShippingListeners, validateContactShipping,
+  renderAckItem, attachAckListeners, renderDeadlineCallout, renderRecapSection, formatDate,
+} from '../intake-shared.js';
 
 let feedbackChannel = null;
+// True once we know the viewer is a non-admin customer and the project is
+// past draft/needs_changes - Gallery & export stays viewable, but every path
+// back into the editor (edit-variation links, sidebar nav, the Variations
+// back button) is hidden. UI-convenience only, same as everywhere else in
+// this app - RLS is the real boundary and already rejects the writes.
+let isLockedForCustomer = false;
+
+// ── Submit for review ────────────────────────────────────────
+// Module-local, page-scoped draft state for the Gallery & export panel's
+// submit form — mirrors gallery.js's existing feedbackChannel pattern rather
+// than adding to the shared S object, since nothing else on this page (or
+// any other flags page) needs it.
+let _project = null;
+let submitContact = null;
+let submitAcks = { deadline: false };
+let submitErrors = {};
+let submitting = false;
+let crossSellDismissed = false;
+
+const ACK_DEADLINE_TEXT = 'I acknowledge that final artwork approval is required at least 17 days before the event to avoid rush fees. If the event is on a weekend or Monday, this deadline will be moved to the preceding Friday.';
+
+function renderSubmitSection() {
+  const el = document.getElementById('submitSection');
+  if (!el) return;
+
+  const status = S.projectStatus;
+  if (!['draft', 'needs_changes'].includes(status)) {
+    el.innerHTML = `<div class="rc-title">Status</div><div style="font-size:13px;color:var(--gray-600)">${esc(STATUS_LABEL[status] || status)}</div>`;
+    return;
+  }
+
+  if (!S.hasHoleSignConfig && !crossSellDismissed) {
+    el.innerHTML = `
+      <div class="rc-title">Also need hole signs?</div>
+      <div style="font-size:13px;color:var(--gray-600);margin-bottom:10px">You can design hole signs for this event too, or continue straight to submitting your flags.</div>
+      <button type="button" class="btn sm primary" style="width:100%;justify-content:center;margin-bottom:8px" id="crossSellYesBtn">Yes, design hole signs</button>
+      <button type="button" class="btn sm" style="width:100%;justify-content:center" id="crossSellNoBtn">No, continue to submit</button>`;
+    document.getElementById('crossSellYesBtn').addEventListener('click', () => {
+      window.location.href = `/hole-signs?project=${encodeURIComponent(S.projectId)}`;
+    });
+    document.getElementById('crossSellNoBtn').addEventListener('click', () => {
+      crossSellDismissed = true;
+      renderSubmitSection();
+    });
+    return;
+  }
+
+  const ci = _project?.customer_info || {};
+  const eventRows = [
+    ['Name', ci.event_name ? esc(ci.event_name) : null],
+    ['Course', ci.course_name ? esc(ci.course_name) : null],
+    ['Date', ci.event_date ? esc(formatDate(ci.event_date)) : null],
+  ];
+  const hasEventInfo = eventRows.some(([, v]) => v);
+  const e = submitErrors;
+
+  el.innerHTML = `
+    <div class="rc-title">Submit for review</div>
+    ${e.submit ? `<div class="submit-error-banner">${esc(e.submit)}</div>` : ''}
+    ${hasEventInfo ? renderRecapSection('Event', eventRows) : ''}
+    ${renderDeadlineCallout(ci.event_date)}
+    ${renderContactShippingFields(submitContact, e)}
+    ${renderAckItem('deadline', submitAcks.deadline, ACK_DEADLINE_TEXT)}
+    ${e.ackDeadline ? `<div class="form-error">${esc(e.ackDeadline)}</div>` : ''}
+    <button type="button" class="btn sm primary" style="width:100%;justify-content:center;margin-top:10px" id="submitForReviewBtn"${submitting ? ' disabled' : ''}>${submitting ? 'Submitting…' : 'Submit for review'}</button>`;
+
+  attachContactShippingListeners(el, submitContact, { onCountryChange: renderSubmitSection });
+  attachAckListeners(el, submitAcks, () => { submitErrors = {}; renderSubmitSection(); });
+  document.getElementById('submitForReviewBtn')?.addEventListener('click', handleSubmitForReview);
+}
+
+async function handleSubmitForReview() {
+  const errors = validateContactShipping(submitContact);
+  if (!submitAcks.deadline) errors.ackDeadline = 'Please acknowledge the deadline policy.';
+  if (Object.keys(errors).length) {
+    submitErrors = errors;
+    renderSubmitSection();
+    scrollToFirstError(document.getElementById('submitSection'));
+    return;
+  }
+  submitErrors = {};
+  submitting = true;
+  renderSubmitSection();
+
+  try {
+    const info = {
+      ..._project?.customer_info,
+      contact_name: submitContact.contactName,
+      contact_email: submitContact.contactEmail,
+      attn: submitContact.attn !== null && submitContact.attn !== undefined ? submitContact.attn : submitContact.contactName,
+      address_line1: submitContact.addressLine1,
+      address_line2: submitContact.addressLine2 || null,
+      city: submitContact.city,
+      state_province: submitContact.stateProvince,
+      postal_code: submitContact.postalCode,
+      country: submitContact.country,
+    };
+    await upsertCustomerInfo(S.projectId, info);
+    await submitProjectForReview(S.projectId);
+    _project = { ..._project, customer_info: info, status: 'submitted' };
+    S.projectStatus = 'submitted';
+
+    sendOrderConfirmation({
+      contactName: submitContact.contactName,
+      contactEmail: submitContact.contactEmail,
+      courseName: info.course_name || '',
+      eventName: info.event_name || S.projectName || '',
+      eventDate: info.event_date || '',
+      shipping: {
+        addressLine1: submitContact.addressLine1,
+        addressLine2: submitContact.addressLine2 || '',
+        city: submitContact.city,
+        stateProvince: submitContact.stateProvince,
+        postalCode: submitContact.postalCode,
+        country: submitContact.country,
+      },
+      projectId: S.projectId,
+    }).catch(err => console.warn('Order confirmation email failed', err));
+
+    window.location.href = `/submitted?project=${encodeURIComponent(S.projectId)}`;
+  } catch (err) {
+    console.error('Submit for review failed', err);
+    submitting = false;
+    submitErrors = { submit: 'We couldn’t finish submitting your project. Please try again — if this keeps happening, contact us directly so we can follow up.' };
+    renderSubmitSection();
+  }
+}
 
 function getVarFlag(v) {
   if (!v) return getFlag();
@@ -56,7 +190,7 @@ function renderVarList() {
   if (!el) return;
   el.innerHTML = '';
   const p = new URLSearchParams(window.location.search).get('project');
-  const editBase = `flags-variations.html${p ? '?project=' + encodeURIComponent(p) : ''}`;
+  const editBase = `flags-variations${p ? '?project=' + encodeURIComponent(p) : ''}`;
   const editIcon = `<i class="fa-solid fa-pen" aria-hidden="true"></i>`;
   const pdfIcon = `<i class="fa-solid fa-file-pdf" aria-hidden="true"></i>`;
 
@@ -81,7 +215,7 @@ function renderVarList() {
       </div>
       <div class="var-card-actions">
         <span class="var-status-tile ${status.cls}">${status.label}</span>
-        <a href="${editHref}" class="btn sm var-card-edit" title="Edit variation">${editIcon}</a>
+        ${isLockedForCustomer ? '' : `<a href="${editHref}" class="btn sm var-card-edit" title="Edit variation">${editIcon}</a>`}
         <button class="btn sm var-card-pdf" title="Download PDF" onclick="event.stopPropagation();downloadVariationPdf(${i})">${pdfIcon}</button>
       </div>`;
     el.appendChild(card);
@@ -95,7 +229,7 @@ function renderVarList() {
 
 function setupGallery() {
   if (S.shareToken) {
-    const url = `${window.location.origin}/review.html?token=${S.shareToken}`;
+    const url = `${window.location.origin}/review?token=${S.shareToken}`;
     const input = document.getElementById('shareLinkInput');
     if (input) input.value = url;
   }
@@ -460,7 +594,7 @@ window.openShareModal = async function () {
   if (status) status.textContent = 'Generating link…';
   try {
     if (!S.shareToken) S.shareToken = await generateShareToken(S.projectId);
-    const url = `${window.location.origin}/review.html?token=${S.shareToken}`;
+    const url = `${window.location.origin}/review?token=${S.shareToken}`;
     document.getElementById('shareLinkInput').value = url;
     if (status) status.textContent = '';
     const emailInput = document.getElementById('shareEmailInput');
@@ -570,29 +704,37 @@ window.sendPrintSheetEmail = async function () {
 
 // ── Init ──────────────────────────────────────────────────
 
-renderSidebar(document.getElementById('sidebar'), {
-  projectType: 'Tournament Flags',
-  activeStep: 3,
-  customerSection: true,
-  projectId: new URLSearchParams(window.location.search).get('project'),
-  steps: [
-    {
-      id: 'navDesign', label: 'Design', desc: 'Style, colors & logos',
-      onClick: () => {
-        const p = new URLSearchParams(window.location.search).get('project');
-        window.location.href = 'flags.html' + (p ? '?project=' + p : '');
+// Sidebar renders once we know whether the viewer is locked out of the
+// editor (see isLockedForCustomer above) - unlike the other flags pages,
+// that isn't known until the project itself has loaded, so this waits
+// rather than rendering an initially-clickable nav that would immediately
+// bounce a locked customer back here.
+function renderGallerySidebar() {
+  const p = new URLSearchParams(window.location.search).get('project');
+  renderSidebar(document.getElementById('sidebar'), {
+    projectType: 'Tournament Flags',
+    activeStep: 3,
+    customerSection: true,
+    projectId: p,
+    steps: [
+      {
+        id: 'navDesign', label: 'Design', desc: 'Style, colors & logos',
+        ...(isLockedForCustomer ? {} : { onClick: () => { window.location.href = 'flags' + (p ? '?project=' + p : ''); } }),
       },
-    },
-    {
-      id: 'navVariations', label: 'Variations', desc: 'Build combinations',
-      onClick: () => {
-        const p = new URLSearchParams(window.location.search).get('project');
-        if (p) window.location.href = 'flags-variations.html?project=' + p;
+      {
+        id: 'navVariations', label: 'Variations', desc: 'Build combinations',
+        ...(isLockedForCustomer ? {} : { onClick: () => { if (p) window.location.href = 'flags-variations?project=' + p; } }),
       },
-    },
-    { id: 'navGallery', label: 'Gallery', desc: 'Review & export' },
-  ],
-});
+      { id: 'navGallery', label: 'Gallery', desc: 'Review & export' },
+    ],
+  });
+  if (isLockedForCustomer) {
+    ['navDesign', 'navVariations'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.cssText += 'opacity:.45;cursor:default';
+    });
+  }
+}
 
 const _urlProject = new URLSearchParams(window.location.search).get('project');
 if (!_urlProject) { window.location.href = '/'; }
@@ -600,15 +742,32 @@ if (!_urlProject) { window.location.href = '/'; }
 await loadAllFlags(FLAGS);
 
 try {
-  const [project, logos, flagCfg] = await Promise.all([
+  const [project, logos, flagCfg, holeCfg] = await Promise.all([
     loadProject(_urlProject),
     loadLogosForProject(_urlProject),
     loadFlagConfig(_urlProject).catch(() => null),
+    loadHoleSignConfig(_urlProject).catch(() => null),
   ]);
+  _project = project;
   S.projectId = project.id;
   S.projectName = project.name || '';
   S.shareToken  = project.share_token || null;
+  S.projectStatus = project.status;
+  S.hasHoleSignConfig = !!holeCfg;
   S.library = logos;
+
+  const ci = project.customer_info || {};
+  submitContact = {
+    contactName: ci.contact_name || '',
+    contactEmail: ci.contact_email || '',
+    attn: ci.attn ?? null,
+    country: ci.country || 'US',
+    addressLine1: ci.address_line1 || '',
+    addressLine2: ci.address_line2 || '',
+    city: ci.city || '',
+    stateProvince: ci.state_province || '',
+    postalCode: ci.postal_code || '',
+  };
   await preloadLogoAspects(S.library);
   if (flagCfg) {
     S.flagId = flagCfg.flag_id;
@@ -630,12 +789,16 @@ try {
   }
   setSidebarProjectName(S.projectName, S.projectId);
 
-  isStaffOrAdmin(session).then(canEmail => {
-    const section = document.getElementById('emailPrintSheetSection');
-    if (section) section.style.display = canEmail ? '' : 'none';
-  });
+  const isAdmin = await isStaffOrAdmin(session);
+  document.getElementById('emailPrintSheetSection').style.display = isAdmin ? '' : 'none';
+  isLockedForCustomer = !isAdmin && !['draft', 'needs_changes'].includes(S.projectStatus);
+  renderGallerySidebar();
+  if (isLockedForCustomer) {
+    document.getElementById('backToVariationsBtn').style.display = 'none';
+  }
 
   setupGallery();
+  renderSubmitSection();
 } catch (err) {
   console.error('Could not load project', err);
 }

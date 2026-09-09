@@ -1,16 +1,15 @@
-import { HS, UI, getEffectiveState, getEffectiveVariation } from './state.js';
+import { HS, UI, getEffectiveState, getEffectiveVariation, isVarCustomized, mergeBanner } from './state.js';
 import { goStep, updateSidebar } from './app.js';
-import { cloneTemplateLogos, loadCustomTemplates } from './design.js';
+import { cloneTemplateLogos, layoutPreviewState, loadCustomTemplates, templatePreviewState } from './design.js';
 import { saveDraftInternal } from './draft.js';
-import { applyFillToVariation, hideHsToolbar, prepareLogo, removeBgFromLogo } from './logo-utils.js';
-import { HS_TEMPLATES } from '../hole-sign-data.js';
+import { addLogoLayer, hideHsToolbar, removeBgFromLogo } from './logo-utils.js';
+import { HS_DEFAULT_TEMPLATES, HS_TEMPLATES, bannerDockSpecsFor } from '../hole-sign-data.js';
 import { logoThumbHtml } from '../media-utils.js';
 import { renderLogoTray } from '../logo-tray.js';
 import { renderVariationList } from '../variation-list.js';
 import { escXml, renderHoleSignInto } from '../hole-sign-render.js';
 import { deleteLogo, uploadLogo, saveHsOneOffs } from '../supabase.js';
 import { applyHsZoom, initHsVarCanvas, renderVariationPreview } from './var-canvas.js';
-import { fitSidePanel } from '../canvas-panel.js';
 import { renderEditor } from './var-editor.js';
 import { openDefaultsPanel } from './defaults.js';
 
@@ -19,40 +18,43 @@ import { openDefaultsPanel } from './defaults.js';
 export function renderStep2() {
   const panel = document.getElementById('panel-2');
   panel.innerHTML = `
-    <div class="p1-header">
-      <div>
-        <div class="ptitle">Variations</div>
-        <div class="psub">Upload sponsor logos and build one variation per sponsor. <strong>Each sign is printed front and back</strong> with the same design.</div>
+    <div class="hs-design-layout">
+      <div class="hs-logo-rail">
+        <div class="hs-rail-title">Logos</div>
+        <div class="hs-logo-rail-items" id="hsLibStrip"></div>
       </div>
-      <div class="p1-header-actions">
-        <button class="btn sm" onclick="tryGoStep(1)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Design</button>
-        <button class="btn primary" onclick="goStep(3)">Gallery & export <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
-        <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
+      <div class="hs-design-preview-col">
+        <div class="var-canvas-panel hs-canvas-bare" id="hsCanvasPanel"></div>
       </div>
-    </div>
-    <div class="var-page-body">
-      <div class="var-strip-wrap">
-        <div class="var-strip-label">Logo library</div>
-        <div class="var-strip" id="hsLibStrip"></div>
-      </div>
-      <div class="s4layout">
-        <div class="var-canvas-panel" id="hsCanvasPanel"></div>
-        <div class="var-list-panel" id="hsVarListPanel">
-          <div class="var-list-header">
-            <div class="var-list-title">Variations</div>
-            <div class="add-var-wrap" id="addVarWrap">
-              <button class="add-var-trigger" onclick="toggleAddVarMenu(event)">+ Add ▾</button>
-              <button class="add-var-upload-btn" title="Upload custom design" onclick="document.getElementById('hsCustomArtboardFile').click()">
-                <i class="fa-solid fa-circle-arrow-up" aria-hidden="true"></i>
-              </button>
-              <div class="add-var-dropdown" id="addVarDropdown">
-                <button class="add-var-opt" onclick="addEmptyHsVar();closeAddVarMenu()">New variation</button>
-                <button class="add-var-opt" onclick="openDefaultsPanel();closeAddVarMenu()">Default sign</button>
-              </div>
-              <input type="file" id="hsCustomArtboardFile" accept="image/*,.pdf,.ai,.eps" multiple style="display:none">
-            </div>
+      <div class="hs-design-controls">
+        <div class="p1-header hs-panel-header">
+          <div>
+            <div class="ptitle">Variations</div>
+            <div class="psub">Upload sponsor logos and build one variation per sponsor. <strong>Each sign is printed front and back</strong> with the same design.</div>
           </div>
-          <div class="var-list" id="hsVarList"></div>
+          <div class="p1-header-actions">
+            <button class="btn primary" onclick="goStep(3)">Gallery & export <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+            <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
+          </div>
+        </div>
+        <div class="hs-design-controls-body">
+          <div class="hs-stack-section">
+            <div class="var-list-header">
+              <div class="var-list-title">Variations</div>
+              <div class="add-var-wrap" id="addVarWrap">
+                <button class="add-var-trigger" onclick="toggleAddVarMenu(event)">+ Add ▾</button>
+                <button class="add-var-upload-btn" title="Upload custom design" onclick="document.getElementById('hsCustomArtboardFile').click()">
+                  <i class="fa-solid fa-circle-arrow-up" aria-hidden="true"></i>
+                </button>
+                <div class="add-var-dropdown" id="addVarDropdown">
+                  <button class="add-var-opt" onclick="addEmptyHsVar();closeAddVarMenu()">New variation</button>
+                  <button class="add-var-opt" onclick="openDefaultsPanel();closeAddVarMenu()">Default sign</button>
+                </div>
+                <input type="file" id="hsCustomArtboardFile" accept="image/*,.pdf,.ai,.eps" multiple style="display:none">
+              </div>
+            </div>
+            <div class="var-list" id="hsVarList"></div>
+          </div>
         </div>
       </div>
     </div>`;
@@ -60,7 +62,6 @@ export function renderStep2() {
   document.getElementById('hsCustomArtboardFile').addEventListener('change', handleHsArtboardUpload);
   initHsVarCanvas(document.getElementById('hsCanvasPanel'));
   applyHsZoom(UI.hsZoom);
-  fitSidePanel('hsVarListPanel');
 
   buildLibStrip();
   renderVarList();
@@ -110,7 +111,7 @@ async function uploadArtboardVariation(file) {
     name: file.name.replace(/\.[^.]+$/, ''),
     artboardSrc: null,
     loading: true,
-    logoId: null, logoSrc: null,
+    logos: [],
   };
   HS.variations.push(newVar);
   HS.activeVarId = varId;
@@ -139,7 +140,6 @@ export function buildLibStrip() {
     fileInputId: 'hsLogoFile',
     accept: 'image/*,.pdf,.ai,.eps',
     onUpload: handleHsLogoUpload,
-    onItemClick: logo => addVariationForLogo(logo),
     onDragStart: logo => { UI.hsDragLogoId = logo.id; },
     onDragEnd: () => { UI.hsDragLogoId = null; },
     onDelete: logo => deleteHsLibLogo(logo),
@@ -150,11 +150,13 @@ export function buildLibStrip() {
       if (origIdx >= 0) HS.library.splice(origIdx, 1, newLogo);
       else HS.library.push(newLogo);
       HS.variations.forEach(vv => {
-        if (vv.logoId === logo.id) {
-          vv.logoId = newLogo.id;
-          vv.logoSrc = newLogo.src;
-          delete vv.logoSrcTight; delete vv.logoAspect; delete vv.logoArtworkBounds;
-        }
+        (vv.logos || []).forEach(layer => {
+          if (layer.logoId === logo.id) {
+            layer.logoId = newLogo.id;
+            layer.logoSrc = newLogo.src;
+            delete layer.logoSrcTight; delete layer.logoAspect; delete layer.logoArtworkBounds;
+          }
+        });
       });
       buildLibStrip();
       renderVarList();
@@ -165,13 +167,7 @@ export function buildLibStrip() {
 export async function deleteHsLibLogo(logo) {
   if (!confirm(`Delete logo "${logo.name}"? Variations using it will lose their logo.`)) return;
   HS.variations.forEach(v => {
-    if (v.logoId === logo.id) {
-      v.logoId = null;
-      v.logoSrc = null;
-      v.logoSrcTight = undefined;
-      v.logoAspect = undefined;
-      v.logoArtworkBounds = undefined;
-    }
+    v.logos = (v.logos || []).filter(layer => layer.logoId !== logo.id);
   });
   HS.library = HS.library.filter(l => l.id !== logo.id);
   buildLibStrip();
@@ -185,17 +181,46 @@ export async function deleteHsLibLogo(logo) {
 }
 
 async function handleHsLogoUpload(files) {
-  for (const file of files) {
-    try {
-      const logo = await uploadLogo(HS.projectId, file);
-      HS.library.push(logo);
-      addVariationForLogo(logo);
+  showHsCanvasUploadSpinner();
+  try {
+    for (const file of files) {
+      // Optimistic placeholder — shown immediately (as a spinner tile, see
+      // logo-tray.js) so the tray doesn't sit idle for the whole upload,
+      // then swapped in-place for the real logo once it lands.
+      const tempId = 'tmp-' + crypto.randomUUID();
+      HS.library.push({ id: tempId, name: file.name.replace(/\.[^.]+$/, ''), uploading: true });
       buildLibStrip();
-      renderVarList();
-    } catch (err) {
-      console.error('Logo upload failed', err);
+      try {
+        const logo = await uploadLogo(HS.projectId, file);
+        const idx = HS.library.findIndex(l => l.id === tempId);
+        if (idx !== -1) HS.library.splice(idx, 1, logo);
+        else HS.library.push(logo);
+        addVariationForLogo(logo);
+        buildLibStrip();
+        renderVarList();
+      } catch (err) {
+        console.error('Logo upload failed', err);
+        HS.library = HS.library.filter(l => l.id !== tempId);
+        buildLibStrip();
+      }
     }
+  } finally {
+    hideHsCanvasUploadSpinner();
   }
+}
+
+function showHsCanvasUploadSpinner() {
+  const panel = document.getElementById('hsCanvasPanel');
+  if (!panel || document.getElementById('hsCanvasUploadOverlay')) return;
+  const el = document.createElement('div');
+  el.id = 'hsCanvasUploadOverlay';
+  el.className = 'hs-canvas-upload-overlay';
+  el.innerHTML = '<div class="hs-upload-spinner"></div>';
+  panel.appendChild(el);
+}
+
+function hideHsCanvasUploadSpinner() {
+  document.getElementById('hsCanvasUploadOverlay')?.remove();
 }
 
 export function addVariationForLogo(logo) {
@@ -203,18 +228,18 @@ export function addVariationForLogo(logo) {
     id: crypto.randomUUID(),
     name: logo.name,
     templateId: HS.templateStyle,
-    logoId: logo.id,
-    logoSrc: logo.src,
-    logoData: { x: 50, y: 50, w: 90 },
+    logos: [],
   };
   HS.variations.push(variation);
   updateSidebar();
   selectVariation(variation.id);
-  prepareLogo(variation, logo.src).then(() => {
-    applyFillToVariation(variation);
+  const p = addLogoLayer(variation, logo); // synchronously pushes the loading layer
+  renderVarList();
+  renderVariationPreview();
+  p.then(() => {
     renderVarList();
     if (HS.activeVarId === variation.id) renderVariationPreview();
-  }).catch(() => {});
+  }).catch(() => renderVarList());
 }
 
 export function selectVariation(id) {
@@ -242,30 +267,35 @@ export function renderVarTmplRow() {
 
   const customs = loadCustomTemplates();
   const activeLayoutId = v.templateId || HS.templateStyle;
-  const activeCustomId = v.template?.sourceId || null;
+  const activeSourceKind = v.template?.sourceKind || null;
+  const activeSourceId   = v.template?.sourceId || null;
 
   let triggerLabel;
-  if (activeCustomId) {
-    const c = customs.find(t => t.id === activeCustomId);
+  if (activeSourceKind === 'custom') {
+    const c = customs.find(t => t.id === activeSourceId);
     triggerLabel = c ? c.name : 'Custom template';
+  } else if (activeSourceKind === 'default') {
+    const d = HS_DEFAULT_TEMPLATES.find(t => t.id === activeSourceId);
+    triggerLabel = d ? d.name : 'Starter template';
   } else {
     triggerLabel = (HS_TEMPLATES.find(t => t.id === activeLayoutId) || HS_TEMPLATES[0]).name;
   }
 
-  const builtInItems = HS_TEMPLATES.map(t => `
-    <div class="hs-var-tmpl-opt${!activeCustomId && activeLayoutId === t.id ? ' active' : ''}"
-      onclick="setVarTemplate('${t.id}')">
-      <span>${escXml(t.name)}</span>
-      ${!activeCustomId && activeLayoutId === t.id ? '<span><i class="fa-solid fa-check" aria-hidden="true"></i></span>' : ''}
-    </div>`).join('');
+  // A tile shows the template's own default look — including this
+  // variation's real logo/sponsor text composited in — not a generic
+  // placeholder, so picking one is a genuine visual comparison.
+  const tile = (thumbId, key, name, active) => `
+    <div class="hs-var-tmpl-gtile${active ? ' active' : ''}" onclick="setVarTemplate('${key}')">
+      <div class="hs-var-tmpl-gthumb" id="${thumbId}"></div>
+      <div class="hs-var-tmpl-gname">${escXml(name)}</div>
+    </div>`;
 
-  const customItems = customs.length
-    ? customs.map(t => `
-        <div class="hs-var-tmpl-opt${activeCustomId === t.id ? ' active' : ''}"
-          onclick="setVarTemplate('custom:${t.id}')">
-          <span>${escXml(t.name)}</span>
-          ${activeCustomId === t.id ? '<span><i class="fa-solid fa-check" aria-hidden="true"></i></span>' : ''}
-        </div>`).join('')
+  const layoutTiles = HS_TEMPLATES.map(t =>
+    tile('hs-vgal-l-' + t.id, t.id, t.name, !activeSourceKind && activeLayoutId === t.id)).join('');
+  const starterTiles = HS_DEFAULT_TEMPLATES.map(t =>
+    tile('hs-vgal-d-' + t.id, 'default:' + t.id, t.name, activeSourceKind === 'default' && activeSourceId === t.id)).join('');
+  const customTiles = customs.length
+    ? customs.map(t => tile('hs-vgal-c-' + t.id, 'custom:' + t.id, t.name, activeSourceKind === 'custom' && activeSourceId === t.id)).join('')
     : '<div class="hs-var-tmpl-opt-empty">No saved templates yet</div>';
 
   row.innerHTML = `
@@ -274,12 +304,15 @@ export function renderVarTmplRow() {
       <button class="hs-var-tmpl-trigger" onclick="toggleVarTmplMenu(event)">
         <span>${escXml(triggerLabel)}</span><span class="caret">▾</span>
       </button>
-      <div class="hs-var-tmpl-menu" id="hsVarTmplMenu" style="display:none">
+      <div class="hs-var-tmpl-menu hs-var-tmpl-gallery-menu" id="hsVarTmplMenu" style="display:none">
         <div class="hs-var-tmpl-group-label">Layouts</div>
-        ${builtInItems}
+        <div class="hs-var-tmpl-gallery">${layoutTiles}</div>
+        <div class="hs-var-tmpl-sep"></div>
+        <div class="hs-var-tmpl-group-label">Starter templates</div>
+        <div class="hs-var-tmpl-gallery">${starterTiles}</div>
         <div class="hs-var-tmpl-sep"></div>
         <div class="hs-var-tmpl-group-label">My templates</div>
-        ${customItems}
+        <div class="hs-var-tmpl-gallery">${customTiles}</div>
         ${(v.template || (v.templateId && v.templateId !== HS.templateStyle)) ? `
           <div class="hs-var-tmpl-sep"></div>
           <div class="hs-var-tmpl-opt" onclick="setVarTemplate('__default__')">
@@ -287,6 +320,49 @@ export function renderVarTmplRow() {
           </div>` : ''}
       </div>
     </div>`;
+
+  const eVar = getEffectiveVariation(v);
+  HS_TEMPLATES.forEach(t => {
+    const el = document.getElementById('hs-vgal-l-' + t.id);
+    if (el) renderHoleSignInto(el, layoutPreviewState(t.id), eVar);
+  });
+  HS_DEFAULT_TEMPLATES.forEach(t => {
+    const el = document.getElementById('hs-vgal-d-' + t.id);
+    if (el) renderHoleSignInto(el, templatePreviewState(t), eVar);
+  });
+  customs.forEach(t => {
+    const el = document.getElementById('hs-vgal-c-' + t.id);
+    if (el) renderHoleSignInto(el, templatePreviewState(t), eVar);
+  });
+}
+
+// Positions the gallery dropdown as a viewport-fixed panel, anchored to the
+// trigger button's live screen position, rather than document-flow
+// (position:absolute under the trigger). The trigger sits at the bottom of
+// the Variations canvas, inside an app shell with no page-level scroll — an
+// absolute panel opening downward from there renders past the bottom of the
+// viewport with no way to scroll down and reach it. Opens upward instead
+// when there isn't enough room below, and always clamps its own height to
+// whatever space is actually available so its own scrollbar (see
+// .hs-var-tmpl-menu's overflow-y) can reach every tile.
+function positionVarTmplMenu(menu, trigger) {
+  const r = trigger.getBoundingClientRect();
+  const gap = 4;
+  const margin = 12;
+  const width = Math.max(r.width, 280);
+  const spaceBelow = window.innerHeight - r.bottom - gap - margin;
+  const spaceAbove = r.top - gap - margin;
+  const openUp = spaceBelow < 200 && spaceAbove > spaceBelow;
+  menu.style.maxHeight = Math.max(160, Math.min(480, openUp ? spaceAbove : spaceBelow)) + 'px';
+  menu.style.width = width + 'px';
+  menu.style.left = Math.max(margin, Math.min(r.left, window.innerWidth - width - margin)) + 'px';
+  if (openUp) {
+    menu.style.top = 'auto';
+    menu.style.bottom = (window.innerHeight - r.top + gap) + 'px';
+  } else {
+    menu.style.bottom = 'auto';
+    menu.style.top = (r.bottom + gap) + 'px';
+  }
 }
 
 window.toggleVarTmplMenu = function (e) {
@@ -294,17 +370,44 @@ window.toggleVarTmplMenu = function (e) {
   const menu = document.getElementById('hsVarTmplMenu');
   if (!menu) return;
   const open = menu.style.display !== 'none';
-  menu.style.display = open ? 'none' : 'block';
-  if (!open) {
-    const close = ev => {
-      if (!ev.target.closest('.hs-var-tmpl-picker')) {
-        menu.style.display = 'none';
-        document.removeEventListener('click', close);
-      }
-    };
-    setTimeout(() => document.addEventListener('click', close), 0);
-  }
+  if (open) { menu.style.display = 'none'; return; }
+  positionVarTmplMenu(menu, e.currentTarget);
+  menu.style.display = 'block';
+  const close = ev => {
+    if (!ev.target.closest('.hs-var-tmpl-picker')) {
+      menu.style.display = 'none';
+      document.removeEventListener('click', close);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', close), 0);
 };
+
+// Snapshots a template's full look onto `v.template` — background, text
+// bands, both banners, and template logos — and reseeds `v.textLayers`'
+// docked caption layers to the template's own defaults (dropping the old
+// template's docked layers, keeping any free-floating ones this variation
+// already had). Mirrors setDraftTmpl's custom/default branches
+// (var-editor.js) so picking a template from the Variations-page quick
+// picker and from the full per-variation editor produce identical results.
+function applyVarTemplateSpec(v, tmpl, sourceKind) {
+  v.template = {
+    sourceKind,
+    sourceId:      tmpl.id,
+    templateStyle: tmpl.templateStyle,
+    background:    { ...tmpl.background },
+    topText:       { ...tmpl.topText },
+    bottomText:    { ...tmpl.bottomText },
+    bannerTop:     mergeBanner(tmpl.bannerTop    || (tmpl.banner?.position !== 'bottom' ? tmpl.banner : null)),
+    bannerBottom:  mergeBanner(tmpl.bannerBottom || (tmpl.banner?.position === 'bottom' ? tmpl.banner : null)),
+    templateLogos: cloneTemplateLogos(tmpl.templateLogos),
+  };
+  v.templateId = tmpl.templateStyle;
+  const base = (v.textLayers !== undefined ? v.textLayers : (HS.textLayers || [])).filter(l => !l.dock).map(l => ({ ...l }));
+  bannerDockSpecsFor(tmpl).forEach(spec => {
+    base.push({ ...spec, id: 'tl-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7) });
+  });
+  v.textLayers = base;
+}
 
 window.setVarTemplate = function (key) {
   const v = HS.variations.find(v => v.id === HS.activeVarId);
@@ -312,19 +415,15 @@ window.setVarTemplate = function (key) {
   if (key === '__default__') {
     delete v.template;
     delete v.templateId;
+    delete v.textLayers;
   } else if (key.startsWith('custom:')) {
-    const id = key.slice(7);
-    const tmpl = loadCustomTemplates().find(t => t.id === id);
+    const tmpl = loadCustomTemplates().find(t => t.id === key.slice(7));
     if (!tmpl) return;
-    v.template = {
-      sourceId:      tmpl.id,
-      templateStyle: tmpl.templateStyle,
-      background:    { ...tmpl.background },
-      topText:       { ...tmpl.topText },
-      bottomText:    { ...tmpl.bottomText },
-      templateLogos: cloneTemplateLogos(tmpl.templateLogos),
-    };
-    v.templateId = tmpl.templateStyle;
+    applyVarTemplateSpec(v, tmpl, 'custom');
+  } else if (key.startsWith('default:')) {
+    const tmpl = HS_DEFAULT_TEMPLATES.find(t => t.id === key.slice(8));
+    if (!tmpl) return;
+    applyVarTemplateSpec(v, tmpl, 'default');
   } else {
     delete v.template;
     v.templateId = key;
@@ -363,7 +462,10 @@ function renderHsVarThumb(el, v) {
 export function renderVarList() {
   const list = document.getElementById('hsVarList');
   if (!list) return;
-  if (HS.editingVarId && HS.editingDraft) {
+  // UI.hsFullEditorOpen (not just editingVarId/editingDraft) — a quick-edit
+  // draft (see beginQuickEdit in var-editor.js) sets those same fields but
+  // must not pop the full side-panel editor open.
+  if (UI.hsFullEditorOpen && HS.editingVarId && HS.editingDraft) {
     renderEditor();
     return;
   }
@@ -385,9 +487,9 @@ export function renderVarList() {
     thumbClass: 'hs-vthumb',
     renderThumb: renderHsVarThumb,
     feedbackFor: v => HS.feedback?.find(f => f.variation_id === v.id),
-    badgeFor: v => (v.template || v.sponsorText)
+    badgeFor: v => isVarCustomized(v)
       ? '<span class="var-custom-badge">Customized</span>' : '',
-    onSelect: v => selectVariation(v.id),
+    onSelect: v => window.startEditVar(v.id),
     onRename: (v, name) => { v.name = name; },
     onEdit: v => window.startEditVar(v.id),
     onDuplicate: v => dupHsVar(v.id),
@@ -409,22 +511,21 @@ export function renderVarList() {
       const logo = UI.hsDragLogoId ? HS.library.find(l => l.id === UI.hsDragLogoId) : null;
       if (!logo) return;
       UI.hsDragLogoId = null;
-      v.logoId = logo.id;
-      v.logoSrc = logo.src;
-      delete v.logoSrcTight; delete v.sponsorText;
-      if (!v.logoData) v.logoData = { x: 50, y: 50, w: 90 };
       // Update only this card's thumbnail — avoids tearing down all event listeners
       const refreshThumb = () => {
         const thumb = document.getElementById('hsvt-' + v.id);
         if (thumb) renderHsVarThumb(thumb, v);
       };
+      // Always ADDS a new layer (see addLogoLayer in logo-utils.js) — dropping
+      // onto a variation's card never overwrites a logo it already has.
+      const isFullGraphic = getEffectiveState(v).templateStyle === 'hole-sign-full-graphic';
+      const p = addLogoLayer(v, logo, { isFullGraphic });
       refreshThumb();
       if (HS.activeVarId === v.id) renderVariationPreview();
-      prepareLogo(v, logo.src).then(() => {
-        applyFillToVariation(v);
+      p.then(() => {
         refreshThumb();
         if (HS.activeVarId === v.id) renderVariationPreview();
-      }).catch(() => {});
+      }).catch(() => refreshThumb());
     });
   });
 
@@ -461,7 +562,9 @@ function dupHsVar(id) {
   const src = HS.variations.find(v => v.id === id);
   if (!src) return;
   const nv = { ...src, id: crypto.randomUUID(), name: src.name + ' copy' };
-  if (src.logoData) nv.logoData = { ...src.logoData };
+  // Fresh id per layer, or a duplicated variation would share its source's
+  // layer object references — dragging one copy's logo would move the other's.
+  nv.logos = (src.logos || []).map(layer => ({ ...layer, id: crypto.randomUUID() }));
   if (src.template) {
     nv.template = {
       ...src.template,
@@ -504,9 +607,7 @@ export function createEmptyVariation(name) {
     id: crypto.randomUUID(),
     name,
     templateId: HS.templateStyle,
-    logoId: null,
-    logoSrc: null,
-    logoData: { x: 50, y: 50, w: 90 },
+    logos: [],
   };
 }
 

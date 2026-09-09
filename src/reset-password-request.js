@@ -1,5 +1,13 @@
 import './icons.js';
-import { resetPasswordForEmail } from './supabase.js';
+import { resetPasswordForEmail, getSession } from './supabase.js';
+import { initHeaderForSession, injectHeaderCta } from './auth.js';
+
+const session = await getSession();
+if (session) {
+  await initHeaderForSession(session);
+} else {
+  injectHeaderCta('Log in', '/login');
+}
 
 const form  = document.getElementById('resetRequestForm');
 const btn   = document.getElementById('resetRequestBtn');

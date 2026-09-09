@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { wrapEmailHtml } from '../_shared/email-layout.ts';
 
 // SENDGRID_API_KEY_2 is the current key; SENDGRID_API_KEY is kept as a fallback
 // during rotation and can be removed once SENDGRID_API_KEY_2 is confirmed live everywhere.
@@ -56,28 +57,16 @@ serve(async (req) => {
     const name = projectName;
     const subject = `${name} - Flag Order`;
     const filename = `${name.replace(/[^a-zA-Z0-9_\- ]/g, '_')}-flags.zip`;
-    const html = `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;margin:0;padding:32px 16px;">
-<div style="max-width:520px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;">
-  <div style="background:#1A4A2E;padding:24px 32px;">
-    <p style="margin:0;color:rgba(255,255,255,.6);font-size:12px;text-transform:uppercase;letter-spacing:.08em;">GolfStatus Design Studio</p>
-    <h1 style="margin:4px 0 0;color:#fff;font-size:20px;font-weight:600;">${name}</h1>
-  </div>
-  <div style="padding:32px;">
-    <p style="margin:0 0 20px;color:#333;font-size:15px;line-height:1.6;">
+    const html = wrapEmailHtml({
+      title: name,
+      bodyHtml: `<p style="margin:0 0 20px;color:#333;font-size:15px;line-height:1.6;">
       Hey Tom,<br><br>
       Here's the flag order for <strong>${name}</strong>. The zip file is attached and includes everything you should need to know about the order.
     </p>
     <p style="margin:24px 0 0;color:#999;font-size:13px;line-height:1.6;">
       Let me know if you have any questions!
-    </p>
-  </div>
-</div>
-</body>
-</html>`;
+    </p>`,
+    });
 
     const text = `Hey Tom,\n\nHere's the flag order for ${name}. The zip file is attached and includes everything you should need to know about the order.\n\nLet me know if you have any questions!`;
 

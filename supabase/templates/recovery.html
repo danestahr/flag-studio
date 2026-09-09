@@ -1,0 +1,58 @@
+<!--
+  GSDS-branded "Reset password" template for Supabase Auth.
+
+  This file is NOT wired up automatically — Supabase Auth email templates for a
+  hosted project are dashboard settings, not something `supabase config push`
+  should touch here (this repo's config.toml has a dev-only site_url of
+  127.0.0.1, and pushing it would overwrite the real production Site URL).
+
+  To apply: Supabase Dashboard → Authentication → Emails → Templates →
+  "Reset password" → paste this HTML in, and set the subject to
+  "Reset your GolfStatus Design Studio password".
+
+  Styled to match the shared layout in supabase/functions/_shared/email-layout.ts
+  used by the SendGrid transactional emails (send-order-confirmation, etc.) —
+  this system can't share that code directly (GoTrue compiles each dashboard
+  field as its own standalone Go template), so the two are kept visually in
+  sync by hand.
+
+  Available variables: {{ .ConfirmationURL }} {{ .SiteURL }} {{ .Email }} {{ .Token }} {{ .TokenHash }}
+-->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+</head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;margin:0;padding:32px 16px;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);">
+    <div style="background:#1a1a2e;padding:28px 32px;">
+      <h1 style="color:#fff;margin:0;font-size:22px;font-weight:600;">Reset your password</h1>
+      <p style="color:#aaa;margin:6px 0 0;font-size:14px;">GolfStatus Design Studio</p>
+    </div>
+    <div style="padding:32px;">
+      <p style="margin:0 0 24px;color:#333;font-size:15px;line-height:1.6;">
+        We received a request to reset the password for your Design Studio account (<strong>{{ .Email }}</strong>). Click below to choose a new one.
+      </p>
+
+      <div style="text-align:center;margin:32px 0;">
+        <a href="{{ .ConfirmationURL }}" style="display:inline-block;background:#1a1a2e;color:#fff;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:15px;font-weight:600;">
+          Reset password &rarr;
+        </a>
+      </div>
+
+      <p style="margin:0 0 8px;color:#888;font-size:13px;">Or copy this link:</p>
+      <p style="margin:0;font-size:12px;color:#aaa;word-break:break-all;background:#f8f8f8;padding:10px 12px;border-radius:6px;font-family:monospace;">{{ .ConfirmationURL }}</p>
+
+      <p style="margin:24px 0 0;color:#999;font-size:13px;line-height:1.6;">
+        This link will expire soon. If you didn't request a password reset, you can safely ignore this email — your password won't change.
+      </p>
+    </div>
+    <div style="padding:20px 32px;background:#fafafa;border-top:1px solid #f0f0f0;">
+      <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio &middot; design@gsds.space<br>8545 S 78th St, Lincoln, NE 68516</p>
+    </div>
+  </div>
+</body>
+</html>

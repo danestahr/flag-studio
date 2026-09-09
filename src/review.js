@@ -3,7 +3,7 @@ import { S } from './state.js';
 import { FLAGS } from './data.js';
 import { getFlag, renderInto, preloadLogoAspects } from './render.js';
 import { loadAllFlags } from './svgLoader.js';
-import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase, createReviewClient } from './supabase.js';
+import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase, createReviewClient, clientApproveProof, clientRejectProof } from './supabase.js';
 import { renderHoleSignInto } from './hole-sign-render.js';
 import { esc } from './dom-utils.js';
 
@@ -551,14 +551,8 @@ window.submitReview = async function () {
     if (flagItems.length) await submitFeedback(projectId, 'flags', flagItems, reviewClient);
     if (hsItems.length)   await submitFeedback(projectId, 'hole-signs', hsItems, reviewClient);
 
-    root.innerHTML = `
-      <div class="rv-root">
-        <div class="rv-success">
-          <span class="rv-success-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>
-          <div class="rv-success-title">Feedback submitted</div>
-          <div class="rv-success-sub">The design team will review your feedback and be in touch shortly.</div>
-        </div>
-      </div>`;
+    const outcome = await syncProofStatus(reviewerName);
+    renderSuccessScreen(outcome);
   } catch (err) {
     console.error('Submit failed:', err);
     btn.innerHTML = 'Submit feedback <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>';
@@ -566,5 +560,55 @@ window.submitReview = async function () {
     alert('Something went wrong submitting your feedback. Please try again.');
   }
 };
+
+// Whole-project status transition, layered on top of the per-variation
+// variation_feedback writes above. Only fires once every variation (flags +
+// hole signs) has a decision recorded in localFeedback/localHsFeedback -
+// firing on a partial submission would unlock editing before the reviewer
+// finishes the rest. Safe to call on a stray double-submit: the RPC's own
+// "wrong source status" precondition error is expected once the project has
+// already moved past proof_sent, and is swallowed as a no-op rather than
+// surfaced to the reviewer.
+async function syncProofStatus(reviewerName) {
+  const flagStatuses = S.variations.map(v => localFeedback[v.id]?.status).filter(Boolean);
+  const hsStatuses = hsVariations.map(v => localHsFeedback[v.id]?.status).filter(Boolean);
+  const total = S.variations.length + hsVariations.length;
+  const allDecided = total > 0 && (flagStatuses.length + hsStatuses.length) === total;
+  if (!allDecided) return 'partial';
+
+  const allApprovedNow = flagStatuses.every(s => s === 'approved') && hsStatuses.every(s => s === 'approved');
+  try {
+    if (allApprovedNow) {
+      await clientApproveProof(projectId, reviewClient);
+      return 'approved';
+    }
+    const note = `${reviewerName ? reviewerName + ': ' : ''}See per-variation feedback for details.`;
+    await clientRejectProof(projectId, note, reviewClient);
+    return 'rejected';
+  } catch (err) {
+    const msg = err?.message || '';
+    if (msg.includes('cannot approve proof from status') || msg.includes('cannot reject proof from status')) {
+      console.warn('Proof status already transitioned, skipping:', msg);
+    } else {
+      console.error('Failed to update proof status:', err);
+    }
+    return allApprovedNow ? 'approved' : 'rejected';
+  }
+}
+
+function renderSuccessScreen(outcome) {
+  const goToProjectCta = outcome === 'rejected'
+    ? `<a class="rv-submit-btn" style="display:inline-flex;margin-top:1.5rem;text-decoration:none" href="/login?next=${encodeURIComponent('/project?project=' + projectId)}">Go to your project</a>`
+    : '';
+  root.innerHTML = `
+    <div class="rv-root">
+      <div class="rv-success">
+        <span class="rv-success-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>
+        <div class="rv-success-title">Feedback submitted</div>
+        <div class="rv-success-sub">The design team will review your feedback and be in touch shortly.</div>
+        ${goToProjectCta}
+      </div>
+    </div>`;
+}
 
 init();
