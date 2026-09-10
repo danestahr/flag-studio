@@ -7,7 +7,7 @@ import {
   loadOrderIntake, uploadPrintSheet, sendPrintSheetReady,
   upsertCustomerInfo, submitProjectForReview, sendOrderConfirmation,
 } from '../supabase.js';
-import { PDFDocument, PDFName, PDFOperator, PDFString, rgb } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFNumber, PDFOperator, PDFString } from 'pdf-lib';
 import JSZip from 'jszip';
 import { dl, esc, slug, sanitizeFilename, mapWithConcurrency, scrollToFirstError } from '../dom-utils.js';
 import { pngBlobToPdfBlob } from '../pdf-utils.js';
@@ -432,12 +432,15 @@ export async function rasterizeSignNative(variation) {
   });
 }
 
-// Build two Optional Content Group "groups" on the document:
-//   ▸ Thru   — contains one OCG named "Green Box" per cell (cut lines)
-//   ▸ Art    — contains one OCG named "Sign" per cell (sign artwork)
-// Each group head is itself an OCG so toggling the parent in Acrobat hides
-// everything beneath it; individual items can also be toggled one at a time.
-export function createLayerGroups(doc, page, cellCount) {
+// Build two Optional Content Groups on the document — "Thru" (cut lines) and
+// "Art" (sign artwork). Individual cut-line rectangles and sign groups are
+// deliberately left as plain, anonymous content inside these two — not
+// wrapped in their own per-cell OCGs — so a design tool's Layers panel shows
+// them by their own recognized type (a plain rectangle path as "<Rectangle>",
+// a Form XObject as "<Group>") directly under "Thru"/"Art", matching how the
+// printer's reference template is organized, rather than as a third
+// named-sublayer level we invented.
+export function createLayerGroups(doc, page) {
   const context = doc.context;
 
   // Intent [View, Design] tells design tools (Illustrator, Inkscape) that the
@@ -453,21 +456,11 @@ export function createLayerGroups(doc, page, cellCount) {
   const thruHead = ocg('Thru');
   const artHead  = ocg('Art');
 
-  const greenBoxes = [];
-  const signs = [];
-  for (let i = 0; i < cellCount; i++) {
-    greenBoxes.push(ocg('Green Box'));
-    signs.push(ocg('Sign'));
-  }
-
-  const allOcgs = [thruHead, artHead, ...greenBoxes, ...signs];
+  const allOcgs = [thruHead, artHead];
   const oc = context.obj({
     OCGs: allOcgs,
     D: {
-      Order: [
-        [thruHead, ...greenBoxes],
-        [artHead, ...signs],
-      ],
+      Order: allOcgs,
       ON: allOcgs,
       OFF: [],
       BaseState: PDFName.of('ON'),
@@ -488,20 +481,41 @@ export function createLayerGroups(doc, page, cellCount) {
   const names = {
     thru: 'OCThru',
     art: 'OCArt',
-    greenBox: [],
-    sign: [],
+    thruColorSpace: createThruSpotColorSpace(doc, page),
   };
   properties.set(PDFName.of(names.thru), thruHead);
   properties.set(PDFName.of(names.art),  artHead);
-  for (let i = 0; i < cellCount; i++) {
-    const gb = `OCGB${i}`;
-    const sg = `OCSG${i}`;
-    names.greenBox.push(gb);
-    names.sign.push(sg);
-    properties.set(PDFName.of(gb), greenBoxes[i]);
-    properties.set(PDFName.of(sg), signs[i]);
-  }
   return names;
+}
+
+// Registers a true named spot color ("Thru", the printer's cut-line ink) as
+// a PDF Separation color space, rather than approximating it as process
+// CMYK — the printer's RIP reads the colorant name itself to route the cut
+// line to their machines, so it must survive as a named ink, not a 4-color
+// mix. Tint 1.0 maps to CMYK 30/0/100/0 (their spec); 0 maps to no ink.
+function createThruSpotColorSpace(doc, page) {
+  const context = doc.context;
+  const tintTransform = context.register(context.obj({
+    FunctionType: 2,
+    Domain: [0, 1],
+    C0: [0, 0, 0, 0],
+    C1: [0.3, 0, 1, 0],
+    N: 1,
+  }));
+  const separation = context.register(
+    context.obj(['Separation', 'Thru', 'DeviceCMYK', tintTransform]),
+  );
+
+  const resources = page.node.Resources();
+  const ColorSpaceKey = PDFName.of('ColorSpace');
+  let colorSpaces = resources.get(ColorSpaceKey);
+  if (!colorSpaces) {
+    colorSpaces = context.obj({});
+    resources.set(ColorSpaceKey, colorSpaces);
+  }
+  const alias = 'CSThru';
+  colorSpaces.set(PDFName.of(alias), separation);
+  return alias;
 }
 
 export function beginLayer(page, layerName) {
@@ -509,6 +523,87 @@ export function beginLayer(page, layerName) {
 }
 export function endLayer(page) {
   page.pushOperators(PDFOperator.of('EMC'));
+}
+
+// Strokes a rectangle using the named "Thru" spot color instead of
+// pdf-lib's drawRectangle (which only knows DeviceRGB/Gray/CMYK, not
+// Separation) — CS/SCN select the spot color space and full tint directly
+// via raw content-stream operators, same technique as beginLayer/endLayer.
+function strokeSpotRectangle(page, colorSpaceAlias, x, y, width, height, lineWidthPt) {
+  page.pushOperators(
+    PDFOperator.of('q'),
+    PDFOperator.of('w', [PDFNumber.of(lineWidthPt)]),
+    PDFOperator.of('CS', [PDFName.of(colorSpaceAlias)]),
+    PDFOperator.of('SCN', [PDFNumber.of(1)]),
+    PDFOperator.of('re', [PDFNumber.of(x), PDFNumber.of(y), PDFNumber.of(width), PDFNumber.of(height)]),
+    PDFOperator.of('S'),
+    PDFOperator.of('Q'),
+  );
+}
+
+// Wraps one embedded sign image in its own Form XObject so it reads as a
+// "<Group>" (rather than a bare "<Image>") in a design tool's Layers panel —
+// matching the printer's reference template, where each sign sits inside its
+// own group. BBox must cover the drawn area or the form's content is clipped
+// away entirely (PDF forms clip to their BBox).
+function buildSignForm(doc, image, width, height) {
+  const context = doc.context;
+  const resources = context.obj({ XObject: { Im0: image.ref } });
+  const ops = [
+    PDFOperator.of('q'),
+    PDFOperator.of('cm', [PDFNumber.of(width), PDFNumber.of(0), PDFNumber.of(0), PDFNumber.of(height), PDFNumber.of(0), PDFNumber.of(0)]),
+    PDFOperator.of('Do', [PDFName.of('Im0')]),
+    PDFOperator.of('Q'),
+  ];
+  const form = context.formXObject(ops, { BBox: [0, 0, width, height], Resources: resources });
+  return context.register(form);
+}
+
+// Wraps a row's worth of sign-group Form XObjects (see buildSignForm) in one
+// outer Form XObject, so a full row of signs groups together as a single
+// "<Group>" in the Layers panel — the printer's reference template groups
+// one row of signs together this way, same idea one level up.
+function buildRowForm(doc, signFormRefs, cellWpt, cellHpt) {
+  const context = doc.context;
+  const xobjectDict = {};
+  const ops = [];
+  signFormRefs.forEach((ref, i) => {
+    const alias = `S${i}`;
+    xobjectDict[alias] = ref;
+    ops.push(
+      PDFOperator.of('q'),
+      PDFOperator.of('cm', [PDFNumber.of(1), PDFNumber.of(0), PDFNumber.of(0), PDFNumber.of(1), PDFNumber.of(i * cellWpt), PDFNumber.of(0)]),
+      PDFOperator.of('Do', [PDFName.of(alias)]),
+      PDFOperator.of('Q'),
+    );
+  });
+  const width = cellWpt * signFormRefs.length;
+  const resources = context.obj({ XObject: xobjectDict });
+  const form = context.formXObject(ops, { BBox: [0, 0, width, cellHpt], Resources: resources });
+  return context.register(form);
+}
+
+// Wires an already-registered Form XObject ref into a page's own resources
+// under a fresh alias, then draws it translated to (x, y) — the counterpart
+// to buildSignForm/buildRowForm, which only build the reusable object itself.
+let _formAliasCounter = 0;
+function drawFormOnPage(doc, page, formRef, x, y) {
+  const context = doc.context;
+  const resources = page.node.Resources();
+  const XObjectKey = PDFName.of('XObject');
+  let xobjects = resources.get(XObjectKey);
+  if (!xobjects) {
+    xobjects = context.obj({});
+    resources.set(XObjectKey, xobjects);
+  }
+  const alias = `Row${_formAliasCounter++}`;
+  xobjects.set(PDFName.of(alias), formRef);
+  page.pushOperators(
+    PDFOperator.of('q'),
+    PDFOperator.of('cm', [PDFNumber.of(1), PDFNumber.of(0), PDFNumber.of(0), PDFNumber.of(1), PDFNumber.of(x), PDFNumber.of(y)]),
+    PDFOperator.of('Do', [PDFName.of(alias)]),
+    PDFOperator.of('Q'),
+  );
 }
 
 // How many unique variations to rasterize/rotate at once during print
@@ -566,23 +661,38 @@ export async function buildHsPrintZip(setStatus = () => {}) {
     const cellHpt = ptH / HS_PRINT.rows;
 
     // Cut-line guide: 21" tall × 18" wide rectangle centered in each cell.
-    // 1px (1pt) stroke, color #bfd730. Marks where the finished sign is trimmed
+    // 1px (1pt) stroke, the printer's named "Thru" spot color (see
+    // createThruSpotColorSpace). Marks where the finished sign is trimmed
     // from the print sheet; the surrounding area is bleed.
     const CUT_W_PT = 18 * 72;
     const CUT_H_PT = 21 * 72;
     const CUT_X_OFF = (cellWpt - CUT_W_PT) / 2;
     const CUT_Y_OFF = (cellHpt - CUT_H_PT) / 2;
-    const CUT_COLOR = rgb(0xbf / 255, 0xd7 / 255, 0x30 / 255);
-    const drawCutLine = (page, col, row) => {
+    const drawCutLine = (page, colorSpaceAlias, col, row) => {
       const x = col * cellWpt + CUT_X_OFF;
       const y = (HS_PRINT.rows - 1 - row) * cellHpt + CUT_Y_OFF;
-      page.drawRectangle({
-        x, y,
-        width: CUT_W_PT,
-        height: CUT_H_PT,
-        borderColor: CUT_COLOR,
-        borderWidth: 1,
-      });
+      strokeSpotRectangle(page, colorSpaceAlias, x, y, CUT_W_PT, CUT_H_PT, 1);
+    };
+
+    // Builds one row's worth of sign artwork as a row-of-groups Form XObject
+    // (see buildSignForm/buildRowForm) and places it on the page — matching
+    // the printer's reference template, where each row of signs groups
+    // together under "Art" instead of sitting as flat per-cell images.
+    const drawArtRow = async (doc, page, rowCells, imageCache, y) => {
+      if (!rowCells.length) return;
+      const signRefs = [];
+      for (const cell of rowCells) {
+        const sig = sigOf(cell);
+        let image = imageCache.get(sig);
+        if (!image) {
+          const pngBytes = await (rotated.get(sig)).arrayBuffer();
+          image = await doc.embedPng(pngBytes);
+          imageCache.set(sig, image);
+        }
+        signRefs.push(buildSignForm(doc, image, cellWpt, cellHpt));
+      }
+      const rowFormRef = buildRowForm(doc, signRefs, cellWpt, cellHpt);
+      drawFormOnPage(doc, page, rowFormRef, 0, y);
     };
 
     const zip = new JSZip();
@@ -595,33 +705,25 @@ export async function buildHsPrintZip(setStatus = () => {}) {
       // Front PDF
       const frontDoc = await PDFDocument.create();
       const frontPage = frontDoc.addPage([ptW, ptH]);
-      const frontNames = createLayerGroups(frontDoc, frontPage, cells.length);
+      const frontNames = createLayerGroups(frontDoc, frontPage);
 
-      // Place sign images inside the "Art" group (each named "Sign")
-      for (let i = 0; i < cells.length; i++) {
-        const col = i % HS_PRINT.cols;
-        const row = Math.floor(i / HS_PRINT.cols);
-        const sig = sigOf(cells[i]);
-        const pngBytes = await (rotated.get(sig)).arrayBuffer();
-        const img = await frontDoc.embedPng(pngBytes);
-        const x = col * cellWpt;
+      // Place sign images inside the "Art" group, one row-of-groups at a time
+      beginLayer(frontPage, frontNames.art);
+      const frontImageCache = new Map();
+      for (let row = 0; row < HS_PRINT.rows; row++) {
+        const rowCells = cells.slice(row * HS_PRINT.cols, row * HS_PRINT.cols + HS_PRINT.cols);
         const y = (HS_PRINT.rows - 1 - row) * cellHpt;
-        beginLayer(frontPage, frontNames.art);
-        beginLayer(frontPage, frontNames.sign[i]);
-        frontPage.drawImage(img, { x, y, width: cellWpt, height: cellHpt });
-        endLayer(frontPage);
-        endLayer(frontPage);
+        await drawArtRow(frontDoc, frontPage, rowCells, frontImageCache, y);
       }
-      // Draw cut lines inside the "Thru" group (each named "Green Box")
+      endLayer(frontPage);
+      // Draw cut lines inside the "Thru" group — flat, one rectangle per cell
+      beginLayer(frontPage, frontNames.thru);
       for (let i = 0; i < cells.length; i++) {
         const col = i % HS_PRINT.cols;
         const row = Math.floor(i / HS_PRINT.cols);
-        beginLayer(frontPage, frontNames.thru);
-        beginLayer(frontPage, frontNames.greenBox[i]);
-        drawCutLine(frontPage, col, row);
-        endLayer(frontPage);
-        endLayer(frontPage);
+        drawCutLine(frontPage, frontNames.thruColorSpace, col, row);
       }
+      endLayer(frontPage);
       const frontBytes = await frontDoc.save();
 
       // Back PDF — same per-sign orientation, but rows are swapped so that when
@@ -629,33 +731,25 @@ export async function buildHsPrintZip(setStatus = () => {}) {
       // back aligns with its corresponding cell on the front through the paper.
       const backDoc = await PDFDocument.create();
       const backPage = backDoc.addPage([ptW, ptH]);
-      const backNames = createLayerGroups(backDoc, backPage, cells.length);
+      const backNames = createLayerGroups(backDoc, backPage);
 
-      for (let i = 0; i < cells.length; i++) {
-        const col = i % HS_PRINT.cols;
-        const row = Math.floor(i / HS_PRINT.cols);
-        const sig = sigOf(cells[i]);
-        const pngBytes = await (rotated.get(sig)).arrayBuffer();
-        const img = await backDoc.embedPng(pngBytes);
+      beginLayer(backPage, backNames.art);
+      const backImageCache = new Map();
+      for (let row = 0; row < HS_PRINT.rows; row++) {
+        const rowCells = cells.slice(row * HS_PRINT.cols, row * HS_PRINT.cols + HS_PRINT.cols);
         const swappedRow = HS_PRINT.rows - 1 - row;
-        const x = col * cellWpt;
         const y = (HS_PRINT.rows - 1 - swappedRow) * cellHpt;
-        beginLayer(backPage, backNames.art);
-        beginLayer(backPage, backNames.sign[i]);
-        backPage.drawImage(img, { x, y, width: cellWpt, height: cellHpt });
-        endLayer(backPage);
-        endLayer(backPage);
+        await drawArtRow(backDoc, backPage, rowCells, backImageCache, y);
       }
+      endLayer(backPage);
+      beginLayer(backPage, backNames.thru);
       for (let i = 0; i < cells.length; i++) {
         const col = i % HS_PRINT.cols;
         const row = Math.floor(i / HS_PRINT.cols);
         const swappedRow = HS_PRINT.rows - 1 - row;
-        beginLayer(backPage, backNames.thru);
-        beginLayer(backPage, backNames.greenBox[i]);
-        drawCutLine(backPage, col, swappedRow);
-        endLayer(backPage);
-        endLayer(backPage);
+        drawCutLine(backPage, backNames.thruColorSpace, col, swappedRow);
       }
+      endLayer(backPage);
       const backBytes = await backDoc.save();
 
       const num = String(s + 1).padStart(2, '0');
