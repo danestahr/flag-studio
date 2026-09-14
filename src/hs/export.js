@@ -384,14 +384,20 @@ window.exportHsAllPNG = async function () {
 
 // ── Print sheets ───────────────────────────────────────────
 // Layout: 5 cols × 2 rows = 10 signs per sheet, each rotated 90° CW.
-// Sheet: 91.25" × 42.5" @ 300 DPI. Sign native: 6375×5475 (= 21.25" × 18.25").
-// After rotation, cell is 5475×6375 (= 18.25" × 21.25"), matching the grid.
+// Sheet: 94.25" × 44" @ 300 DPI, with a 0.5" gap between every bleed box
+// and a 0.5" margin around the outer edge (Fred's template — the extra
+// room is deliberate wiggle room for imprecise material cuts). Sign
+// native: 6375×5475 (= 21.25" × 18.25" incl. bleed; 21" × 18" trim).
+// After rotation, each cell is 5475×6375 (= 18.25" × 21.25"), matching
+// the grid: 5 × 18.25 + 4 × 0.5 + 2 × 0.5 = 94.25; 2 × 21.25 + 1 × 0.5 + 2 × 0.5 = 44.
 const HS_PRINT = {
   cols: 5,
   rows: 2,
   perSheet: 10,
-  sheetWIn: 91.25,
-  sheetHIn: 42.5,
+  sheetWIn: 94.25,
+  sheetHIn: 44,
+  gapIn: 0.5,
+  marginIn: 0.5,
   dpi: 300,
 };
 
@@ -562,22 +568,25 @@ function buildSignForm(doc, image, width, height) {
 // Wraps a row's worth of sign-group Form XObjects (see buildSignForm) in one
 // outer Form XObject, so a full row of signs groups together as a single
 // "<Group>" in the Layers panel — the printer's reference template groups
-// one row of signs together this way, same idea one level up.
-function buildRowForm(doc, signFormRefs, cellWpt, cellHpt) {
+// one row of signs together this way, same idea one level up. Cells are
+// spaced by cellWpt + gapPt so the 0.5" gap between bleed boxes carries
+// through to the grouped row, not just the ungapped per-row math.
+function buildRowForm(doc, signFormRefs, cellWpt, cellHpt, gapPt) {
   const context = doc.context;
   const xobjectDict = {};
   const ops = [];
+  const strideWpt = cellWpt + gapPt;
   signFormRefs.forEach((ref, i) => {
     const alias = `S${i}`;
     xobjectDict[alias] = ref;
     ops.push(
       PDFOperator.of('q'),
-      PDFOperator.of('cm', [PDFNumber.of(1), PDFNumber.of(0), PDFNumber.of(0), PDFNumber.of(1), PDFNumber.of(i * cellWpt), PDFNumber.of(0)]),
+      PDFOperator.of('cm', [PDFNumber.of(1), PDFNumber.of(0), PDFNumber.of(0), PDFNumber.of(1), PDFNumber.of(i * strideWpt), PDFNumber.of(0)]),
       PDFOperator.of('Do', [PDFName.of(alias)]),
       PDFOperator.of('Q'),
     );
   });
-  const width = cellWpt * signFormRefs.length;
+  const width = strideWpt * signFormRefs.length - gapPt;
   const resources = context.obj({ XObject: xobjectDict });
   const form = context.formXObject(ops, { BBox: [0, 0, width, cellHpt], Resources: resources });
   return context.register(form);
@@ -654,11 +663,17 @@ export async function buildHsPrintZip(setStatus = () => {}) {
     const rotatedPngs = await mapWithConcurrency(uniqueVariations, HS_EXPORT_CONCURRENCY, (v, i) => buildRotatedSignPng(nativeCanvases[i]));
     const rotated = new Map(uniqueVariations.map((v, i) => [sigOf(v), rotatedPngs[i]]));
 
-    // Build the PDFs.
+    // Build the PDFs. Each cell is a fixed bleed-box size (the rotated sign
+    // dimensions), not derived from the sheet size — the sheet is the cells
+    // plus a 0.5" gap between them and a 0.5" outer margin (see HS_PRINT).
     const ptW = HS_PRINT.sheetWIn * 72;
     const ptH = HS_PRINT.sheetHIn * 72;
-    const cellWpt = ptW / HS_PRINT.cols;
-    const cellHpt = ptH / HS_PRINT.rows;
+    const cellWpt = (HS_H / HS_PRINT.dpi) * 72;
+    const cellHpt = (HS_W / HS_PRINT.dpi) * 72;
+    const gapPt = HS_PRINT.gapIn * 72;
+    const marginPt = HS_PRINT.marginIn * 72;
+    const cellX = col => marginPt + col * (cellWpt + gapPt);
+    const cellY = row => marginPt + (HS_PRINT.rows - 1 - row) * (cellHpt + gapPt);
 
     // Cut-line guide: 21" tall × 18" wide rectangle centered in each cell.
     // 1px (1pt) stroke, the printer's named "Thru" spot color (see
@@ -669,8 +684,8 @@ export async function buildHsPrintZip(setStatus = () => {}) {
     const CUT_X_OFF = (cellWpt - CUT_W_PT) / 2;
     const CUT_Y_OFF = (cellHpt - CUT_H_PT) / 2;
     const drawCutLine = (page, colorSpaceAlias, col, row) => {
-      const x = col * cellWpt + CUT_X_OFF;
-      const y = (HS_PRINT.rows - 1 - row) * cellHpt + CUT_Y_OFF;
+      const x = cellX(col) + CUT_X_OFF;
+      const y = cellY(row) + CUT_Y_OFF;
       strokeSpotRectangle(page, colorSpaceAlias, x, y, CUT_W_PT, CUT_H_PT, 1);
     };
 
@@ -691,8 +706,8 @@ export async function buildHsPrintZip(setStatus = () => {}) {
         }
         signRefs.push(buildSignForm(doc, image, cellWpt, cellHpt));
       }
-      const rowFormRef = buildRowForm(doc, signRefs, cellWpt, cellHpt);
-      drawFormOnPage(doc, page, rowFormRef, 0, y);
+      const rowFormRef = buildRowForm(doc, signRefs, cellWpt, cellHpt, gapPt);
+      drawFormOnPage(doc, page, rowFormRef, marginPt, y);
     };
 
     const zip = new JSZip();
@@ -712,8 +727,7 @@ export async function buildHsPrintZip(setStatus = () => {}) {
       const frontImageCache = new Map();
       for (let row = 0; row < HS_PRINT.rows; row++) {
         const rowCells = cells.slice(row * HS_PRINT.cols, row * HS_PRINT.cols + HS_PRINT.cols);
-        const y = (HS_PRINT.rows - 1 - row) * cellHpt;
-        await drawArtRow(frontDoc, frontPage, rowCells, frontImageCache, y);
+        await drawArtRow(frontDoc, frontPage, rowCells, frontImageCache, cellY(row));
       }
       endLayer(frontPage);
       // Draw cut lines inside the "Thru" group — flat, one rectangle per cell
@@ -738,8 +752,7 @@ export async function buildHsPrintZip(setStatus = () => {}) {
       for (let row = 0; row < HS_PRINT.rows; row++) {
         const rowCells = cells.slice(row * HS_PRINT.cols, row * HS_PRINT.cols + HS_PRINT.cols);
         const swappedRow = HS_PRINT.rows - 1 - row;
-        const y = (HS_PRINT.rows - 1 - swappedRow) * cellHpt;
-        await drawArtRow(backDoc, backPage, rowCells, backImageCache, y);
+        await drawArtRow(backDoc, backPage, rowCells, backImageCache, cellY(swappedRow));
       }
       endLayer(backPage);
       beginLayer(backPage, backNames.thru);
