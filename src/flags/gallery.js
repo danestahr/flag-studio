@@ -394,12 +394,17 @@ async function rasterizeForPrint(logos, face, mirrorX = false, textLayers = [], 
   const flag = flagOverride || getFlag();
   const [, , vbW, vbH] = (flag?.viewBox || '0 0 7519 4669').split(' ').map(Number);
   const svg = makeSvg(logos, vbW, vbH, face, mirrorX, flagOverride, colorsOverride, textLayers, gsTagOpts);
-  // GolfStatus Tag lives inside Bleed. Move it to Bleed's parent first so it
-  // survives the removal and stays in the same transform context (back-face
-  // mirror, color-zone coordinate space, z-order below logos).
+  // GolfStatus Tag lives inside Bleed only in the raw template — makeSvg's
+  // extractFrameElements (render.js) already relocates it into frameHolder
+  // (which carries the back-face mirror transform) before returning here.
+  // Only rescue it from Bleed if it's still actually nested there, or this
+  // hoists it out of frameHolder onto the un-transformed <svg> root instead,
+  // stripping the ambient mirror while its own local counter-mirror (set by
+  // showGsTagVariant) stays applied — flipping it on the back face.
   const gsTagEl = svg.querySelector('[id="GolfStatus Tag"]');
-  if (gsTagEl?.parentNode?.parentNode) {
-    gsTagEl.parentNode.parentNode.appendChild(gsTagEl);
+  const gsTagBleedAncestor = gsTagEl?.closest('[id="Bleed"], [id="bleed"]');
+  if (gsTagBleedAncestor?.parentNode) {
+    gsTagBleedAncestor.parentNode.appendChild(gsTagEl);
   }
   for (const gid of ['Bleed', 'bleed']) {
     const el = svg.querySelector(`[id="${gid}"]`);
