@@ -552,6 +552,7 @@ async function buildPrintZip(setStatus = () => {}) {
       name: v.name, frontPng, backPng,
       flagName: getVarFlag(v)?.name || v.flagId || S.flagId || '',
       colorEntries: getVarColorEntries(v),
+      qty: v.qty ?? 1,
     };
   });
   const summaryPdf = await buildOrderSummaryPdf({
