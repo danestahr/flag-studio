@@ -310,7 +310,7 @@ export async function buildOrderSummaryPdf({
     const xOff   = M + Math.round((W - M * 2 - pairW) / 2);
 
     for (let i = 0; i < variationImages.length; i++) {
-      const { name, frontPng, backPng, flagName, colorEntries: varColors } = variationImages[i];
+      const { name, frontPng, backPng, flagName, colorEntries: varColors, qty } = variationImages[i];
       const colorRows = colorSwatchRowCount(varColors, reg, 9);
       const colorLineH = colorRows ? colorRows * 9 * 1.5 + 2 : 0; // matches drawColorSwatchLine's own consumption
       const blockH = 14 + colorLineH + 12 + imgH + 14; // name/style + colours + face labels + image + margin
@@ -323,8 +323,14 @@ export async function buildOrderSummaryPdf({
         page.drawLine({ start: { x: M, y: y + 6 }, end: { x: W - M, y: y + 6 }, thickness: 0.5, color: LGRAY });
       }
 
-      // Variation name (left) + flag style (right), one line
-      page.drawText(name || `Variation ${i + 1}`, { x: M, y, size: 11, font: bold, color: BLACK });
+      // Variation name (left) + qty (next to name) + flag style (right), one line
+      const nameLabel = name || `Variation ${i + 1}`;
+      page.drawText(nameLabel, { x: M, y, size: 11, font: bold, color: BLACK });
+      if (qty != null) {
+        const qtyLabel = `Qty: ${qty}`;
+        const nameW = bold.widthOfTextAtSize(nameLabel, 11);
+        page.drawText(qtyLabel, { x: M + nameW + 10, y, size: 9, font: reg, color: GRAY });
+      }
       if (flagName) {
         const label = `Style: ${flagName}`;
         const w = reg.widthOfTextAtSize(label, 9);
