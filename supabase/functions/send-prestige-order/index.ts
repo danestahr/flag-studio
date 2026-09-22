@@ -8,7 +8,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const FROM_EMAIL = 'design@gsds.space';
 const FROM_NAME = 'Design Studio';
-const TO_EMAIL = 'dane@danestahr.com';
+const TO_EMAIL = 'tom@prestigeflag.com';
 const TO_NAME = 'Tom';
 
 const CORS = {

@@ -277,32 +277,6 @@ export async function buildOrderSummaryPdf({
   drawRow(cursor, 'Shipping Address', addrParts, { labelFont: bold, valueFont: reg, size: 10 });
   cursor.moveY(-10);
 
-  // ── Design Details ───────────────────────────────────────
-  drawSectionHeader(cursor, 'Design Details', bold);
-
-  // Flag Template is shown per-variation below when variations are present —
-  // only fall back to a single project-level line when there's nothing to break out.
-  const designEntries = [
-    (!variationImages.length && templateName) ? ['Flag Template', templateName] : null,
-    ci.flag_setup          ? ['Setup',      ci.flag_setup === 'same' ? 'Same front & back' : 'Different front & back'] : null,
-    variationCount != null ? ['Variations', String(variationCount)] : null,
-    quantity != null       ? ['Signs',      String(quantity)] : null,
-    ci.flag_qty            ? ['Ordered Qty', String(ci.flag_qty)] : null,
-  ].filter(Boolean);
-  for (let i = 0; i < designEntries.length; i += 2) {
-    drawRowPair(cursor, [designEntries[i], designEntries[i + 1] || null], { labelFont: bold, valueFont: reg });
-  }
-  if (ci.design_notes) {
-    drawRow(cursor, 'Design Description', ci.design_notes, { labelFont: bold, valueFont: reg, size: 10 });
-  }
-  if (ci.front_design_notes) {
-    drawRow(cursor, 'Front Design Notes', ci.front_design_notes, { labelFont: bold, valueFont: reg, size: 10 });
-  }
-  if (ci.back_design_notes) {
-    drawRow(cursor, 'Back Design Notes', ci.back_design_notes, { labelFont: bold, valueFont: reg, size: 10 });
-  }
-  cursor.moveY(-10);
-
   // ── Colour Assignments ───────────────────────────────────
   // Only shown as a standalone section as a fallback — when variations exist,
   // each variation lists its own colours below instead.
