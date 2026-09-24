@@ -67,11 +67,13 @@ export function renderGallery() {
       </div>
     </div>
 `;
+  const hsGalleryCount = HS.variations.length;
+  const hsGalleryQty = HS.variations.reduce((sum, v) => sum + (parseInt(v.qty, 10) || 1), 0);
   document.getElementById('sidebarPanelHeader').innerHTML = `
     <div class="p1-header hs-panel-header">
       <div>
         <div class="ptitle">Review</div>
-        <div class="psub">Review all variations and export or share.</div>
+        <div class="p1-header-stats">${hsGalleryCount} variation${hsGalleryCount === 1 ? '' : 's'} &middot; ${hsGalleryQty} sign${hsGalleryQty === 1 ? '' : 's'} total</div>
       </div>
       <div class="p1-header-actions">
         <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>

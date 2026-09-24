@@ -348,6 +348,19 @@ function selectVariation(varId) {
   renderVarCanvas();
 }
 
+// Keeps the "N variations · M flags total" line under the Variations header
+// in sync — renderVarList() covers add/duplicate/delete/select, but the
+// per-row qty stepper (variation-list.js's commitQty) only calls its
+// onQtyChange callback, not renderVarList() itself, so that callback below
+// updates this line directly too.
+function updateVarSummary() {
+  const el = document.getElementById('varStatsLine');
+  if (!el) return;
+  const count = S.variations.length;
+  const qty = S.variations.reduce((sum, v) => sum + (parseInt(v.qty, 10) || 1), 0);
+  el.textContent = `${count} variation${count === 1 ? '' : 's'} · ${qty} flag${qty === 1 ? '' : 's'} total`;
+}
+
 function renderVarList() {
   renderVariationList(document.getElementById('varList'), S.variations, {
     activeId: S.activeVarId,
@@ -362,9 +375,10 @@ function renderVarList() {
     onEdit: v => openVarEdit(v.id),
     onDuplicate: v => dupVar(v.id),
     onDelete: v => delVar(v.id),
-    onQtyChange: (v, qty) => { v.qty = qty; markDirty(); },
+    onQtyChange: (v, qty) => { v.qty = qty; markDirty(); updateVarSummary(); },
     onViewEdits: v => window.openFlagEditRequests(v.id),
   });
+  updateVarSummary();
 }
 
 function refreshVarThumbs() {
@@ -1307,7 +1321,7 @@ document.getElementById('sidebarPanelHeader').innerHTML = `
   <div class="p1-header hs-panel-header">
     <div>
       <div class="ptitle">Variations</div>
-      <div class="psub">Select a variation, then drag logos into zones or use the buttons to add content.</div>
+      <div class="p1-header-stats" id="varStatsLine"></div>
     </div>
     <div class="p1-header-actions">
       <div id="logoLayoutRow" style="display:none">

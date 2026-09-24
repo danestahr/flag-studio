@@ -42,6 +42,7 @@ export function renderStep2() {
                 <input type="file" id="hsCustomArtboardFile" accept="image/*,.pdf,.ai,.eps" multiple style="display:none">
               </div>
             </div>
+            <div class="var-list-summary" id="hsVarListSummary"></div>
             <div class="var-list" id="hsVarList"></div>
           </div>
         </div>
@@ -51,7 +52,6 @@ export function renderStep2() {
     <div class="p1-header hs-panel-header">
       <div>
         <div class="ptitle">Hole Signs</div>
-        <div class="psub">Upload sponsor logos and build one variation per sponsor. <strong>Each sign is printed front and back</strong> with the same design.</div>
       </div>
       <div class="p1-header-actions">
         <button class="btn primary" onclick="goStep(3)">Review &amp; export <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
@@ -657,9 +657,23 @@ function renderHsVarThumb(el, v) {
   }
 }
 
+// Kept in sync from renderVarList() (add/duplicate/delete/select) and from
+// the per-row qty stepper's onQtyChange callback below, since that callback
+// doesn't itself trigger a full renderVarList() re-render. Counts
+// HS.variations only (not HS.defaults) - matches buildHsPrintSheets, the
+// only code path that actually determines what gets printed.
+function updateHsVarSummary() {
+  const el = document.getElementById('hsVarListSummary');
+  if (!el) return;
+  const count = HS.variations.length;
+  const qty = HS.variations.reduce((sum, v) => sum + (parseInt(v.qty, 10) || 1), 0);
+  el.textContent = `${count} variation${count === 1 ? '' : 's'} · ${qty} sign${qty === 1 ? '' : 's'} total`;
+}
+
 export function renderVarList() {
   const list = document.getElementById('hsVarList');
   if (!list) return;
+  updateHsVarSummary();
   // The edit-requests panel (openHsEditRequests) also renders into this same
   // container, in place of the card list — a background refresh (e.g. a
   // realtime feedback update while it's open) must not stomp it. Its own
@@ -697,7 +711,7 @@ export function renderVarList() {
     onEdit: v => window.startEditVar(v.id),
     onDuplicate: v => dupHsVar(v.id),
     onDelete: v => deleteHsVar(v.id),
-    onQtyChange: (v, qty) => { v.qty = qty; },
+    onQtyChange: (v, qty) => { v.qty = qty; updateHsVarSummary(); },
     onViewEdits: v => window.openHsEditRequests(v.id),
   });
 

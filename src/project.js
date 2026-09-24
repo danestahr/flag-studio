@@ -198,12 +198,12 @@ function renderToolCardStatus(t) {
   const stats = variationStats(t.productType, cfg);
   statusEl.innerHTML = `
     <div class="tool-card-group">
+      <div class="tool-card-stats">${stats.count} variation${stats.count === 1 ? '' : 's'} &middot; ${stats.qty} ${t.unit}${stats.qty === 1 ? '' : 's'} total</div>
       <div id="statusBlock-${t.productType}" class="status-block">
         <div class="status-block-label">Status</div>
         <div id="statusValue-${t.productType}" class="status-block-value"></div>
       </div>
       <div class="tool-steps-nav">${stepLinks}</div>
-      <div class="tool-card-stats">${stats.count} variation${stats.count === 1 ? '' : 's'} &middot; ${stats.qty} ${t.unit}${stats.qty === 1 ? '' : 's'} total</div>
     </div>
     ${isAdmin ? `
     <hr class="tool-card-divider" id="reviewLinkDividerTop-${t.productType}" style="display:none">

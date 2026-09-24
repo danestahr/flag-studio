@@ -333,11 +333,13 @@ function renderGallerySidebar() {
       { id: 'navGallery', label: 'Review', desc: 'Review & export' },
     ],
   });
+  const galleryVarCount = S.variations.length;
+  const galleryFlagQty = S.variations.reduce((sum, v) => sum + (parseInt(v.qty, 10) || 1), 0);
   document.getElementById('sidebarPanelHeader').innerHTML = `
     <div class="p1-header hs-panel-header">
       <div>
         <div class="ptitle">Review</div>
-        <div class="psub">Review all variations and export.</div>
+        <div class="p1-header-stats">${galleryVarCount} variation${galleryVarCount === 1 ? '' : 's'} &middot; ${galleryFlagQty} flag${galleryFlagQty === 1 ? '' : 's'} total</div>
       </div>
       <div class="p1-header-actions"></div>
     </div>`;

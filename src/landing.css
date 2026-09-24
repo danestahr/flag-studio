@@ -131,7 +131,7 @@ div.draft-card { cursor:pointer; }
 .status-block { border-radius:var(--r); padding:.85rem 1rem; }
 .status-block-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; opacity:.65; margin-bottom:3px; }
 .status-block-value { font-size:16px; font-weight:600; display:flex; align-items:center; gap:8px; }
-.status-block.status-draft, .status-block.status-submitted { background:var(--gray-50); color:var(--gray-600); }
+.status-block.status-draft, .status-block.status-submitted { background:var(--gray-100); color:var(--gray-600); }
 .status-block.status-proof_sent { background:rgba(230,180,30,.12); color:#a67c00; }
 .status-block.status-needs_changes { background:rgba(192,57,43,.12); color:#c0392b; }
 .status-block.status-approved { background:var(--accent-tint); color:var(--accent); }
