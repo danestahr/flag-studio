@@ -1,10 +1,11 @@
 import { HS, UI, defaultCaptionsEdited, mergeBanner } from './state.js';
+import { mergeLibraries } from '../state.js';
 import { renderStep1, updateStep1Preview, applyBuiltInDefaults, flushCustomTemplateForkSave } from './design.js';
-import { renderStep2, renderVarList } from './variations.js';
+import { renderStep2, renderVarList, updateHsEditRequestsBanner } from './variations.js';
 import { cropSvgToArtwork, migrateVariationLogos } from './logo-utils.js';
 import { saveDraftInternal } from './draft.js';
 import { emptyTemplateLogos, migrateBannerCaptions, HS_TEMPLATES, HS_DEFAULT_TEMPLATES } from '../hole-sign-data.js';
-import { getFeedback, loadFlagConfig, loadHoleSignConfig, loadLogosForProject, loadOrderIntake, loadProject, supabase } from '../supabase.js';
+import { getFeedback, loadHoleSignConfig, loadLogosForProject, listUserLogos, loadProject, supabase } from '../supabase.js';
 import { requireAuth } from '../auth.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 
@@ -20,20 +21,22 @@ export async function init() {
   HS.projectId = projectId;
 
   try {
-    const [project, hsCfg, logos, flagCfg] = await Promise.all([
-      loadProject(projectId),
+    const project = await loadProject(projectId);
+    const [hsCfg, logos, sharedLogos] = await Promise.all([
       loadHoleSignConfig(projectId),
       loadLogosForProject(projectId),
-      loadFlagConfig(projectId).catch(() => null),
+      listUserLogos(project.created_by),
     ]);
 
     HS.projectName = project.name || '';
-    HS.projectStatus = project.status;
-    HS.customerInfo = project.customer_info || {};
-    HS.hasFlagConfig = !!flagCfg;
-    HS.library = logos;
+    // This design's own status (hole_sign_config.status), not the whole
+    // project - flags on the same project can be at a different stage. A
+    // brand-new hsCfg (still null, nothing saved yet) is trivially editable.
+    HS.projectStatus = hsCfg?.status || 'draft';
+    HS.shareToken = project.share_token || null;
+    HS.library = mergeLibraries(logos, sharedLogos);
 
-    // Customers can only edit while draft/needs_changes - once the project
+    // Customers can only edit while draft/needs_changes - once this design
     // is submitted/under review/approved, Gallery & export stays viewable
     // but Design/Variations are off limits (see goStep()). Staff/admin are
     // never blocked. UI-convenience only - RLS is the real boundary.
@@ -42,12 +45,13 @@ export async function init() {
     renderSidebar(document.getElementById('sidebar'), {
       projectType: 'Hole Signs',
       activeStep: 1,
-      customerSection: true,
+      logosTile: true,
       projectId,
+      completedSteps: HS.projectStatus === 'sent_to_print' ? [3] : [],
       steps: [
         { id: 'navDesign', label: 'Templates', desc: 'Background & text', ...(UI.hsLocked ? {} : { onClick: () => window.goStep(1) }) },
-        { id: 'navVariations', label: 'Variations', desc: 'Sponsor logos', ...(UI.hsLocked ? {} : { onClick: () => window.goStep(2) }) },
-        { id: 'navGallery', label: 'Gallery & export', desc: 'Review & download', onClick: () => window.goStep(3) },
+        { id: 'navVariations', label: 'Hole Signs', desc: 'Sponsor logos', ...(UI.hsLocked ? {} : { onClick: () => window.goStep(2) }) },
+        { id: 'navGallery', label: 'Review', desc: 'Review & download', onClick: () => window.goStep(3) },
       ],
     });
     if (UI.hsLocked) {
@@ -56,19 +60,6 @@ export async function init() {
         if (el) el.style.cssText += 'opacity:.45;cursor:default';
       });
     }
-
-    const ci = HS.customerInfo;
-    UI.hsSubmitContact = {
-      contactName: ci.contact_name || '',
-      contactEmail: ci.contact_email || '',
-      attn: ci.attn ?? null,
-      country: ci.country || 'US',
-      addressLine1: ci.address_line1 || '',
-      addressLine2: ci.address_line2 || '',
-      city: ci.city || '',
-      stateProvince: ci.state_province || '',
-      postalCode: ci.postal_code || '',
-    };
 
     if (!hsCfg) {
       // Arrived from the public template gallery / event-info step with a
@@ -181,13 +172,15 @@ export async function init() {
     }
 
     setSidebarProjectName(HS.projectName, HS.projectId);
-    loadOrderIntake(projectId).then(intake => {
-      if (intake) renderCustomerSection(intake);
-    }).catch(() => {});
     const refreshFeedback = () => {
       getFeedback(projectId, 'hole-signs').then(fb => {
         HS.feedback = fb || [];
         renderVarList();
+        updateHsEditRequestsBanner();
+        // Gallery (step 3) paints its own copy of these badges and isn't
+        // repainted by renderVarList() above — if it's the visible panel,
+        // repaint it too so it doesn't sit stale until the user re-navigates.
+        if (_hsCurrentStep === 3) import('./export.js').then(({ renderGallery }) => renderGallery());
       }).catch(() => {});
     };
     refreshFeedback();
@@ -204,7 +197,10 @@ export async function init() {
   }
 
   updateSidebar();
-  goStep(UI.hsLocked ? 3 : 1);
+  // Deep-link support for project.html's numbered section-jump links
+  // (?panel=1|2|3) - falls back to Design like before when absent/invalid.
+  const requestedPanel = Number(new URLSearchParams(window.location.search).get('panel'));
+  goStep(UI.hsLocked ? 3 : ([1, 2, 3].includes(requestedPanel) ? requestedPanel : 1));
 }
 
 export function renderCustomerSection(intake) {
@@ -249,10 +245,12 @@ export function renderCustomerSection(intake) {
 
 // ── Nav ────────────────────────────────────────────────────
 let _hsMaxStep = 1;
+let _hsCurrentStep = 1;
 
 export function goStep(n) {
   if (UI.hsLocked && n !== 3) n = 3;
   _hsMaxStep = Math.max(_hsMaxStep, n);
+  _hsCurrentStep = n;
   flushCustomTemplateForkSave();
   if (HS.projectId && !UI.hsOnboarding && !UI.hsLocked) saveDraftInternal().catch(() => {});
 
@@ -260,7 +258,7 @@ export function goStep(n) {
   document.querySelectorAll('.step-item').forEach((s, i) => {
     s.classList.remove('active', 'done');
     if (i === n - 1) s.classList.add('active');
-    else if (i < n - 1) s.classList.add('done');
+    if (i < n - 1 || (s.id === 'navGallery' && HS.projectStatus === 'sent_to_print')) s.classList.add('done');
   });
   if (n === 1) { UI.hsMenu = null; UI.hsMenuAnimate = false; renderStep1(); }
   if (n === 2) renderStep2();

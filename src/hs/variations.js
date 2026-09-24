@@ -1,14 +1,17 @@
-import { HS, UI, getEffectiveState, getEffectiveVariation, isVarCustomized, mergeBanner } from './state.js';
+import { HS, UI, getEffectiveState, getEffectiveVariation, isVarCustomized, mergeBanner, findLogo } from './state.js';
+import { mergeLibraries } from '../state.js';
 import { goStep, updateSidebar } from './app.js';
 import { cloneTemplateLogos, layoutPreviewState, loadCustomTemplates, templatePreviewState } from './design.js';
 import { saveDraftInternal } from './draft.js';
 import { addLogoLayer, hideHsToolbar, removeBgFromLogo } from './logo-utils.js';
-import { HS_DEFAULT_TEMPLATES, HS_TEMPLATES, bannerDockSpecsFor } from '../hole-sign-data.js';
+import { HS_DEFAULT_TEMPLATES, HS_TEMPLATES, HS_W, HS_H, bannerDockSpecsFor } from '../hole-sign-data.js';
 import { logoThumbHtml } from '../media-utils.js';
 import { renderLogoTray } from '../logo-tray.js';
+import { renderLogosTileShell } from '../sidebar.js';
+import { renderEditRequestsPanel } from '../edit-requests-panel.js';
 import { renderVariationList } from '../variation-list.js';
 import { escXml, renderHoleSignInto } from '../hole-sign-render.js';
-import { deleteLogo, uploadLogo, saveHsOneOffs } from '../supabase.js';
+import { deleteLogo, uploadLogo, uploadUserLogo, deleteUserLogo, saveHsOneOffs, resolveFeedback, deleteFeedbackForVariation, adoptFeedbackLogo } from '../supabase.js';
 import { applyHsZoom, initHsVarCanvas, renderVariationPreview } from './var-canvas.js';
 import { renderEditor } from './var-editor.js';
 import { openDefaultsPanel } from './defaults.js';
@@ -19,27 +22,13 @@ export function renderStep2() {
   const panel = document.getElementById('panel-2');
   panel.innerHTML = `
     <div class="hs-design-layout">
-      <div class="hs-logo-rail">
-        <div class="hs-rail-title">Logos</div>
-        <div class="hs-logo-rail-items" id="hsLibStrip"></div>
-      </div>
       <div class="hs-design-preview-col">
         <div class="var-canvas-panel hs-canvas-bare" id="hsCanvasPanel"></div>
       </div>
       <div class="hs-design-controls">
-        <div class="p1-header hs-panel-header">
-          <div>
-            <div class="ptitle">Variations</div>
-            <div class="psub">Upload sponsor logos and build one variation per sponsor. <strong>Each sign is printed front and back</strong> with the same design.</div>
-          </div>
-          <div class="p1-header-actions">
-            <button class="btn primary" onclick="goStep(3)">Gallery & export <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
-            <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
-          </div>
-        </div>
         <div class="hs-design-controls-body">
           <div class="hs-stack-section">
-            <div class="var-list-header">
+            <div class="var-list-header" id="hsVarListHeader">
               <div class="var-list-title">Variations</div>
               <div class="add-var-wrap" id="addVarWrap">
                 <button class="add-var-trigger" onclick="toggleAddVarMenu(event)">+ Add ▾</button>
@@ -58,6 +47,18 @@ export function renderStep2() {
         </div>
       </div>
     </div>`;
+  document.getElementById('sidebarPanelHeader').innerHTML = `
+    <div class="p1-header hs-panel-header">
+      <div>
+        <div class="ptitle">Hole Signs</div>
+        <div class="psub">Upload sponsor logos and build one variation per sponsor. <strong>Each sign is printed front and back</strong> with the same design.</div>
+      </div>
+      <div class="p1-header-actions">
+        <button class="btn primary" onclick="goStep(3)">Review &amp; export <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+        <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
+      </div>
+    </div>`;
+  renderLogosTileShell('Logos', 'hsLibStrip');
 
   document.getElementById('hsCustomArtboardFile').addEventListener('change', handleHsArtboardUpload);
   initHsVarCanvas(document.getElementById('hsCanvasPanel'));
@@ -65,6 +66,7 @@ export function renderStep2() {
 
   buildLibStrip();
   renderVarList();
+  updateHsEditRequestsBanner();
   if (HS.variations.length && !HS.activeVarId) {
     HS.activeVarId = HS.variations[0].id;
   }
@@ -175,11 +177,19 @@ export async function deleteHsLibLogo(logo) {
   renderVariationPreview();
   hideHsToolbar();
   if (logo.storagePath) {
-    try { await deleteLogo(logo.storagePath, logo.id); }
+    try {
+      await (logo.shared ? deleteUserLogo(logo.storagePath, logo.id) : deleteLogo(logo.storagePath, logo.id));
+    }
     catch (err) { console.error('Storage delete failed', err); }
   }
 }
 
+// Every upload becomes a shared logo (user_logos), reusable across all of
+// this user's projects — one flat "Logos" section, not a project-only vs.
+// shared split. Logos already on the project from before this change
+// (project_logos rows, loaded alongside the shared ones in mergeLibraries())
+// keep showing here too and stay deletable via deleteLogo — only a newly
+// uploaded logo is tagged `shared: true`.
 async function handleHsLogoUpload(files) {
   showHsCanvasUploadSpinner();
   try {
@@ -191,7 +201,8 @@ async function handleHsLogoUpload(files) {
       HS.library.push({ id: tempId, name: file.name.replace(/\.[^.]+$/, ''), uploading: true });
       buildLibStrip();
       try {
-        const logo = await uploadLogo(HS.projectId, file);
+        const logo = await uploadUserLogo(file);
+        logo.shared = true;
         const idx = HS.library.findIndex(l => l.id === tempId);
         if (idx !== -1) HS.library.splice(idx, 1, logo);
         else HS.library.push(logo);
@@ -389,7 +400,7 @@ window.toggleVarTmplMenu = function (e) {
 // already had). Mirrors setDraftTmpl's custom/default branches
 // (var-editor.js) so picking a template from the Variations-page quick
 // picker and from the full per-variation editor produce identical results.
-function applyVarTemplateSpec(v, tmpl, sourceKind) {
+export function applyVarTemplateSpec(v, tmpl, sourceKind) {
   v.template = {
     sourceKind,
     sourceId:      tmpl.id,
@@ -407,6 +418,193 @@ function applyVarTemplateSpec(v, tmpl, sourceKind) {
     base.push({ ...spec, id: 'tl-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7) });
   });
   v.textLayers = base;
+}
+
+// ── Apply a customer's requested quick-pick change (see review.js's
+// Request-edits quick-picks and the variation_feedback.requested_* columns)
+// straight onto a variation. Colors/logo use the same sparse per-variation
+// override fields a designer's own quick-edit already writes
+// (backgroundOverride/topTextOverride/bottomTextOverride/templateLogoOverrides,
+// merged in getEffectiveState — src/hs/state.js) so position/layout stay
+// untouched; template uses the full-snapshot path above since a template
+// swap is itself a layout change. Exported (rather than kept as window.*
+// handlers like most of this file) so both hs/export.js's Gallery-step
+// per-card buttons and the edit-requests panel (openHsEditRequests below) can
+// apply the same requested change without duplicating the logic.
+export function applyRequestedHsTemplate(v, fb) {
+  if (!fb?.requested_template_id) return false;
+  const key = fb.requested_template_id;
+  if (!key.startsWith('default:')) return false;
+  const tmpl = HS_DEFAULT_TEMPLATES.find(t => t.id === key.slice(8));
+  if (!tmpl) return false;
+  applyVarTemplateSpec(v, tmpl, 'default');
+  return true;
+}
+
+export function applyRequestedHsColors(v, fb) {
+  if (!fb?.requested_colors) return false;
+  const { background, topText, bottomText } = fb.requested_colors;
+  if (background) v.backgroundOverride = { ...(v.backgroundOverride || {}), color: background };
+  if (topText)    v.topTextOverride    = { ...(v.topTextOverride    || {}), color: topText };
+  if (bottomText) v.bottomTextOverride = { ...(v.bottomTextOverride || {}), color: bottomText };
+  return true;
+}
+
+// One requested_colors key applied on its own (see hsColorFields below) — the
+// edit-requests panel's Colors section registers one .erm-section per key
+// rather than one "apply everything" field, so staff can accept e.g. just
+// the background color without also taking the text colors. Overrides are
+// always named "<key>Override" (backgroundOverride/topTextOverride/
+// bottomTextOverride), so this stays generic across all three.
+function applyRequestedHsColorKeyTo(v, fb, key) {
+  const hex = fb?.requested_colors?.[key];
+  if (!hex) return false;
+  const overrideKey = key + 'Override';
+  v[overrideKey] = { ...(v[overrideKey] || {}), color: hex };
+  return true;
+}
+
+// Slot 0 only — the simplest defensible default given the feedback row
+// carries no signal for which of N template-logo slots was meant (mirrors
+// the flags side's single-primary-placement assumption). The reviewer's
+// uploaded file already lives in the flag-logos bucket (see uploadFeedbackLogo
+// in review.js) but, unlike a staff-uploaded logo, has no project_logos row
+// yet — adopt it into the real library (adoptFeedbackLogo) so it shows up in
+// the Logos tray for reuse and survives a reload. Dedupe on storage path so
+// re-applying (or "Apply all") doesn't insert a second row for the same file.
+export async function applyRequestedHsLogo(v, fb) {
+  if (!fb?.requested_logo_url) return false;
+  let entry = HS.library.find(l => l.storagePath && l.storagePath === fb.requested_logo_path);
+  if (!entry) {
+    entry = fb.requested_logo_path
+      ? await adoptFeedbackLogo(HS.projectId, 'Requested logo', fb.requested_logo_url, fb.requested_logo_path)
+      : { id: 'fb-' + fb.id, name: 'Requested logo', src: fb.requested_logo_url };
+    HS.library.push(entry);
+    buildLibStrip();
+  }
+  v.templateLogoOverrides = { ...(v.templateLogoOverrides || {}), 0: { logoId: entry.id, logoSrc: entry.src } };
+  return true;
+}
+
+// A throwaway copy of `v` with every present requested_* field merged on
+// top — never mutates the real variation — so the row's combined preview
+// shows what it would look like with everything applied together, not just
+// its current (unmodified) state. Unlike the flags side, no library entry is
+// needed for the logo case: hole-sign template-logo slots carry their image
+// src inline (logoSrc), not a library lookup.
+function previewHsVariation(v, fb) {
+  const preview = { ...v };
+  if (fb?.requested_template_id?.startsWith('default:')) {
+    const tmpl = HS_DEFAULT_TEMPLATES.find(t => t.id === fb.requested_template_id.slice(8));
+    if (tmpl) applyVarTemplateSpec(preview, tmpl, 'default');
+  }
+  if (fb?.requested_colors) {
+    const { background, topText, bottomText } = fb.requested_colors;
+    if (background) preview.backgroundOverride = { ...(v.backgroundOverride || {}), color: background };
+    if (topText)    preview.topTextOverride    = { ...(v.topTextOverride    || {}), color: topText };
+    if (bottomText) preview.bottomTextOverride = { ...(v.bottomTextOverride || {}), color: bottomText };
+  }
+  if (fb?.requested_logo_url) {
+    preview.templateLogoOverrides = { ...(v.templateLogoOverrides || {}), 0: { logoId: 'preview', logoSrc: fb.requested_logo_url } };
+  }
+  return preview;
+}
+
+const HS_COLOR_LABELS = { background: 'Background', topText: 'Top text', bottomText: 'Bottom text' };
+
+// One .erm-section per requested_colors key actually present in ANY pending
+// request in this panel (not just this row) — mirrors flags/variations.js's
+// zoneColorFields, same reasoning: Colors stops being a single
+// lumped-together field so staff can accept, say, just the background color
+// without also taking the text colors.
+function hsColorFields() {
+  const keys = new Set();
+  (HS.feedback || []).forEach(fb => {
+    if (fb.status === 'needs_edits') Object.keys(fb.requested_colors || {}).forEach(k => keys.add(k));
+  });
+  return [...keys].map(key => ({
+    key: 'color-' + key,
+    sectionLabel: HS_COLOR_LABELS[key] || key,
+    has: fb => !!fb.requested_colors?.[key],
+    apply: (v, fb) => applyRequestedHsColorKeyTo(v, fb, key),
+    preview: (el, fb) => {
+      const hex = fb.requested_colors?.[key];
+      const safe = /^#[0-9A-Fa-f]{6}$/.test(hex) ? hex : '#cccccc';
+      el.innerHTML = `
+        <div class="erm-color-editor">
+          <div class="erm-color-dot" style="background:${safe}"></div>
+          <input type="text" class="hexin" value="${escXml(hex || '')}" readonly>
+        </div>`;
+    },
+  }));
+}
+
+// ── "View edits" — reachable two ways, both opening the same in-panel
+// sub-view (edit-requests-panel.js) in place of the right-hand "Variations"
+// list: a specific variation's own "View edits" link (its card, via
+// renderVarList's onViewEdits) passes that variation's id to show just its
+// request; the canvas banner's "View all edits" (project-global — see
+// updateHsEditRequestsBanner) omits it to show every open request.
+window.openHsEditRequests = function (variationId) {
+  const list = document.getElementById('hsVarList');
+  if (!list) return;
+  document.getElementById('hsVarListHeader')?.style.setProperty('display', 'none');
+  renderEditRequestsPanel(list, {
+    variations: HS.variations,
+    feedback: HS.feedback || [],
+    renderThumb: (el, v, fb) => {
+      const preview = previewHsVariation(v, fb);
+      renderHoleSignInto(el, getEffectiveState(preview), getEffectiveVariation(preview));
+    },
+    thumbAspect: `${HS_W}/${HS_H}`,
+    filterVariationId: variationId,
+    fields: [
+      {
+        key: 'template', sectionLabel: 'Template', has: fb => !!fb.requested_template_id, apply: (v, fb) => applyRequestedHsTemplate(v, fb),
+        preview: (el, fb) => {
+          const key = fb.requested_template_id || '';
+          if (!key.startsWith('default:')) return;
+          const tmpl = HS_DEFAULT_TEMPLATES.find(t => t.id === key.slice(8));
+          if (!tmpl) return;
+          const thumb = document.createElement('div');
+          thumb.className = 'erm-style-preview';
+          el.appendChild(thumb);
+          renderHoleSignInto(thumb, templatePreviewState(tmpl));
+        },
+      },
+      ...hsColorFields(),
+      {
+        key: 'logo', sectionLabel: 'Logos', has: fb => !!fb.requested_logo_url, apply: (v, fb) => applyRequestedHsLogo(v, fb),
+        preview: (el, fb) => { el.innerHTML = `<img src="${escXml(fb.requested_logo_url)}" alt="">`; },
+      },
+    ],
+    resolve: vid => resolveFeedback(HS.projectId, 'hole-signs', vid),
+    onApplied: v => {
+      if (v.id === HS.activeVarId) renderVariationPreview();
+      updateHsEditRequestsBanner();
+    },
+    persist: () => saveDraftInternal(),
+    onBack: () => {
+      document.getElementById('hsVarListHeader')?.style.removeProperty('display');
+      list.innerHTML = '';
+      renderVarList();
+    },
+  });
+};
+
+// Global (project-wide, not scoped to the active variation) banner shown
+// above the canvas whenever ANY variation has an open edit request — the
+// entry point into the unfiltered edit-requests panel regardless of which
+// variation happens to be selected. A specific variation's own request is
+// reachable from its card instead (see the "View edits" link wired in
+// renderVarList above).
+export function updateHsEditRequestsBanner() {
+  const noteEl = document.getElementById('hsVarEditNote');
+  const noteTextEl = document.getElementById('hsVarEditNoteText');
+  if (!noteEl || !noteTextEl) return;
+  const pending = (HS.feedback || []).filter(f => f.status === 'needs_edits' && !f.resolved && HS.variations.some(v => v.id === f.variation_id)).length;
+  noteEl.style.display = pending ? '' : 'none';
+  if (pending) noteTextEl.textContent = `${pending} variation${pending === 1 ? '' : 's'} need${pending === 1 ? 's' : ''} edits`;
 }
 
 window.setVarTemplate = function (key) {
@@ -462,6 +660,11 @@ function renderHsVarThumb(el, v) {
 export function renderVarList() {
   const list = document.getElementById('hsVarList');
   if (!list) return;
+  // The edit-requests panel (openHsEditRequests) also renders into this same
+  // container, in place of the card list — a background refresh (e.g. a
+  // realtime feedback update while it's open) must not stomp it. Its own
+  // "Back" clears the container first, so this only guards passive refreshes.
+  if (list.querySelector('#erpList')) return;
   // UI.hsFullEditorOpen (not just editingVarId/editingDraft) — a quick-edit
   // draft (see beginQuickEdit in var-editor.js) sets those same fields but
   // must not pop the full side-panel editor open.
@@ -495,6 +698,7 @@ export function renderVarList() {
     onDuplicate: v => dupHsVar(v.id),
     onDelete: v => deleteHsVar(v.id),
     onQtyChange: (v, qty) => { v.qty = qty; },
+    onViewEdits: v => window.openHsEditRequests(v.id),
   });
 
   // Dropping a dragged library logo directly onto a variation card assigns
@@ -508,7 +712,7 @@ export function renderVarList() {
     card.addEventListener('drop', e => {
       e.preventDefault();
       card.classList.remove('drag-over');
-      const logo = UI.hsDragLogoId ? HS.library.find(l => l.id === UI.hsDragLogoId) : null;
+      const logo = UI.hsDragLogoId ? findLogo(UI.hsDragLogoId) : null;
       if (!logo) return;
       UI.hsDragLogoId = null;
       // Update only this card's thumbnail — avoids tearing down all event listeners
@@ -566,13 +770,15 @@ function dupHsVar(id) {
   // layer object references — dragging one copy's logo would move the other's.
   nv.logos = (src.logos || []).map(layer => ({ ...layer, id: crypto.randomUUID() }));
   if (src.template) {
-    nv.template = {
-      ...src.template,
-      background: { ...src.template.background },
-      topText: { ...src.template.topText },
-      bottomText: { ...src.template.bottomText },
-      templateLogos: cloneTemplateLogos(src.template.templateLogos),
-    };
+    // Only rebuild the fields the source actually overrides — spreading an
+    // absent field (e.g. `{ ...undefined }`) yields a truthy `{}`, which
+    // getEffectiveState would then treat as a real override and blank out
+    // that piece of the global template instead of leaving it untouched.
+    nv.template = { ...src.template };
+    if (src.template.background)    nv.template.background    = { ...src.template.background };
+    if (src.template.topText)       nv.template.topText       = { ...src.template.topText };
+    if (src.template.bottomText)    nv.template.bottomText    = { ...src.template.bottomText };
+    if (src.template.templateLogos) nv.template.templateLogos = cloneTemplateLogos(src.template.templateLogos);
   }
   if (src.sponsorText) nv.sponsorText = { ...src.sponsorText };
   HS.variations.push(nv);
@@ -584,9 +790,12 @@ function deleteHsVar(id) {
   HS.variations = HS.variations.filter(v => v.id !== id);
   if (HS.activeVarId === id) HS.activeVarId = HS.variations[0]?.id || null;
   if (HS.editingVarId === id) { HS.editingVarId = null; HS.editingDraft = null; }
+  HS.feedback = (HS.feedback || []).filter(f => f.variation_id !== id);
   updateSidebar();
   renderVarList();
   renderVariationPreview();
+  updateHsEditRequestsBanner();
+  deleteFeedbackForVariation(HS.projectId, 'hole-signs', id).catch(() => {});
 }
 
 window.removeHsDefault = function (id) {

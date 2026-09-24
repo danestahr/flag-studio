@@ -1,4 +1,4 @@
-import { logoThumbHtml } from './media-utils.js';
+import { logoThumbHtml, downloadLogo } from './media-utils.js';
 
 // Shared "logo library" strip for the Variations step of both the flag and
 // hole-sign editors: an upload tile plus draggable logo thumbnails with
@@ -16,10 +16,11 @@ export function renderLogoTray(container, {
   onDragEnd,     // (logo) => void
   onDelete,      // (logo) => void
   onRemoveBg,    // (logo, onProgress) => Promise<any> — onProgress('loading'|'uploading')
+  deletable = true, // false hides the delete button entirely.
 }) {
   if (!container) return;
   container.innerHTML = `
-    <button type="button" class="var-upload-btn" title="Upload logo"><i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i></button>
+    <button type="button" class="var-upload-btn" title="Upload logo"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
     <input type="file" id="${fileInputId}" accept="${accept}"${multiple ? ' multiple' : ''} style="display:none">
   `;
   const fileInput = container.querySelector('#' + fileInputId);
@@ -57,12 +58,21 @@ export function renderLogoTray(container, {
       });
     }
 
-    const delBtn = document.createElement('button');
-    delBtn.className = 'var-lib-del';
-    delBtn.title = 'Delete';
-    delBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
-    delBtn.addEventListener('click', e => { e.stopPropagation(); onDelete?.(logo); });
-    el.appendChild(delBtn);
+    const dlBtn = document.createElement('button');
+    dlBtn.className = 'var-lib-dl';
+    dlBtn.title = 'Download';
+    dlBtn.innerHTML = '<i class="fa-solid fa-download"></i>';
+    dlBtn.addEventListener('click', e => { e.stopPropagation(); downloadLogo(logo.src, logo.name); });
+    el.appendChild(dlBtn);
+
+    if (deletable) {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'var-lib-del';
+      delBtn.title = 'Delete';
+      delBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+      delBtn.addEventListener('click', e => { e.stopPropagation(); onDelete?.(logo); });
+      el.appendChild(delBtn);
+    }
 
     if (onRemoveBg) {
       const bgremBtn = document.createElement('button');

@@ -1,7 +1,7 @@
 import './order.css';
 import './icons.js';
 import { COLORS, FLAGS } from './data.js';
-import { createProject, uploadLogo, uploadFlagPreview, supabase, sendOrderConfirmation, syncEventInfo, getSession, getMyProfile } from './supabase.js';
+import { createProject, uploadLogo, uploadFlagPreview, supabase, sendOrderConfirmation, sendOrderNotification, syncEventInfo, getSession, getMyProfile } from './supabase.js';
 import { loadAllFlags } from './svgLoader.js';
 import { applyColors, showGsTagVariant, resolveColors } from './render.js';
 import { isDisplayableImage, fileTypeLabel } from './media-utils.js';
@@ -424,11 +424,14 @@ function renderNav() {
 
 // ── Sync from GolfStatus ─────────────────────────────────────
 // Shown once, before Step 1. Anonymous like the rest of this flow — no
-// project exists yet, so nothing is persisted here; a synced logo is staged
-// into O.logoFiles exactly like a manual drop (see addLogoFiles), and the
-// dominant-color suggestion is applied to the color pickers right away (see
-// applySyncedInfo) since Step 3 now shows colors before the flag style
-// picker — there's no later "style picked" moment to hang it off of.
+// project exists yet, so nothing is persisted here. The synced logo is NOT
+// staged into O.logoFiles — it's usually too low-res for print, and putting
+// it in the same upload grid as a manual drop would make it look like an
+// accepted, print-ready file. Only its dominant-color suggestion is applied
+// to the color pickers right away (see applySyncedInfo) since Step 3 now
+// shows colors before the flag style picker — there's no later "style
+// picked" moment to hang it off of. The customer still has to drop in a
+// real logo file at Step 4 (see addLogoFiles).
 function renderSyncScreen() {
   if (O.syncing) {
     return `
@@ -498,16 +501,18 @@ async function applySyncedInfo(result) {
   O.courseName = result.courseName || '';
   O.eventDate = result.eventDate || '';
 
-  // Never throws — a failed logo/color step shouldn't block the rest of the
+  // Never throws — a failed color step shouldn't block the rest of the
   // synced info the customer already got.
+  //
+  // Deliberately does NOT stage the synced logo into O.logoFiles (the Step 4
+  // upload section): the event site's logo is typically far too low-res for
+  // print, and dropping it into the same grid as a real upload would make it
+  // look like an already-accepted, print-ready file. We still extract colors
+  // from it for the picker suggestion below — that doesn't imply print use.
   if (result.logoBase64) {
     try {
       const contentType = result.logoContentType || 'image/png';
       const dataUrl = `data:${contentType};base64,${result.logoBase64}`;
-      const bytes = Uint8Array.from(atob(result.logoBase64), c => c.charCodeAt(0));
-      const ext = contentType.split('/')[1]?.split('+')[0] || 'png';
-      const file = new File([bytes], `tournament-logo.${ext}`, { type: contentType });
-      O.logoFiles.push({ file, previewUrl: URL.createObjectURL(file), logoRecord: null });
       O.syncedDominantColors = await extractDominantColors(dataUrl, 4).catch(() => []);
       // Default primary/secondary to the same white + top-logo-color pair the
       // old flag-style-triggered version used, just applied immediately since
@@ -1317,6 +1322,38 @@ window.orderSubmit = async function () {
       O.confirmationEmailFailed = true;
       if (O.submitted) render();
     });
+
+    // Internal notification (dane@danestahr.com) - best-effort like the
+    // customer confirmation above; never blocks the order itself.
+    sendOrderNotification({
+      contactName: O.contactName,
+      contactEmail: O.contactEmail,
+      courseName: O.courseName || '',
+      eventName: O.eventName,
+      eventDate: O.eventDate,
+      eventUrl: O.syncUrl.trim() || '',
+      shipping: {
+        attn: O.attn !== null ? O.attn : O.eventName,
+        addressLine1: O.addressLine1,
+        addressLine2: O.addressLine2 || '',
+        city: O.city,
+        stateProvince: O.stateProvince,
+        postalCode: O.postalCode,
+        country: O.country,
+      },
+      flagStyle: O.flagStyle,
+      flagStyleName: selectedFlagForEmail ? selectedFlagForEmail.name : O.flagStyle,
+      flagPreviewUrl,
+      flagColors: flagColorEntries,
+      flagSetup: O.flagSetup,
+      flagQty: O.flagQty,
+      designNotes: O.designNotes || '',
+      frontDesignNotes: O.flagSetup === 'different' ? (O.frontDesignNotes || '') : '',
+      backDesignNotes: O.flagSetup === 'different' ? (O.backDesignNotes || '') : '',
+      logoFileNames: O.logoFiles.map(lf => lf.file?.name).filter(Boolean),
+      projectId,
+      projectUrl: `${window.location.origin}/project?project=${projectId}`,
+    }).catch(err => console.warn('Order notification email failed', err));
 
     clearDraft();
     clearLogoFilesDb();

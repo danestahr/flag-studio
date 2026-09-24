@@ -155,9 +155,11 @@ export function createCanvasPanel({
 }
 
 // Full canvas-panel shell for the Variations step: header (name + optional
-// "+" button), an optional Front/Back face toggle (hidden by default — the
-// hole-sign tool doesn't [yet] support independently-editable sides, so it
-// renders the row but leaves it hidden rather than omitting the structure),
+// "+" button), a floating overlay slot (edit-request note + an optional
+// Front/Back face toggle, hidden by default — the hole-sign tool doesn't
+// [yet] support independently-editable sides, so it renders the row but
+// leaves it hidden rather than omitting the structure) anchored over the top
+// of the canvas the same way .canvas-panel-footer floats over its bottom,
 // the zoomable canvas box, and a description/zoom-controls footer.
 // `container` must already be the `.var-canvas-panel` element — this only
 // fills it in and wires the header/face-toggle controls; zoom behavior is
@@ -176,15 +178,22 @@ export function renderCanvasPanel(container, {
   zoomHint = '⌘ + scroll to zoom',
 }) {
   if (!container) return null;
-  const hasHeader = !!(headerName || onAdd);
+  // When the face toggle is shown (flags' Variations step — the only caller
+  // with both an add button and a visible face row), the add button moves
+  // into that same row (Front/Back left, toggle, then the button) instead of
+  // getting its own header line. Every other caller (headerName-only panels,
+  // or hole signs' hidden face row) keeps the button in the header as before.
+  const addBtnInFaceRow = !!(onAdd && !faceToggleHidden);
+  const addBtnHtml = onAdd ? `<button class="btn sm" id="${addBtnId}" type="button" title="${esc(addBtnTitle)}"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>` : '';
+  const hasHeader = !!(headerName || (onAdd && !addBtnInFaceRow));
   container.innerHTML = `
     ${hasHeader ? `
     <div class="canvas-panel-header">
       <span class="canvas-panel-title" id="${headerNameId}">${esc(headerName)}</span>
-      ${onAdd ? `<button class="btn sm" id="${addBtnId}" type="button" title="${esc(addBtnTitle)}"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>` : ''}
+      ${addBtnInFaceRow ? '' : addBtnHtml}
     </div>` : ''}
-    ${noteHtml}
-    <div class="canvas-preview-box">
+    <div class="canvas-panel-overlay-top">
+      ${noteHtml}
       <div class="canvas-face-row"${faceToggleHidden ? ' style="display:none"' : ''}>
         <div class="face-toggle-row">
           <button class="face-tab active" id="${faceTabFrontId}" type="button">Front</button>
@@ -197,7 +206,10 @@ export function renderCanvasPanel(container, {
             <span class="gs-toggle-switch"></span>
           </label>
         </div>
+        ${addBtnInFaceRow ? addBtnHtml : ''}
       </div>
+    </div>
+    <div class="canvas-preview-box">
       <div class="canvas-scroll" id="${scrollId}">
         <div class="canvas-scroll-inner">
           <div class="canvas-zoom-wrap" id="${wrapId}">${canvasContentHtml}</div>

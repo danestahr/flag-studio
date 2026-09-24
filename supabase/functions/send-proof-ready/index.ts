@@ -20,26 +20,40 @@ interface ProofPayload {
   contactEmail: string;
   eventName: string;
   reviewUrl: string;
+  isRevision?: boolean;
+  productType?: 'flags' | 'hole-signs';
+}
+
+function designNoun(productType?: string): string {
+  return productType === 'hole-signs' ? 'hole sign design' : 'flag design';
 }
 
 function buildHtml(p: ProofPayload & { safeUrl: string }): string {
+  const noun = designNoun(p.productType);
+  const intro = p.isRevision
+    ? `We've updated your ${noun} proof for <strong>${esc(p.eventName)}</strong> based on your feedback. Click the button below to review the changes.`
+    : `Your ${noun} proof for <strong>${esc(p.eventName)}</strong> is ready for your review. Click the button below to view your designs and leave feedback.`;
   const body = `<p style="margin:0 0 20px;color:#333;font-size:16px;">Hi ${esc(p.contactName)},</p>
       <p style="margin:0 0 24px;color:#555;font-size:15px;line-height:1.6;">
-        Your flag design proof for <strong>${esc(p.eventName)}</strong> is ready for your review. Click the button below to view your designs and leave feedback.
+        ${intro}
       </p>
       ${ctaButton(esc(p.safeUrl), 'View Design Proof')}
       ${linkFallback(esc(p.safeUrl))}
       <p style="margin:28px 0 0;color:#888;font-size:13px;line-height:1.6;">
         Once you've reviewed the design, you can approve it or request changes directly on the page. If you have any questions, just reply to this email.
       </p>`;
-  return wrapEmailHtml({ title: 'Your Design Proof Is Ready', bodyHtml: body });
+  return wrapEmailHtml({ title: p.isRevision ? 'Your Revised Design Proof Is Ready' : 'Your Design Proof Is Ready', bodyHtml: body });
 }
 
 function buildText(p: ProofPayload & { safeUrl: string }): string {
+  const noun = designNoun(p.productType);
+  const intro = p.isRevision
+    ? `We've updated your ${noun} proof for ${p.eventName} based on your feedback.`
+    : `Your ${noun} proof for ${p.eventName} is ready for your review.`;
   return [
     `Hi ${p.contactName},`,
     '',
-    `Your flag design proof for ${p.eventName} is ready for your review.`,
+    intro,
     '',
     `View it here: ${p.safeUrl}`,
     '',
@@ -101,7 +115,9 @@ serve(async (req) => {
         personalizations: [{ to: [{ email: payload.contactEmail, name: payload.contactName }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
-        subject: `Your flag design proof is ready — ${payload.eventName}`,
+        subject: payload.isRevision
+          ? `Your revised ${designNoun(payload.productType)} proof is ready — ${payload.eventName}`
+          : `Your ${designNoun(payload.productType)} proof is ready — ${payload.eventName}`,
         content: [
           { type: 'text/plain', value: buildText({ ...payload, safeUrl }) },
           { type: 'text/html', value: buildHtml({ ...payload, safeUrl }) },

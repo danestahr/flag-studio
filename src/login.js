@@ -107,24 +107,7 @@ async function finishEventInfoStep(session, syncedInfo) {
   eventInfoHandle = await renderEventInfoStep(document.getElementById('eventInfoCard'), { type: galleryType, templateId: galleryTemplate, session, projectId: galleryProject, syncedInfo, headingEl: document.getElementById('sideStepHeading') });
 }
 
-// Placed to the left of the header's profile avatar (injected by
-// auth.js's injectHeaderActions into `.header-actions`, which by then
-// already exists) rather than below the event-info/sync card, since this
-// screen is the one place in the app the header's normal nav is otherwise
-// empty. Scoped to login.js's own header rather than a shared auth.js
-// change - the rest of the app doesn't need it in the header.
-function injectViewProjectsLink() {
-  const wrap = document.querySelector('header .header-actions');
-  if (!wrap || wrap.querySelector('.header-view-projects-link')) return;
-  const link = document.createElement('a');
-  link.className = 'header-view-projects-link';
-  link.href = '/';
-  link.textContent = 'View Projects';
-  wrap.insertBefore(link, wrap.firstChild);
-}
-
 async function showEventInfoStep(session) {
-  injectViewProjectsLink();
   const left = document.getElementById('splitLeftContent');
   // The step title (e.g. "Sync Event"/"Event Details") lives above the
   // card rather than inside it, as its own page-level heading.

@@ -405,7 +405,7 @@ function renderTemplateLogoSlot(slot, rect, clipId) {
     : '';
   return `<clipPath id="${clipId}"><rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" rx="${HS_TPL_LOGO_RADIUS}" ry="${HS_TPL_LOGO_RADIUS}"/></clipPath>`
     + bgRect
-    + `<image href="${escXml(src)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid meet" clip-path="url(#${clipId})"/>`
+    + `<image href="${escXml(src)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid meet" clip-path="url(#${clipId})" draggable="false"/>`
     + borderRect;
 }
 
@@ -436,7 +436,7 @@ function renderBanner(state, which, uid) {
       parts.push(`<filter id="${greyId}"><feColorMatrix type="saturate" values="0"/></filter>`);
       filterAttr = ` filter="url(#${greyId})"`;
     }
-    parts.push(`<image href="${escXml(bg.imageUrl)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"${filterAttr}${opacityAttr}/>`);
+    parts.push(`<image href="${escXml(bg.imageUrl)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"${filterAttr}${opacityAttr} draggable="false"/>`);
     // Unlike the main sign background (whose overlay defaults on at 50%
     // black), this defaults OFF — enabling it retroactively on every existing
     // banner image the moment this shipped would silently darken proofs/print
@@ -539,7 +539,7 @@ export function makeHoleSignSvg(state, variation) {
     const imgOp = (bg.imageOpacity ?? 100) / 100;
     const filterAttr = bg.imageGreyscale ? ` filter="url(#${bgGreyId})"` : '';
     const opacityAttr = imgOp < 1 ? ` opacity="${imgOp.toFixed(3)}"` : '';
-    bgImageParts.push(`<image href="${escXml(bg.imageUrl)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${bgImgClipId})"${filterAttr}${opacityAttr}/>`);
+    bgImageParts.push(`<image href="${escXml(bg.imageUrl)}" x="${Math.round(cx - imgW / 2)}" y="${Math.round(cy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${bgImgClipId})"${filterAttr}${opacityAttr} draggable="false"/>`);
     const overlayAlpha = (bg.overlayEnabled !== false) ? (bg.overlayOpacity ?? 50) / 100 : 0;
     if (overlayAlpha > 0) {
       const blend = bg.overlayBlend || 'normal';
@@ -617,7 +617,7 @@ export function makeHoleSignSvg(state, variation) {
     // still shows on top of it here instead of being hidden underneath.
     const src = variation.artboardSrc;
     variationParts.push(isDisplayableImage(src)
-      ? `<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`
+      ? `<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet" draggable="false"/>`
       : filePlaceholderSvg(0, 0, HS_W, HS_H, fileTypeLabel(src)));
   } else if (variation && (variation.logos || []).length) {
     // Each logo is an independent layer (see var-canvas.js) — its own image,
@@ -630,7 +630,7 @@ export function makeHoleSignSvg(state, variation) {
       const src = layer.logoSrcTight || layer.logoSrc;
       if (templateId === 'hole-sign-full-graphic') {
         if (isDisplayableImage(src)) {
-          layerParts.push(`<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet"/>`);
+          layerParts.push(`<image href="${escXml(src)}" x="0" y="0" width="${HS_W}" height="${HS_H}" preserveAspectRatio="xMidYMid meet" draggable="false"/>`);
         } else {
           layerParts.push(filePlaceholderSvg(0, 0, HS_W, HS_H, fileTypeLabel(src)));
         }
@@ -646,10 +646,29 @@ export function makeHoleSignSvg(state, variation) {
           const ld = layer;
           const logoW = lz.w * (ld.w / 100);
           const aspect = layer.logoAspect != null ? layer.logoAspect : 1;
-          const logoImgH = logoW * aspect;
           const cx = lz.x + (ld.x / 100) * lz.w;
           const cy = lz.y + (ld.y / 100) * lz.h;
-          layerParts.push(`<image href="${escXml(src)}" x="${Math.round(cx - logoW / 2)}" y="${Math.round(cy - logoImgH / 2)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}" preserveAspectRatio="xMidYMid meet"/>`);
+          if (layer.cropped && layer.h != null && layer.imageBaseW != null) {
+            // Cropped layer — box is w/h independent of the artwork's own
+            // aspect (see createImageBox's `cropped` mode). The image has its
+            // OWN fixed geometry (imageAbsX/Y/imageBaseW/H/imageScale,
+            // percent-of-zone — same convention layer.x/y/w already use),
+            // completely independent of the box's own w/h/x/y, so it never
+            // rescales/shifts here just because the box was resized.
+            const logoImgH = lz.h * (layer.h / 100);
+            const imgScale = (layer.imageScale ?? 100) / 100;
+            const imgCx = lz.x + (layer.imageAbsX / 100) * lz.w;
+            const imgCy = lz.y + (layer.imageAbsY / 100) * lz.h;
+            const imgW = (layer.imageBaseW / 100) * lz.w * imgScale;
+            const imgH = (layer.imageBaseH / 100) * lz.h * imgScale;
+            const left = cx - logoW / 2, top = cy - logoImgH / 2;
+            const clipId = `logoCropClip-${layer.id}-${uid}`;
+            layerParts.push(`<clipPath id="${clipId}"><rect x="${Math.round(left)}" y="${Math.round(top)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}"/></clipPath>`);
+            layerParts.push(`<image href="${escXml(src)}" x="${Math.round(imgCx - imgW / 2)}" y="${Math.round(imgCy - imgH / 2)}" width="${Math.round(imgW)}" height="${Math.round(imgH)}" clip-path="url(#${clipId})" draggable="false"/>`);
+          } else {
+            const logoImgH = logoW * aspect;
+            layerParts.push(`<image href="${escXml(src)}" x="${Math.round(cx - logoW / 2)}" y="${Math.round(cy - logoImgH / 2)}" width="${Math.round(logoW)}" height="${Math.round(logoImgH)}" preserveAspectRatio="xMidYMid meet" draggable="false"/>`);
+          }
         } else {
           layerParts.push(filePlaceholderSvg(lz.x, lz.y, lz.w, lz.h, fileTypeLabel(src)));
         }

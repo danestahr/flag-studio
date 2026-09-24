@@ -13,9 +13,7 @@ export function defaultCaptionsEdited() {
 export const HS = {
   projectId: null,
   projectName: '',
-  projectStatus: null,   // projects.status — see status-labels.js / project_is_editable()
-  customerInfo: {},       // projects.customer_info, loaded once at init.js:init()
-  hasFlagConfig: false,   // whether this project already has a flag_config row (export.js cross-sell check)
+  projectStatus: null,   // hole_sign_config.status (this design's own status, not the whole project) — see status-labels.js / design_is_editable()
   templateStyle: 'hole-sign-1',
   background: { type: 'color', color: '#FFFFFF', imageUrl: null, storagePath: null },
   topText:    { text: 'Sponsored By', font: 'dm-serif', size: 300, color: '#111110' },
@@ -25,14 +23,19 @@ export const HS = {
   captionsEdited: defaultCaptionsEdited(),
   templateLogos: emptyTemplateLogos(),
   textLayers: [],
-  library: [],
+  library: [], // project-owned logos plus this user's cross-project shared logos (user_logos), merged — see mergeLibraries() in ../state.js. A shared entry is tagged `shared: true`.
   variations: [],
   defaults: [],      // selected default hole signs for this project
   activeVarId: null,
   editingVarId: null,
   editingDraft: null,
   feedback: [],
+  shareToken: null,
 };
+
+export function findLogo(id) {
+  return HS.library.find(l => l.id === id);
+}
 
 // Ephemeral UI state shared across the editor modules. Kept as object
 // properties (not module-level `let`s) so any module can mutate them by
@@ -81,11 +84,6 @@ export const UI = {
   hsEditingCustomTemplateId: null,
   hsCustomTemplateForkId: null,
   hsLocked: false,           // non-admin customer + project past draft/needs_changes - blocks goStep(1/2), set in app.js:init() once HS.projectStatus is known
-  hsSubmitContact: null,     // draft contact/shipping fields for the Gallery & export submit form
-  hsSubmitAcks: { deadline: false },
-  hsSubmitErrors: {},
-  hsSubmitting: false,
-  hsCrossSellDismissed: false,
 };
 
 
@@ -165,6 +163,12 @@ export function getEffectiveState(v) {
   }
   if (v.backgroundOverride) {
     out.background = { ...out.background, ...v.backgroundOverride };
+  }
+  if (v.topTextOverride) {
+    out.topText = { ...out.topText, ...v.topTextOverride };
+  }
+  if (v.bottomTextOverride) {
+    out.bottomText = { ...out.bottomText, ...v.bottomTextOverride };
   }
   if (v.textLayerOverrides) {
     out.textLayers = (out.textLayers || []).map(l => {

@@ -243,10 +243,18 @@ document.addEventListener('keydown', e => {
   // its stored x/y — nudging those would silently do nothing visible.
   if (arrows[e.key] && !layer.dock) {
     e.preventDefault();
-    const step = e.shiftKey ? 100 : 20;
+    // layer.x/y live in fixed 6375x5475 sign-space units (HS_W/HS_H), not
+    // screen px — convert the desired real-pixel step through the canvas's
+    // current on-screen size (same container doRefresh() below picks between)
+    // so one arrow press always moves the layer by the same visual distance
+    // regardless of zoom/panel width.
+    const containerId = HS.editingVarId ? 'hsSignPreview' : 'hsStep1Preview';
+    const rect = document.getElementById(containerId)?.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return;
+    const stepPx = e.altKey ? 10 : 1;
     const [dx, dy] = arrows[e.key];
-    layer.x += dx * step;
-    layer.y += dy * step;
+    layer.x += dx * stepPx / rect.width * HS_W;
+    layer.y += dy * stepPx / rect.height * HS_H;
     doRefresh();
   }
 });

@@ -1,9 +1,10 @@
 import './icons.js';
-import { S } from './state.js';
+import { S, findLogo } from './state.js';
 import { FLAGS } from './data.js';
-import { getFlag, renderInto, preloadLogoAspects } from './render.js';
+import { HS_DEFAULT_TEMPLATES } from './hole-sign-data.js';
+import { getFlag, renderInto, preloadLogoAspects, withMasterText, normaliseLogos, resolveColors } from './render.js';
 import { loadAllFlags } from './svgLoader.js';
-import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase, createReviewClient, clientApproveProof, clientRejectProof } from './supabase.js';
+import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase, createReviewClient, clientApproveDesignProof, clientRejectDesignProof, sendReviewDecision, uploadFeedbackLogo, loadOrderIntake } from './supabase.js';
 import { renderHoleSignInto } from './hole-sign-render.js';
 import { esc } from './dom-utils.js';
 
@@ -13,12 +14,21 @@ const localHsFeedback = {};  // hole signs: same
 const submittedFlags = new Set();   // variation_ids loaded from DB (already submitted)
 const submittedHs    = new Set();
 let previousReviewerName = '';
+let previousReviewerEmail = '';
+let previousGeneralNote = '';
 let hsState = null;
 let hsVariations = [];
 let projectId = null;
+let projectName = null;
 let reviewToken = null;
 let reviewClient = null;
 let configChannel = null;
+let currentProject = null;
+// 'flags' | 'hole-signs' | null (null = not yet decided; renderPage() picks a
+// default once it knows which product types this project actually has).
+// Seeded from the ?tab= URL param so a gallery's "share for review" link can
+// deep-link a reviewer straight to the relevant product.
+let activeTab = null;
 
 // Loads the flag design (template, colors, variations, logo library) from a
 // freshly-fetched project record into `S`. Shared by the initial load and the
@@ -36,8 +46,10 @@ async function loadFlagsInto(project) {
   S.logoLayout = Array.isArray(varData) ? 'single' : (varData.layout || 'single');
   S.gsTag = Array.isArray(varData) ? false : (varData.gsTag ?? false);
   S.gsTagMode = Array.isArray(varData) ? 'auto' : (varData.gsTagMode ?? 'auto');
+  S.textLayers = Array.isArray(varData) ? [] : (varData.textLayers || []);
+  S.imageLayers = Array.isArray(varData) ? [] : (varData.imageLayers || []);
+  await preloadLogoAspects(S.imageLayers);
   S.variations = varItems.map(v => ({ ...v }));
-  S.sameLogoOnBothSides = !S.variations.some(v => (v.backLogos?.length || Object.keys(v.backAssignment || {}).length) > 0);
   await loadAllFlags(FLAGS);
   const activeFlag = FLAGS.find(f => f.id === S.flagId);
   if (activeFlag?.logoZoneSets && S.logoLayout) {
@@ -67,6 +79,7 @@ function loadHsInto(project) {
 async function reloadDesigns() {
   try {
     const project = await getProjectByToken(reviewToken, reviewClient);
+    currentProject = project;
     await loadFlagsInto(project);
     loadHsInto(project);
     renderPage(project);
@@ -98,16 +111,25 @@ function getVarGsTagOpts(v) {
 }
 
 async function init() {
-  const token = new URLSearchParams(window.location.search).get('token');
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
   if (!token) { showError('Invalid review link.'); return; }
   reviewToken = token;
   reviewClient = createReviewClient(token);
+
+  // Deep-link support: a gallery's "share for review" link carries
+  // ?tab=flags or ?tab=hole-signs so the reviewer lands on the product they
+  // were actually shown, instead of always defaulting to flags first.
+  const tabParam = params.get('tab');
+  activeTab = (tabParam === 'flags' || tabParam === 'hole-signs') ? tabParam : null;
 
   root.innerHTML = '<div class="rv-loading">Loading…</div>';
 
   try {
     const project = await getProjectByToken(token, reviewClient);
+    currentProject = project;
     projectId = project.id;
+    projectName = project.name;
 
     // ── Flags ──────────────────────────────────────────────
     await loadFlagsInto(project);
@@ -117,6 +139,8 @@ async function init() {
           localFeedback[f.variation_id] = { status: f.status, note: f.note || '', resolved: f.resolved || false };
           submittedFlags.add(f.variation_id);
           if (!previousReviewerName && f.reviewer_name) previousReviewerName = f.reviewer_name;
+          if (!previousReviewerEmail && f.reviewer_email) previousReviewerEmail = f.reviewer_email;
+          if (!previousGeneralNote && f.general_note) previousGeneralNote = f.general_note;
         });
       } catch (e) { console.warn('Could not load flag feedback:', e); }
     }
@@ -129,8 +153,22 @@ async function init() {
           localHsFeedback[f.variation_id] = { status: f.status, note: f.note || '', resolved: f.resolved || false };
           submittedHs.add(f.variation_id);
           if (!previousReviewerName && f.reviewer_name) previousReviewerName = f.reviewer_name;
+          if (!previousReviewerEmail && f.reviewer_email) previousReviewerEmail = f.reviewer_email;
+          if (!previousGeneralNote && f.general_note) previousGeneralNote = f.general_note;
         });
       } catch (e) { console.warn('Could not load hole sign feedback:', e); }
+    }
+
+    // A returning reviewer's own prior submission wins; otherwise default the
+    // name/email fields to the project's known contact details - customer_info
+    // (staff-corrected) falling back to the original order intake, same
+    // precedence as the Customer details modal in project.js.
+    if (!previousReviewerName || !previousReviewerEmail) {
+      const ci = project.customer_info || {};
+      let intake = null;
+      try { intake = await loadOrderIntake(project.id); } catch { intake = null; }
+      if (!previousReviewerName) previousReviewerName = ci.contact_name ?? intake?.contact_name ?? '';
+      if (!previousReviewerEmail) previousReviewerEmail = ci.contact_email ?? intake?.contact_email ?? '';
     }
 
     renderPage(project);
@@ -176,9 +214,22 @@ function collapseCard(card, v) {
       <div class="rv-collapsed-thumb" id="rvct-${v.id}"></div>
       <div class="rv-vname">${esc(v.name)}</div>
       <span class="rv-status-badge approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approved</span>
+      <button class="rv-unapprove-btn" id="rvunapprove-${v.id}">Unapprove</button>
     </div>`;
   const thumbEl = card.querySelector('#rvct-' + v.id);
-  if (thumbEl) renderInto(thumbEl, v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
+  if (thumbEl) renderInto(thumbEl, v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
+  card.querySelector('#rvunapprove-' + v.id)?.addEventListener('click', () => unapproveVariation(localFeedback, v.id));
+}
+
+// Reverts a locally/previously approved variation back to pending so the
+// reviewer can change their mind before (or after) submitting. Only clears
+// local UI state — a variation that was already submitted as 'approved'
+// stays that way in the DB until the reviewer submits a new decision for it
+// (submitFeedback upserts by variation_id, so the next submit overwrites it).
+function unapproveVariation(map, variationId) {
+  const fb = map[variationId];
+  if (fb) delete fb.status;
+  renderPage(currentProject);
 }
 
 window.approveAll = function () {
@@ -232,6 +283,18 @@ function effectiveHsState(v) {
     if (v.template.bannerBottom)  out.bannerBottom  = v.template.bannerBottom;
     if (v.template.templateLogos) out.templateLogos = v.template.templateLogos;
   }
+  // Quick-edited per-slot sponsor logo overrides (see getEffectiveState in
+  // hs/state.js) — without this, a variation whose sponsor logo was swapped
+  // via a quick-edit (rather than a full v.template snapshot) would render
+  // here with the unmodified template logo, and the "replace a logo" quick-pick
+  // below would offer the wrong current image to replace.
+  if (v?.templateLogoOverrides) {
+    const slots = (out.templateLogos?.slots || []).map((s, i) => {
+      const ov = v.templateLogoOverrides[i];
+      return ov ? { ...s, ...ov } : s;
+    });
+    out.templateLogos = { ...out.templateLogos, slots };
+  }
   return out;
 }
 
@@ -242,29 +305,37 @@ function collapseHsCard(card, v) {
       <div class="hs-rv-thumb" id="hscthumb-${v.id}"></div>
       <div class="rv-vname">${esc(v.name)}</div>
       <span class="rv-status-badge approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approved</span>
+      <button class="rv-unapprove-btn" id="hsunapprove-${v.id}">Unapprove</button>
     </div>`;
   const el = card.querySelector('#hscthumb-' + v.id);
   const state = effectiveHsState(v);
   if (el && state) renderHoleSignInto(el, state, v);
+  card.querySelector('#hsunapprove-' + v.id)?.addEventListener('click', () => unapproveVariation(localHsFeedback, v.id));
 }
 
 // ── Page render ───────────────────────────────────────────────────────────────
 
-function renderPage(project) {
-  const hasFlags    = S.variations.length > 0;
-  const hasHoleSigns = hsVariations.length > 0;
-  const flagName = S.flagId ? S.flagId.charAt(0).toUpperCase() + S.flagId.slice(1) : '';
-  const n = S.variations.length;
+// A design only becomes visible to the reviewer once a proof has actually
+// gone out for it - 'draft'/'submitted' mean the designer hasn't shared
+// anything yet, so there's nothing here for the reviewer to look at even if
+// the design already has variations. Without this, a project with (say)
+// flags proof_sent but hole signs still mid-draft would show a Hole Signs
+// tab the client was never actually invited to review.
+const SENT_FOR_REVIEW_STATUSES = ['proof_sent', 'needs_changes', 'approved', 'sent_to_print'];
+function isSentForReview(status) { return SENT_FOR_REVIEW_STATUSES.includes(status); }
 
-  const meta = [
-    hasFlags     ? `${flagName} flags · ${n} variation${n !== 1 ? 's' : ''}` : '',
-    hasHoleSigns ? `${hsVariations.length} hole sign${hsVariations.length !== 1 ? 's' : ''}` : '',
-  ].filter(Boolean).join(' · ');
+// Shared by renderPage (drives the locked/approved UI per tab) and the
+// post-submit success screen (which needs to know if the *whole* project -
+// every product type it actually has, not just the one tab just submitted -
+// just became fully approved).
+function computeApprovalState() {
+  const hasFlags = S.variations.length > 0 && isSentForReview(currentProject?.flagConfig?.status);
+  const hasHoleSigns = hsVariations.length > 0 && isSentForReview(currentProject?.holeSignConfig?.status);
 
-  // Everything is locked when every variation has been submitted with feedback
-  // that is still active (approved, or needs_edits and not yet resolved).
-  // In that state the reviewer has nothing left to submit until the designer
-  // responds, so we surface a "waiting" view rather than the editing UI.
+  // Locked when every variation of that product type has been submitted with
+  // feedback that is still active (approved, or needs_edits and not yet
+  // resolved). In that state the reviewer has nothing left to submit for
+  // that product until the designer responds, so its submit row disappears.
   const allFlagsLocked = !hasFlags || S.variations.every(v => {
     const fb = localFeedback[v.id];
     if (!submittedFlags.has(v.id)) return false;
@@ -278,100 +349,175 @@ function renderPage(project) {
   const allLocked = (hasFlags || hasHoleSigns) && allFlagsLocked && allHsLocked
     && (submittedFlags.size > 0 || submittedHs.size > 0);
 
-  // All approved is a strict subset of allLocked — every variation has status='approved'.
+  // All approved is a strict subset of locked — every variation has status='approved'.
   const allFlagsApproved = !hasFlags || S.variations.every(v => localFeedback[v.id]?.status === 'approved');
   const allHsApproved    = !hasHoleSigns || hsVariations.every(v => localHsFeedback[v.id]?.status === 'approved');
   const allApproved = allLocked && allFlagsApproved && allHsApproved;
 
-  const instructionsText = allApproved
-    ? 'All designs approved. The designer will be in touch to finalize the order.'
-    : allLocked
+  return { hasFlags, hasHoleSigns, allFlagsLocked, allHsLocked, allLocked, allFlagsApproved, allHsApproved, allApproved };
+}
+
+function renderPage(project) {
+  currentProject = project;
+  const { hasFlags, hasHoleSigns, allFlagsLocked, allHsLocked, allLocked, allFlagsApproved, allHsApproved, allApproved } = computeApprovalState();
+  const showTabs = hasFlags && hasHoleSigns;
+  const n = S.variations.length;
+  const hsTotalQty = hsVariations.reduce((sum, v) => sum + (parseInt(v.qty, 10) || 1), 0);
+
+  // Keep activeTab valid for whatever this project actually has — falls
+  // back to whichever product type exists when unset (fresh load with no
+  // ?tab= param) or when it pointed at a type this project doesn't have.
+  if (!activeTab || (activeTab === 'flags' && !hasFlags) || (activeTab === 'hole-signs' && !hasHoleSigns)) {
+    activeTab = hasFlags ? 'flags' : 'hole-signs';
+  }
+
+  const meta = hasFlags && hasHoleSigns ? 'Flags & Hole Signs' : hasFlags ? 'Flags' : hasHoleSigns ? 'Hole Signs' : '';
+
+  // The instructions banner reflects whichever product is on screen right
+  // now (the active tab), not the other one — a reviewer who just finished
+  // flags shouldn't be told to keep reviewing because hole signs are still
+  // pending underneath a tab they're not looking at.
+  const hasAny = hasFlags || hasHoleSigns;
+  const activeIsFlags = showTabs ? activeTab === 'flags' : hasFlags;
+  const activeApproved = hasAny && (activeIsFlags ? allFlagsApproved : allHsApproved);
+  const activeLocked   = hasAny && (activeIsFlags ? allFlagsLocked   : allHsLocked);
+
+  const instructionsText = activeApproved
+    ? 'Approved — this design will be sent to print.'
+    : activeLocked
       ? 'Feedback has been received. The designer will notify you once changes are made.'
       : 'Review each variation below. Mark it as approved or request changes — add a note to explain what needs adjusting.';
 
-  const instructionsClass = allApproved
+  const instructionsClass = activeApproved
     ? ' rv-instructions-approved'
-    : allLocked
+    : activeLocked
       ? ' rv-instructions-locked'
       : '';
 
-  const nameRow = allLocked
-    ? (previousReviewerName
-        ? `<div class="rv-name-row">
-             <div class="rv-field-label">Your name</div>
-             <div class="rv-name-readonly">${esc(previousReviewerName)}</div>
-           </div>`
-        : '')
-    : `<div class="rv-name-row">
-         <div class="rv-field-label">Your name (optional)</div>
-         <input class="rv-name-input" id="reviewerName" type="text" placeholder="e.g. Sarah Johnson" value="${esc(previousReviewerName)}">
-       </div>`;
+  // The name/email/general-note fields stay single, project-wide values
+  // (only freeze once truly everything is locked) — unlike the instructions
+  // banner, there's only ever one reviewer identity regardless of which tab
+  // is active. Once the active tab's design is fully approved there's
+  // nothing left to submit for it, so the contact/notes fields (and the
+  // variations grid below, see allFlagsApproved/allHsApproved) disappear
+  // entirely rather than lingering as a read-only summary - if the other
+  // product type still needs review, switching tabs brings them right back.
+  const nameRow = activeApproved
+    ? ''
+    : allLocked
+      ? ((previousReviewerName || previousReviewerEmail || previousGeneralNote)
+          ? `<div class="rv-name-row">
+               ${previousReviewerName ? `<div class="rv-field"><div class="rv-field-label">Your name</div><div class="rv-name-readonly">${esc(previousReviewerName)}</div></div>` : ''}
+               ${previousReviewerEmail ? `<div class="rv-field"><div class="rv-field-label">Your email</div><div class="rv-name-readonly">${esc(previousReviewerEmail)}</div></div>` : ''}
+               ${previousGeneralNote ? `<div class="rv-field"><div class="rv-field-label">Notes</div><div class="rv-name-readonly">${esc(previousGeneralNote)}</div></div>` : ''}
+             </div>`
+          : '')
+      : `<div class="rv-name-row">
+           <div class="rv-field">
+             <div class="rv-field-label">Full name *</div>
+             <input class="rv-name-input" id="reviewerName" type="text" placeholder="e.g. Sarah Johnson" value="${esc(previousReviewerName)}">
+           </div>
+           <div class="rv-field">
+             <div class="rv-field-label">Email *</div>
+             <input class="rv-name-input" id="reviewerEmail" type="email" placeholder="e.g. sarah@email.com" value="${esc(previousReviewerEmail)}">
+           </div>
+           <div class="rv-field">
+             <div class="rv-field-label">General notes</div>
+             <textarea class="rv-note rv-general-note" id="reviewerGeneralNote" placeholder="Anything else we should know?">${esc(previousGeneralNote)}</textarea>
+           </div>
+         </div>`;
+
+  const tabsHtml = showTabs ? `
+    <div class="rv-product-tabs">
+      <button class="rv-product-tab${activeTab === 'flags' ? ' active' : ''}" onclick="setActiveTab('flags')"><i class="fa-solid fa-flag" aria-hidden="true"></i> Flags</button>
+      <button class="rv-product-tab${activeTab === 'hole-signs' ? ' active' : ''}" onclick="setActiveTab('hole-signs')"><i class="fa-solid fa-signs-post" aria-hidden="true"></i> Hole Signs</button>
+    </div>` : '';
 
   root.innerHTML = `
     <div class="rv-root">
       <div class="rv-hero">
+        <div class="rv-hero-tag">Design Review</div>
         <div class="rv-project">${esc(project.name) || 'Review'}</div>
         <div class="rv-meta">${meta}</div>
-        <div class="rv-instructions${instructionsClass}">${allApproved ? '<span class="rv-instructions-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>' : ''}${instructionsText}</div>
       </div>
-      ${nameRow}
+      ${tabsHtml}
+      <div class="rv-info-section">
+        <div class="rv-instructions${instructionsClass}">${activeApproved ? '<span class="rv-instructions-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>' : ''}${instructionsText}</div>
+        ${nameRow}
+      </div>
 
       ${hasFlags ? `
-        ${hasHoleSigns ? '<div class="rv-section-title"><i class="fa-solid fa-flag" aria-hidden="true"></i> Tournament Flags</div>' : ''}
-        <div class="rv-summary" id="rvSummary">
-          <div class="rv-summary-left">
-            <div class="rv-summary-counts">
-              <span class="rv-count approved" id="rcApproved">0 approved</span>
-              <span class="rv-count needs-edits" id="rcEdits">0 needs edits</span>
-              <span class="rv-count pending" id="rcPending">${n} pending</span>
+        <div class="rv-tab-panel" data-tab="flags"${showTabs && activeTab !== 'flags' ? ' hidden' : ''}>
+          ${allFlagsApproved ? '' : `
+          <div class="rv-summary" id="rvSummary">
+            <div class="rv-summary-left">
+              <div class="rv-summary-counts">
+                <span class="rv-count approved" id="rcApproved">0 approved</span>
+                <span class="rv-count needs-edits" id="rcEdits">0 needs edits</span>
+                <span class="rv-count pending" id="rcPending">${n} pending</span>
+              </div>
+              <div class="rv-progress-bar">
+                <div class="rv-progress-approved" id="rvBarApproved" style="width:0%"></div>
+                <div class="rv-progress-edits" id="rvBarEdits" style="width:0%"></div>
+              </div>
             </div>
-            <div class="rv-progress-bar">
-              <div class="rv-progress-approved" id="rvBarApproved" style="width:0%"></div>
-              <div class="rv-progress-edits" id="rvBarEdits" style="width:0%"></div>
-            </div>
+            <button class="rv-approve-all-btn" onclick="approveAll()">Approve all</button>
           </div>
-          <button class="rv-approve-all-btn" onclick="approveAll()">Approve all</button>
+          <div class="rv-variations" id="rvVariations"></div>
+          ${allFlagsLocked ? '' : `
+          <div class="rv-submit-row">
+            <button class="rv-submit-btn" id="rvSubmit" onclick="submitProductReview('flags')">Submit flag feedback <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+          </div>`}`}
         </div>
-        <div class="rv-variations" id="rvVariations"></div>
       ` : ''}
 
       ${hasHoleSigns ? `
-        ${hasFlags ? '<div class="rv-section-title" style="margin-top:2.5rem"><i class="fa-solid fa-signs-post" aria-hidden="true"></i> Hole Signs</div>' : ''}
-        <div class="rv-summary" id="hsRvSummary">
-          <div class="rv-summary-left">
-            <div class="rv-summary-counts">
-              <span class="rv-count approved" id="hsrcApproved">0 approved</span>
-              <span class="rv-count needs-edits" id="hsrcEdits">0 needs edits</span>
-              <span class="rv-count pending" id="hsrcPending">${hsVariations.length} pending</span>
+        <div class="rv-tab-panel" data-tab="hole-signs"${showTabs && activeTab !== 'hole-signs' ? ' hidden' : ''}>
+          ${allHsApproved ? '' : `
+          <div class="rv-summary" id="hsRvSummary">
+            <div class="rv-summary-left">
+              <div class="rv-summary-total">${hsVariations.length} variation${hsVariations.length === 1 ? '' : 's'} &middot; ${hsTotalQty} sign${hsTotalQty === 1 ? '' : 's'} total</div>
+              <div class="rv-summary-counts">
+                <span class="rv-count approved" id="hsrcApproved">0 approved</span>
+                <span class="rv-count needs-edits" id="hsrcEdits">0 needs edits</span>
+                <span class="rv-count pending" id="hsrcPending">${hsVariations.length} pending</span>
+              </div>
+              <div class="rv-progress-bar">
+                <div class="rv-progress-approved" id="hsrvBarApproved" style="width:0%"></div>
+                <div class="rv-progress-edits" id="hsrvBarEdits" style="width:0%"></div>
+              </div>
             </div>
-            <div class="rv-progress-bar">
-              <div class="rv-progress-approved" id="hsrvBarApproved" style="width:0%"></div>
-              <div class="rv-progress-edits" id="hsrvBarEdits" style="width:0%"></div>
-            </div>
+            <button class="rv-approve-all-btn" onclick="approveAllHs()">Approve all</button>
           </div>
-          <button class="rv-approve-all-btn" onclick="approveAllHs()">Approve all</button>
+          <div class="rv-variations" id="hsRvVariations"></div>
+          ${allHsLocked ? '' : `
+          <div class="rv-submit-row">
+            <button class="rv-submit-btn" id="hsRvSubmit" onclick="submitProductReview('hole-signs')">Submit hole sign feedback <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+          </div>`}`}
         </div>
-        <div class="rv-variations" id="hsRvVariations"></div>
       ` : ''}
-
-      ${allLocked ? '' : `
-      <div class="rv-submit-row">
-        <button class="rv-submit-btn" id="rvSubmit" onclick="submitReview()">Submit feedback <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
-      </div>`}
     </div>`;
 
-  if (hasFlags) {
+  if (hasFlags && !allFlagsApproved) {
     const container = document.getElementById('rvVariations');
     S.variations.forEach(v => container.appendChild(buildCard(v, localFeedback[v.id] || {})));
     updateSummary();
   }
 
-  if (hasHoleSigns) {
+  if (hasHoleSigns && !allHsApproved) {
     const container = document.getElementById('hsRvVariations');
     hsVariations.forEach(v => container.appendChild(buildHsCard(v, localHsFeedback[v.id] || {})));
     updateHsSummary();
   }
 }
+
+// Switches which product's panel is visible. A full re-render (rather than
+// just toggling `hidden`) is cheap here (at most a couple dozen cards) and
+// means the instructions banner/tab active-state stay in sync for free.
+window.setActiveTab = function (tab) {
+  activeTab = tab;
+  renderPage(currentProject);
+};
 
 // ── Card builders ─────────────────────────────────────────────────────────────
 
@@ -412,6 +558,7 @@ function buildCard(v, fb) {
       </div>
       <div class="rv-note-wrap${effectiveStatus === 'needs_edits' ? ' visible' : ''}" id="rnw-${v.id}">
         <textarea class="rv-note" id="rnote-${v.id}" placeholder="What needs to change?">${effectiveStatus === 'needs_edits' ? (fb.note || '') : ''}</textarea>
+        ${quickPicksHtml('r', v.id)}
       </div>`;
 
   const lockedNote = (isLocked && fb?.note)
@@ -428,10 +575,10 @@ function buildCard(v, fb) {
     ${actionsHtml}`;
 
   if (hasBack) {
-    renderInto(card.querySelector('#rvp-front-' + v.id), v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
-    renderInto(card.querySelector('#rvp-back-'  + v.id), v.backLogos || v.backAssignment || [], 'back', false, getVarFlag(v), getVarColors(v), v.backTextLayers || [], getVarGsTagOpts(v));
+    renderInto(card.querySelector('#rvp-front-' + v.id), v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
+    renderInto(card.querySelector('#rvp-back-'  + v.id), v.backLogos || v.backAssignment || [], 'back', false, getVarFlag(v), getVarColors(v), [...(S.textLayers || []), ...(v.backTextLayers || [])], getVarGsTagOpts(v), S.imageLayers || []);
   } else {
-    renderInto(card.querySelector('#rvp-' + v.id), v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), v.textLayers || [], getVarGsTagOpts(v));
+    renderInto(card.querySelector('#rvp-' + v.id), v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
   }
 
   if (!isLocked) {
@@ -452,9 +599,272 @@ function buildCard(v, fb) {
       if (!localFeedback[v.id]) localFeedback[v.id] = {};
       localFeedback[v.id].note = e.target.value;
     });
+    wireFlagQuickPicks(card, v);
   }
 
   return card;
+}
+
+// ── Quick-pick "Request edits" extras ──────────────────────────────────────────
+// Optional structured add-ons to the freeform note: a different flag style /
+// hole-sign template, different colors, a replacement logo. Stored on
+// localFeedback[v.id]/localHsFeedback[v.id] alongside note/status, uploaded
+// (logo only) and submitted as part of the same variation_feedback row in
+// submitProductReview() below. Entirely optional — none of this blocks submitting
+// just a note, same as today.
+
+// Shared shell markup for both flag and hole-sign cards; `prefix` is 'r' or
+// 'hs' to keep element ids distinct per product type.
+function quickPicksHtml(prefix, id) {
+  return `
+    <div class="rv-quickpicks" id="${prefix}qp-${id}">
+      <div class="rv-qp-row">
+        <div class="rv-qp-label">Prefer a different ${prefix === 'r' ? 'flag style' : 'template'}?</div>
+        <div class="rv-qp-styles" id="${prefix}qpStyles-${id}"></div>
+      </div>
+      <div class="rv-qp-row">
+        <div class="rv-qp-label">Want different colors?</div>
+        <div class="rv-qp-colors" id="${prefix}qpColors-${id}"></div>
+      </div>
+      <div class="rv-qp-row">
+        <div class="rv-qp-label">Need a different logo?</div>
+        <div class="rv-qp-logo-list" id="${prefix}qpLogoList-${id}"></div>
+      </div>
+    </div>`;
+}
+
+// Every logo currently placed on a flag variation — front zone(s) plus back
+// zone(s) when the variation has a back design — each carrying an `id` local
+// to this page (a copy of the placement's own id, 'back-' prefixed for a
+// back-face placement so it can't collide with a front one) used only to
+// track which one a pending replacement targets.
+function flagLogoRefs(v) {
+  const refs = [];
+  normaliseLogos(v.logos || v.assignment).forEach(item => {
+    const entry = findLogo(item.logoId);
+    if (entry) refs.push({ id: item.id, src: entry.src });
+  });
+  normaliseLogos(v.backLogos || v.backAssignment).forEach(item => {
+    const entry = findLogo(item.logoId);
+    if (entry) refs.push({ id: 'back-' + item.id, src: entry.src });
+  });
+  // Template-level free images (Step 1's "Images" row, S.imageLayers) — same
+  // for every variation, unlike the per-variation placements above, but just
+  // as replaceable from the reviewer's point of view. Their own 'fil-'-
+  // prefixed ids (see addFlagImageLayer, flags/image-layers.js) already
+  // can't collide with a zone placement id or the 'back-' prefix above.
+  (S.imageLayers || []).forEach(layer => {
+    if (layer.src) refs.push({ id: layer.id, src: layer.src });
+  });
+  return refs;
+}
+
+// Every hole-sign template logo slot that actually has an image in it right
+// now (an empty slot has nothing to replace) — 'slot-<index>' as the id
+// since slots carry no id of their own, stable for as long as the template's
+// slot count/order doesn't change mid-review.
+function hsLogoRefs(v) {
+  const slots = effectiveHsState(v)?.templateLogos?.slots || [];
+  return slots
+    .map((slot, i) => (slot?.logoSrc ? { id: 'slot-' + i, src: slot.logoSrc } : null))
+    .filter(Boolean);
+}
+
+// Renders one row per current logo (`logoRefs`), each with its own "Replace
+// logo" button, plus one trailing "Add a logo" row that isn't tied to
+// replacing anything — covers both a variation with no logo placed yet (no
+// row to attach a replacement to) and a variation that already has one but
+// the customer just wants to add another rather than swap it out. Only one
+// pending upload is tracked per variation (requestedLogoFile/
+// requestedLogoTargetId on the fb object, matching the single
+// requested_logo_url/path/target_id columns it's ultimately submitted as) —
+// picking a different row's button just moves the pending state to that
+// row, same as requestedColors/requestedFlagId already being overwritten
+// wholesale on each edit rather than accumulating a history. A pending
+// upload with no target (the "Add" row) is told apart from "not chosen yet"
+// by requestedLogoFile itself being set — requestedLogoTargetId is only
+// ever falsy-but-meaningful once a file exists alongside it.
+function renderLogoReplaceRows(listEl, logoRefs, map, variationId) {
+  const rerender = () => renderLogoReplaceRows(listEl, logoRefs, map, variationId);
+  listEl.innerHTML = '';
+  const fb = map[variationId] || {};
+
+  if (!logoRefs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'rv-qp-empty';
+    empty.textContent = 'No logo placed on this design yet.';
+    listEl.appendChild(empty);
+  }
+
+  logoRefs.forEach(ref => {
+    const isPending = !!fb.requestedLogoFile && fb.requestedLogoTargetId === ref.id;
+    const row = document.createElement('div');
+    row.className = 'rv-qp-logo-item';
+    row.innerHTML = `
+      <div class="rv-qp-logo-thumb"><img src="${esc(ref.src)}" alt=""></div>
+      ${isPending ? `
+        <i class="fa-solid fa-right-left rv-qp-swap-icon" aria-hidden="true"></i>
+        <div class="rv-qp-logo-thumb rv-qp-logo-new"></div>
+        <button type="button" class="rv-qp-logo-remove-btn" title="Remove"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      ` : `
+        <button type="button" class="rv-qp-logo-replace-btn">Replace logo</button>
+        <input type="file" accept="image/*" class="rv-qp-file" hidden>
+      `}`;
+    listEl.appendChild(row);
+
+    if (isPending) {
+      const objUrl = URL.createObjectURL(fb.requestedLogoFile);
+      row.querySelector('.rv-qp-logo-new').innerHTML = `<img src="${objUrl}" alt="">`;
+      row.querySelector('.rv-qp-logo-remove-btn').addEventListener('click', () => {
+        URL.revokeObjectURL(objUrl);
+        delete fb.requestedLogoFile;
+        delete fb.requestedLogoTargetId;
+        rerender();
+      });
+    } else {
+      const fileInput = row.querySelector('.rv-qp-file');
+      row.querySelector('.rv-qp-logo-replace-btn').addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', e => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (!map[variationId]) map[variationId] = {};
+        map[variationId].requestedLogoFile = file;
+        map[variationId].requestedLogoTargetId = ref.id;
+        rerender();
+      });
+    }
+  });
+
+  const addPending = !!fb.requestedLogoFile && !fb.requestedLogoTargetId;
+  const addRow = document.createElement('div');
+  addRow.className = 'rv-qp-logo-item';
+  addRow.innerHTML = addPending ? `
+    <div class="rv-qp-logo-thumb rv-qp-logo-new"></div>
+    <span class="rv-qp-logo-add-label">New logo</span>
+    <button type="button" class="rv-qp-logo-remove-btn" title="Remove"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+  ` : `
+    <button type="button" class="rv-qp-logo-replace-btn"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add a logo</button>
+    <input type="file" accept="image/*" class="rv-qp-file" hidden>
+  `;
+  listEl.appendChild(addRow);
+
+  if (addPending) {
+    const objUrl = URL.createObjectURL(fb.requestedLogoFile);
+    addRow.querySelector('.rv-qp-logo-new').innerHTML = `<img src="${objUrl}" alt="">`;
+    addRow.querySelector('.rv-qp-logo-remove-btn').addEventListener('click', () => {
+      URL.revokeObjectURL(objUrl);
+      delete fb.requestedLogoFile;
+      delete fb.requestedLogoTargetId;
+      rerender();
+    });
+  } else {
+    const fileInput = addRow.querySelector('.rv-qp-file');
+    addRow.querySelector('.rv-qp-logo-replace-btn').addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', e => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (!map[variationId]) map[variationId] = {};
+      map[variationId].requestedLogoFile = file;
+      delete map[variationId].requestedLogoTargetId;
+      rerender();
+    });
+  }
+}
+
+function wireFlagQuickPicks(card, v) {
+  const stylesEl = card.querySelector('#rqpStyles-' + v.id);
+  const colorsEl = card.querySelector('#rqpColors-' + v.id);
+  const logoListEl = card.querySelector('#rqpLogoList-' + v.id);
+  if (!stylesEl || !colorsEl || !logoListEl) return;
+  renderLogoReplaceRows(logoListEl, flagLogoRefs(v), localFeedback, v.id);
+
+  const setRequested = (patch) => {
+    localFeedback[v.id] = { ...(localFeedback[v.id] || {}), ...patch };
+  };
+
+  // A previously chosen "different flag style" (from earlier in this same
+  // session — this card is rebuilt from scratch on every renderPage(), but
+  // localFeedback[v.id] survives that) still counts as the reviewer's actual
+  // current selection, not the variation's own flag — otherwise a later
+  // unrelated re-render would silently snap the colors section below back
+  // to the ORIGINAL flag's zones even though requestedFlagId still points
+  // at the new one.
+  const requestedFlagId = localFeedback[v.id]?.requestedFlagId;
+  const initialFlag = FLAGS.find(f => f.id === requestedFlagId) || getVarFlag(v);
+
+  FLAGS.forEach(f => {
+    const opt = document.createElement('div');
+    opt.className = 'rv-qp-style-opt' + (f.id === requestedFlagId ? ' selected' : '');
+    opt.dataset.flagId = f.id;
+    const thumb = document.createElement('div');
+    thumb.className = 'rv-qp-style-thumb';
+    opt.appendChild(thumb);
+    const label = document.createElement('div');
+    label.className = 'rv-qp-style-name';
+    label.textContent = f.name;
+    opt.appendChild(label);
+    renderInto(thumb, [], 'front', false, f, getVarColors(v));
+    opt.addEventListener('click', () => {
+      stylesEl.querySelectorAll('.rv-qp-style-opt.selected').forEach(el => el.classList.remove('selected'));
+      opt.classList.add('selected');
+      setRequested({ requestedFlagId: f.id });
+      // Different flag styles carry different color zones (e.g. Bristol's
+      // primary/secondary/border vs. Plain's primary only) — re-render for
+      // the newly picked flag's own zones rather than leaving whatever the
+      // previous style's rows happened to be.
+      renderColorZoneRows(colorsEl, f, v);
+    });
+    stylesEl.appendChild(opt);
+  });
+
+  renderColorZoneRows(colorsEl, initialFlag, v);
+}
+
+// One row per color zone `flag` actually has — called both up front and
+// again whenever the reviewer picks a different flag style in the section
+// above, since switching styles can change which zones exist at all:
+//  - a zone the new flag doesn't have just isn't rendered anymore (and any
+//    already-picked value for it is dropped from requestedColors, so a
+//    resubmit doesn't carry a color request for a zone that no longer
+//    applies), and
+//  - a zone that's newly there defaults the same way the main designer's
+//    own Step 2 does (see resolveColors, render.js): white for a plain
+//    zone, or the secondary/primary color for a border zone — not left
+//    blank, so the reviewer can see and adjust it rather than having to
+//    notice it's missing.
+function renderColorZoneRows(colorsEl, flag, v) {
+  colorsEl.innerHTML = '';
+  const zones = flag?.colorZones || [];
+  const zoneIds = new Set(zones.map(z => z.id));
+
+  const fb = localFeedback[v.id];
+  if (fb?.requestedColors) {
+    const pruned = Object.fromEntries(Object.entries(fb.requestedColors).filter(([id]) => zoneIds.has(id)));
+    fb.requestedColors = Object.keys(pruned).length ? pruned : undefined;
+  }
+
+  const resolvedDefaults = resolveColors(getVarColors(v), flag);
+  zones.forEach(zone => {
+    const row = document.createElement('div');
+    row.className = 'rv-qp-color-row';
+    const currentHex = localFeedback[v.id]?.requestedColors?.[zone.id] || resolvedDefaults[zone.id] || '#FFFFFF';
+    row.innerHTML = `
+      <span class="rv-qp-color-label">${esc(zone.label)}</span>
+      <input type="color" class="rv-qp-swatch" value="${currentHex}">
+      <input type="text" class="rv-qp-hex" value="${currentHex}" maxlength="7">`;
+    const swatchEl = row.querySelector('.rv-qp-swatch');
+    const hexEl = row.querySelector('.rv-qp-hex');
+    const commit = (hex) => {
+      const requested = { ...(localFeedback[v.id]?.requestedColors || {}), [zone.id]: hex };
+      localFeedback[v.id] = { ...(localFeedback[v.id] || {}), requestedColors: requested };
+    };
+    swatchEl.addEventListener('input', e => { hexEl.value = e.target.value; commit(e.target.value); });
+    hexEl.addEventListener('input', e => {
+      const hex = e.target.value.startsWith('#') ? e.target.value : '#' + e.target.value;
+      if (/^#[0-9A-Fa-f]{6}$/.test(hex)) { swatchEl.value = hex; commit(hex); }
+    });
+    colorsEl.appendChild(row);
+  });
 }
 
 function buildHsCard(v, fb) {
@@ -483,6 +893,7 @@ function buildHsCard(v, fb) {
       </div>
       <div class="rv-note-wrap${effectiveStatus === 'needs_edits' ? ' visible' : ''}" id="hsnw-${v.id}">
         <textarea class="rv-note" id="hsnote-${v.id}" placeholder="What needs to change?">${effectiveStatus === 'needs_edits' ? (fb.note || '') : ''}</textarea>
+        ${quickPicksHtml('hs', v.id)}
       </div>`;
 
   const lockedNote = (isLocked && fb?.note)
@@ -521,92 +932,220 @@ function buildHsCard(v, fb) {
       if (!localHsFeedback[v.id]) localHsFeedback[v.id] = {};
       localHsFeedback[v.id].note = e.target.value;
     });
+    wireHsQuickPicks(card, v);
   }
 
   return card;
 }
 
+function wireHsQuickPicks(card, v) {
+  const stylesEl = card.querySelector('#hsqpStyles-' + v.id);
+  const colorsEl = card.querySelector('#hsqpColors-' + v.id);
+  const logoListEl = card.querySelector('#hsqpLogoList-' + v.id);
+  if (!stylesEl || !colorsEl || !logoListEl) return;
+  renderLogoReplaceRows(logoListEl, hsLogoRefs(v), localHsFeedback, v.id);
+
+  const setRequested = (patch) => {
+    localHsFeedback[v.id] = { ...(localHsFeedback[v.id] || {}), ...patch };
+  };
+
+  if (HS_DEFAULT_TEMPLATES.length) {
+    const select = document.createElement('select');
+    select.className = 'rv-qp-select';
+    select.innerHTML = '<option value="">Keep current template</option>' +
+      HS_DEFAULT_TEMPLATES.map(t => `<option value="default:${t.id}">${esc(t.name)}</option>`).join('');
+    select.addEventListener('change', e => {
+      setRequested({ requestedTemplateId: e.target.value || undefined });
+    });
+    stylesEl.appendChild(select);
+  } else {
+    stylesEl.innerHTML = '<div class="rv-qp-empty">No alternate templates available yet — describe what you\'d like in the note above.</div>';
+  }
+
+  const state = effectiveHsState(v) || {};
+  const colorFields = [
+    { key: 'background', label: 'Background', hex: state.background?.color },
+    { key: 'topText',    label: 'Top text',    hex: state.topText?.color },
+    { key: 'bottomText', label: 'Bottom text', hex: state.bottomText?.color },
+  ];
+  colorFields.forEach(({ key, label, hex: currentHex }) => {
+    const hex = currentHex || '#111110';
+    const row = document.createElement('div');
+    row.className = 'rv-qp-color-row';
+    row.innerHTML = `
+      <span class="rv-qp-color-label">${esc(label)}</span>
+      <input type="color" class="rv-qp-swatch" value="${hex}">
+      <input type="text" class="rv-qp-hex" value="${hex}" maxlength="7">`;
+    const swatchEl = row.querySelector('.rv-qp-swatch');
+    const hexEl = row.querySelector('.rv-qp-hex');
+    const commit = (h) => {
+      const requested = { ...(localHsFeedback[v.id]?.requestedColors || {}), [key]: h };
+      setRequested({ requestedColors: requested });
+    };
+    swatchEl.addEventListener('input', e => { hexEl.value = e.target.value; commit(e.target.value); });
+    hexEl.addEventListener('input', e => {
+      const h = e.target.value.startsWith('#') ? e.target.value : '#' + e.target.value;
+      if (/^#[0-9A-Fa-f]{6}$/.test(h)) { swatchEl.value = h; commit(h); }
+    });
+    colorsEl.appendChild(row);
+  });
+}
+
 // ── Submit ────────────────────────────────────────────────────────────────────
 
-window.submitReview = async function () {
-  const btn = document.getElementById('rvSubmit');
-  const reviewerName = document.getElementById('reviewerName')?.value.trim() || '';
+// Builds one variation_feedback row, uploading a pending quick-pick logo
+// file first (if any). Quick-pick fields the customer didn't touch are
+// written as explicit null — a fresh "Request edits" submission fully
+// replaces whatever was requested last time, same semantics note/status
+// already have via the same upsert (see submitFeedback, src/supabase.js).
+// Shared by both tabs' independent submitProductReview() calls below.
+async function buildFeedbackRow(variation_id, fb, reviewerName, reviewerEmail, generalNote, kind) {
+  let requested_logo_url = null, requested_logo_path = null;
+  if (fb.requestedLogoFile) {
+    const uploaded = await uploadFeedbackLogo(projectId, variation_id, fb.requestedLogoFile, reviewClient);
+    requested_logo_url = uploaded.url;
+    requested_logo_path = uploaded.storagePath;
+  }
+  return {
+    variation_id,
+    status: fb.status,
+    note: fb.note || '',
+    reviewer_name: reviewerName || null,
+    reviewer_email: reviewerEmail || null,
+    general_note: generalNote || null,
+    resolved: false,
+    requested_flag_id: kind === 'flags' ? (fb.requestedFlagId || null) : null,
+    requested_template_id: kind === 'hole-signs' ? (fb.requestedTemplateId || null) : null,
+    requested_colors: (fb.requestedColors && Object.keys(fb.requestedColors).length) ? fb.requestedColors : null,
+    requested_logo_url,
+    requested_logo_path,
+    requested_logo_target_id: fb.requestedLogoFile ? (fb.requestedLogoTargetId || null) : null,
+  };
+}
 
-  const toItems = (map) => Object.entries(map)
-    .filter(([, fb]) => fb.status)
-    .map(([variation_id, fb]) => ({ variation_id, status: fb.status, note: fb.note || '', reviewer_name: reviewerName || null, resolved: false }));
+// Submits feedback for exactly one product type (`kind`: 'flags' or
+// 'hole-signs') — the two tabs are independently submittable, so a reviewer
+// can finish flags now and come back for hole signs later without either
+// blocking the other. Flags and hole signs each have their own status
+// (flag_config.status / hole_sign_config.status), so syncProofStatus()
+// below only looks at THIS tab's variations and advances only this
+// design's status, not the other tab's.
+window.submitProductReview = async function (kind) {
+  const isFlags = kind === 'flags';
+  const map = isFlags ? localFeedback : localHsFeedback;
+  const submittedSet = isFlags ? submittedFlags : submittedHs;
+  const btnId = isFlags ? 'rvSubmit' : 'hsRvSubmit';
+  const label = isFlags ? 'Submit flag feedback' : 'Submit hole sign feedback';
+  const btn = document.getElementById(btnId);
+  const reviewerName = document.getElementById('reviewerName')?.value.trim() || previousReviewerName || '';
+  const reviewerEmail = document.getElementById('reviewerEmail')?.value.trim() || previousReviewerEmail || '';
+  const generalNote = document.getElementById('reviewerGeneralNote')?.value.trim() || previousGeneralNote || '';
 
-  const flagItems = toItems(localFeedback);
-  const hsItems   = toItems(localHsFeedback);
+  if (!reviewerName) {
+    alert('Please enter your full name before submitting.');
+    return;
+  }
+  if (!reviewerEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reviewerEmail)) {
+    alert('Please enter a valid email address before submitting.');
+    return;
+  }
 
-  if (!flagItems.length && !hsItems.length) {
+  const hasDecisions = Object.values(map).some(fb => fb.status);
+  if (!hasDecisions) {
     alert('Please approve or request edits on at least one variation before submitting.');
     return;
   }
 
-  btn.textContent = 'Submitting…';
-  btn.disabled = true;
+  if (btn) { btn.textContent = 'Submitting…'; btn.disabled = true; }
+
+  let items;
+  try {
+    items = await Promise.all(
+      Object.entries(map)
+        .filter(([, fb]) => fb.status)
+        .map(([variation_id, fb]) => buildFeedbackRow(variation_id, fb, reviewerName, reviewerEmail, generalNote, kind))
+    );
+  } catch (err) {
+    console.error('Uploading requested logo failed:', err);
+    if (btn) { btn.innerHTML = `${label} <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>`; btn.disabled = false; }
+    alert('Something went wrong uploading your logo. Please try again.');
+    return;
+  }
 
   try {
-    if (flagItems.length) await submitFeedback(projectId, 'flags', flagItems, reviewClient);
-    if (hsItems.length)   await submitFeedback(projectId, 'hole-signs', hsItems, reviewClient);
+    await submitFeedback(projectId, kind, items, reviewClient);
+    items.forEach(it => submittedSet.add(it.variation_id));
+    if (reviewerName) previousReviewerName = reviewerName;
+    if (reviewerEmail) previousReviewerEmail = reviewerEmail;
+    if (generalNote) previousGeneralNote = generalNote;
 
-    const outcome = await syncProofStatus(reviewerName);
-    renderSuccessScreen(outcome);
+    const outcome = await syncProofStatus(kind, reviewerName, reviewerEmail, generalNote);
+    if (outcome === 'partial' || outcome === 'approved') {
+      // Stay on the review page rather than taking over the whole screen —
+      // an approval only covers THIS tab's design; the reviewer may still
+      // have another product type (the other tab) left to review, and a
+      // full-page takeover would block them from switching to it. The
+      // "sent to print" confirmation shows inline, scoped to this tab, via
+      // the instructions banner's activeApproved branch below the tabs.
+      renderPage(currentProject);
+    } else {
+      renderSuccessScreen();
+    }
   } catch (err) {
     console.error('Submit failed:', err);
-    btn.innerHTML = 'Submit feedback <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>';
-    btn.disabled = false;
+    if (btn) { btn.innerHTML = `${label} <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>`; btn.disabled = false; }
     alert('Something went wrong submitting your feedback. Please try again.');
   }
 };
 
-// Whole-project status transition, layered on top of the per-variation
-// variation_feedback writes above. Only fires once every variation (flags +
-// hole signs) has a decision recorded in localFeedback/localHsFeedback -
-// firing on a partial submission would unlock editing before the reviewer
-// finishes the rest. Safe to call on a stray double-submit: the RPC's own
-// "wrong source status" precondition error is expected once the project has
-// already moved past proof_sent, and is swallowed as a no-op rather than
-// surfaced to the reviewer.
-async function syncProofStatus(reviewerName) {
-  const flagStatuses = S.variations.map(v => localFeedback[v.id]?.status).filter(Boolean);
-  const hsStatuses = hsVariations.map(v => localHsFeedback[v.id]?.status).filter(Boolean);
-  const total = S.variations.length + hsVariations.length;
-  const allDecided = total > 0 && (flagStatuses.length + hsStatuses.length) === total;
+// Per-design-type status transition, layered on top of the per-variation
+// variation_feedback writes above. Only fires once every variation of THIS
+// design (`kind`) has a decision recorded - firing on a partial submission
+// would unlock editing before the reviewer finishes the rest. The other
+// design type's status is untouched, whatever state it's in. Safe to call
+// on a stray double-submit: the RPC's own "wrong source status"
+// precondition error is expected once this design has already moved past
+// proof_sent, and is swallowed as a no-op rather than surfaced to the
+// reviewer.
+async function syncProofStatus(kind, reviewerName, reviewerEmail, generalNote) {
+  const variations = kind === 'flags' ? S.variations : hsVariations;
+  const map = kind === 'flags' ? localFeedback : localHsFeedback;
+  const statuses = variations.map(v => map[v.id]?.status).filter(Boolean);
+  const allDecided = variations.length > 0 && statuses.length === variations.length;
   if (!allDecided) return 'partial';
 
-  const allApprovedNow = flagStatuses.every(s => s === 'approved') && hsStatuses.every(s => s === 'approved');
+  const allApprovedNow = statuses.every(s => s === 'approved');
+  const projectUrl = `${window.location.origin}/project?project=${projectId}`;
   try {
     if (allApprovedNow) {
-      await clientApproveProof(projectId, reviewClient);
+      await clientApproveDesignProof(projectId, kind, reviewClient);
+      sendReviewDecision({ decision: 'approved', projectName, projectId, projectUrl, reviewerName: reviewerName || undefined, reviewerEmail: reviewerEmail || undefined, generalNote: generalNote || undefined })
+        .catch(err => console.error('sendReviewDecision failed', err));
       return 'approved';
     }
     const note = `${reviewerName ? reviewerName + ': ' : ''}See per-variation feedback for details.`;
-    await clientRejectProof(projectId, note, reviewClient);
+    await clientRejectDesignProof(projectId, kind, note, reviewClient);
+    sendReviewDecision({ decision: 'changes_requested', projectName, projectId, projectUrl, note, reviewerName: reviewerName || undefined, reviewerEmail: reviewerEmail || undefined, generalNote: generalNote || undefined })
+      .catch(err => console.error('sendReviewDecision failed', err));
     return 'rejected';
   } catch (err) {
     const msg = err?.message || '';
-    if (msg.includes('cannot approve proof from status') || msg.includes('cannot reject proof from status')) {
+    if (msg.includes('cannot approve') || msg.includes('cannot reject')) {
       console.warn('Proof status already transitioned, skipping:', msg);
-    } else {
-      console.error('Failed to update proof status:', err);
+      return allApprovedNow ? 'approved' : 'rejected';
     }
-    return allApprovedNow ? 'approved' : 'rejected';
+    console.error('Failed to update proof status:', err);
+    throw err;
   }
 }
 
-function renderSuccessScreen(outcome) {
-  const goToProjectCta = outcome === 'rejected'
-    ? `<a class="rv-submit-btn" style="display:inline-flex;margin-top:1.5rem;text-decoration:none" href="/login?next=${encodeURIComponent('/project?project=' + projectId)}">Go to your project</a>`
-    : '';
+function renderSuccessScreen() {
   root.innerHTML = `
     <div class="rv-root">
       <div class="rv-success">
         <span class="rv-success-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>
         <div class="rv-success-title">Feedback submitted</div>
         <div class="rv-success-sub">The design team will review your feedback and be in touch shortly.</div>
-        ${goToProjectCta}
       </div>
     </div>`;
 }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GolfStatus Design Studio — Gallery</title>
+  <title>GolfStatus Design Studio — Review</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
@@ -25,40 +25,7 @@
     <div class="panel visible" id="panel-5">
       <div class="hs-design-layout">
         <div class="hs-design-preview-col">
-          <div id="varList" class="var-list"></div>
-        </div>
-        <div class="hs-design-controls">
-          <div class="p1-header hs-panel-header">
-            <div>
-              <div class="ptitle">Gallery</div>
-              <div class="psub">Review all variations and export.</div>
-            </div>
-            <div class="p1-header-actions">
-              <button class="btn sm" id="backToVariationsBtn"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Variations</button>
-            </div>
-          </div>
-          <div class="hs-design-controls-body">
-            <div class="hs-stack-section">
-              <button class="btn sm primary" style="width:100%;justify-content:center" onclick="expAllPDF()"><i class="fa-solid fa-download" aria-hidden="true"></i> Download all as PDF</button>
-            </div>
-            <div class="share-section">
-              <div class="rc-title">Print files</div>
-              <button class="btn sm primary" style="width:100%;justify-content:center" id="expPrintPdfBtn" onclick="downloadForPrint()"><i class="fa-solid fa-download" aria-hidden="true"></i> Print download (PDF zip)</button>
-              <div id="expPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px"></div>
-              <button class="btn sm" style="width:100%;justify-content:center" onclick="sendToPrestige()"><i class="fa-solid fa-envelope" aria-hidden="true"></i> Send to Prestige Flag</button>
-            </div>
-            <div class="share-section" id="submitSection"></div>
-            <div class="share-section" id="shareSection">
-              <div class="rc-title">Share for review</div>
-              <div id="shareStatus" style="font-size:13px;color:var(--gray-400);min-height:16px"></div>
-              <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openShareModal()">Share for review <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
-            </div>
-            <div class="share-section" id="emailPrintSheetSection" style="display:none">
-              <div class="rc-title">Email PDF sheet link</div>
-              <div id="emailPrintSheetIdleStatus" style="font-size:13px;color:var(--gray-400);min-height:16px"></div>
-              <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openEmailPrintSheetModal()">Email PDF sheet link <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
-            </div>
-          </div>
+          <div id="varList" class="var-list" style="max-width:1000px;margin:0 auto;padding:56px 24px"></div>
         </div>
       </div>
     </div>
@@ -86,29 +53,7 @@
   </div>
 </div>
 
-<!-- Email print sheet modal (staff/admin only) -->
-<div class="share-modal-overlay" id="emailPrintSheetModalOverlay" style="display:none" onclick="closeEmailPrintSheetModal(event)">
-  <div class="share-modal">
-    <div class="share-modal-header">
-      <span class="share-modal-title">Email PDF sheet link</span>
-      <button class="share-modal-close" onclick="closeEmailPrintSheetModal()" aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
-    </div>
-    <div class="share-modal-body">
-      <p style="font-size:13px;color:var(--gray-500);line-height:1.5;margin:0 0 1rem">This renders the full print-quality PDF sheet, uploads it privately, and emails a download link that expires in 7 days — not the customer-facing review link above.</p>
-      <p class="share-modal-label">Send to</p>
-      <input class="share-email-input" id="emailPrintSheetEmailInput" type="email" placeholder="vendor@example.com">
-      <div id="emailPrintSheetStatus" style="font-size:13px;color:var(--gray-400);min-height:16px;margin-top:6px"></div>
-      <button class="btn sm primary" style="width:100%;justify-content:center;margin-top:8px" onclick="sendPrintSheetEmail()">Send link</button>
-    </div>
-  </div>
-</div>
 
 <script type="module" src="/src/flags/gallery.js"></script>
-<script>
-  document.getElementById('backToVariationsBtn').addEventListener('click', () => {
-    const p = new URLSearchParams(window.location.search).get('project');
-    if (p) window.location.href = 'flags-variations?project=' + p;
-  });
-</script>
 </body>
 </html>

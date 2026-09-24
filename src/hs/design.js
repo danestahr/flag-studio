@@ -2,7 +2,7 @@ import { HS, UI, defaultCaptionsEdited, eyedropperBtn, mergeBanner } from './sta
 import './text-layers.js';
 import { goStep } from './app.js';
 import { HS_BANNER_EDGE_PX, bannerSource, clearBannerPreview, dockOverlapHit, getDockedSiblings, hitTestDockZone, previewLogoZoneShrink, redrawBannerStructural, reflowBannerSvg, renderBannerSection, showBannerPreview, showBannerShrinkGhost, syncDockedLayerOverlays, syncLogoZone, wireBannerHeightHandles, wireBannerSpacingHandles, wireCanvasTextEditing, wireElementDrag } from './banner.js';
-import { applyTlSlotImgStyle, openTlLibPicker, openTlSidePanel, openTlSlotToolbar, closeTlSlotToolbar, deselectTlSlots, redrawTplPreview, renderTemplateLogoControls, renderTplSlotBody, snapTlSlotsToDefaults, tlSource } from './template-logos.js';
+import { applyTlSlotImgStyle, openTlLibPicker, openTlSidePanel, openTlSlotToolbar, closeTlSlotToolbar, deselectTlSlots, redrawTplPreview, renderTemplateLogoControls, renderTemplateLogoTileItems, renderTplSlotBody, snapTlSlotsToDefaults, tlSource } from './template-logos.js';
 import { applyHsStep1Zoom, initHsStep1Canvas } from './var-canvas.js';
 import { applyQuickLogoSlot, applyQuickTextLayer, beginQuickEdit } from './var-editor.js';
 import { cropSvgToArtwork, hideHsToolbar } from './logo-utils.js';
@@ -15,6 +15,7 @@ import { fileTypeLabel, isDisplayableImage } from '../media-utils.js';
 import { clampPanToBg, clipToCanvas, createImageBox, layoutImgDragThumb, loadNaturalImgSize } from '../image-box.js';
 import { findAxisSnap, hideAlignGuides, setAlignGuide } from '../align-guides.js';
 import { commitActiveCanvasEdit, positionFloatingToolbar } from '../dom-utils.js';
+import { renderLogosTileShell } from '../sidebar.js';
 
 // Snapshot, at the very start of capture phase, whether a banner/text/image
 // element was selected right before this click — registered once here (on
@@ -247,6 +248,17 @@ window._refreshDesignTplSlot = function () {
   if (controls && UI.hsMenu === 'tplSlot') controls.innerHTML = renderDesignSection('tplSlot');
 };
 
+// Bridge for template-logos.js to refresh the sidebar's Template logos tile
+// after a slot's thumbnail changes (Replace, background removal) without a
+// full renderStep1() — mirrors _refreshDesignTplSlot above. Not relevant
+// while editing a variation's own template logos (that surface has no
+// sidebar logos tile of its own) or before a template is chosen.
+window._refreshDesignLogosTile = function () {
+  if (UI.hsOnboarding || HS.editingVarId) return;
+  const items = document.getElementById('sidebarLogosTile')?.querySelector('.hslt-items');
+  if (items) items.innerHTML = renderTemplateLogoTileItems();
+};
+
 window.openHsMenu = function (key) { UI.hsMenu = key; UI.hsMenuAnimate = true; renderStep1(); };
 
 // Update only the right controls panel without touching the canvas — used when
@@ -345,17 +357,24 @@ export function renderStep1() {
           </div>
         </div>
         <div class="hs-design-controls">
-          <div class="p1-header hs-panel-header">
-            <div>
-              <div class="ptitle">Choose a template</div>
-              <div class="psub">Pick a starting point — you can customise everything on the next screen.</div>
-            </div>
-            <div class="p1-header-actions">
-              <button class="btn primary" onclick="pickOnboardingBlankTemplate()">+ Create new template</button>
-            </div>
+          <div class="panel-project-id" style="text-align:right;padding-bottom:.75rem">
+            <div style="font-size:15px;font-weight:500;color:var(--black);line-height:1.3">${escXml(HS.projectName || '—')}</div>
+            <div style="font-size:11px;color:var(--gray-400);margin-top:3px">Hole Signs</div>
           </div>
         </div>
       </div>`;
+    document.getElementById('sidebarPanelHeader').innerHTML = `
+      <div class="p1-header hs-panel-header">
+        <div>
+          <div class="ptitle">Choose a template</div>
+          <div class="psub">Pick a starting point — you can customise everything on the next screen.</div>
+        </div>
+        <div class="p1-header-actions">
+          <button class="btn primary" onclick="pickOnboardingBlankTemplate()">+ Create new template</button>
+        </div>
+      </div>`;
+    const obLogosTile = document.getElementById('sidebarLogosTile');
+    if (obLogosTile) obLogosTile.innerHTML = '';
     HS_TEMPLATES.forEach(t => {
       const el = document.getElementById('hs-ob-' + t.id);
       if (el) renderHoleSignInto(el, layoutPreviewState(t.id));
@@ -389,21 +408,28 @@ export function renderStep1() {
         <div class="var-canvas-panel hs-canvas-bare" id="hsStep1CanvasPanel"></div>
       </div>
       <div class="hs-design-controls">
-        <div class="p1-header hs-panel-header">
-          <div>
-            <div class="ptitle">Templates</div>
-            <div class="psub">${editingTmpl
-              ? `Editing “${escXml(editingTmpl.name)}” — changes save automatically as a new template.`
-              : 'Choose a template, set the background, and configure text.'}</div>
-          </div>
-          <div class="p1-header-actions">
-            <button class="btn primary" onclick="goStep(2)">Save &amp; Continue <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
-            <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
-          </div>
+        <div class="panel-project-id" style="text-align:right;padding-bottom:.75rem">
+          <div style="font-size:15px;font-weight:500;color:var(--black);line-height:1.3">${escXml(HS.projectName || '—')}</div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:3px">Hole Signs</div>
         </div>
         <div class="hs-design-controls-body${animClass}" id="hsDesignControlsBody">${controlsInner}</div>
       </div>
     </div>`;
+  document.getElementById('sidebarPanelHeader').innerHTML = `
+    <div class="p1-header hs-panel-header">
+      <div>
+        <div class="ptitle">Templates</div>
+        <div class="psub">${editingTmpl
+          ? `Editing “${escXml(editingTmpl.name)}” — changes save automatically as a new template.`
+          : 'Choose a template, set the background, and configure text.'}</div>
+      </div>
+      <div class="p1-header-actions">
+        <button class="btn primary" onclick="goStep(2)">Save &amp; Continue <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+        <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
+      </div>
+    </div>`;
+  const logosItems = renderLogosTileShell('Logos');
+  if (logosItems) logosItems.innerHTML = renderTemplateLogoTileItems();
 
   window.goStep = goStep;
 

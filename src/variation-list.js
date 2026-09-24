@@ -20,14 +20,71 @@ function feedbackClass(fb) {
   return '';
 }
 
-export function renderVariationList(container, items, {
+// A card's own DOM node gets torn down and rebuilt by every render (see
+// renderVariationListNow below) — including ones triggered by something
+// unrelated to the click itself (e.g. the realtime variation_feedback
+// subscription in flags/variations.js and hs/app.js, which can fire from
+// another tab or another person reviewing the same project). If that
+// happens between a click's mousedown and mouseup, the browser drops the
+// click entirely, because its target no longer exists in the document —
+// the tile visually "presses" (the :active style engages on mousedown) but
+// selecting it silently does nothing. Queuing any render that arrives
+// mid-gesture and flushing it right after the click has fully resolved
+// (instead of applying it immediately and yanking the tile out from under
+// the pointer) avoids that without changing what a render actually shows.
+let mousedownOnCard = false;
+let pendingRender = null;
+
+function flushPendingRender() {
+  mousedownOnCard = false;
+  if (pendingRender) {
+    const { container, items, opts } = pendingRender;
+    pendingRender = null;
+    renderVariationListNow(container, items, opts);
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('mousedown', e => {
+    if (e.target.closest?.('.var-card')) mousedownOnCard = true;
+  }, true);
+  // Bubble (not capture) so this runs after the card's own click listener —
+  // by then the gesture is fully resolved either way, so applying a render
+  // that arrived mid-click is safe.
+  document.addEventListener('click', flushPendingRender);
+  // Fallback for a mousedown that never produces a click on this card (button
+  // released elsewhere, or a stopPropagation()'d click on a card's own
+  // edit/duplicate/qty controls never reaches the listener above) — nothing
+  // else would clear the flag otherwise.
+  document.addEventListener('mouseup', () => setTimeout(flushPendingRender, 0), true);
+}
+
+export function renderVariationList(container, items, opts) {
+  if (!container) return;
+  if (mousedownOnCard) {
+    pendingRender = { container, items, opts };
+    return;
+  }
+  renderVariationListNow(container, items, opts);
+}
+
+function renderVariationListNow(container, items, {
   activeId,
   thumbId,             // (item) => string id for the thumbnail element
   thumbClass = 'vthumb',
   renderThumb,          // (el, item) => void
+  // Optional independent-back preview, shown stacked under the front
+  // thumbnail for just the items it applies to — only the flag editor
+  // passes these (per-variation "Same Front & Back Design" toggle, see
+  // flags/variations.js's sameSidesOf); hole signs have no front/back
+  // concept and never set them.
+  showBackThumb = () => false,   // (item) => bool
+  backThumbId,          // (item) => string id for the back thumbnail element
+  renderBackThumb,      // (el, item) => void
   feedbackFor,          // (item) => feedback object | undefined
   badgeFor,             // (item) => extra badge html | '' (optional, e.g. "Customized")
   onSelect, onRename, onEdit, onDuplicate, onDelete, onQtyChange,
+  onViewEdits,          // (item) => void — shown only when feedbackFor(item) is an open request
 }) {
   if (!container) return;
   container.innerHTML = items.map(item => {
@@ -44,9 +101,13 @@ export function renderVariationList(container, items, {
         </div>
       </div>
       <div class="var-card-bottom">
-        <div class="${thumbClass}" id="${thumbId(item)}"></div>
+        <div class="vthumb-group">
+          <div class="${thumbClass}" id="${thumbId(item)}"></div>
+          ${showBackThumb(item) ? `<div class="vthumb-back-label">Back</div><div class="${thumbClass}" id="${backThumbId(item)}"></div>` : ''}
+        </div>
         <div class="var-card-meta">
           ${statusTileHtml(fb)}
+          ${fb?.status === 'needs_edits' && !fb?.resolved ? '<button type="button" class="var-view-edits-link" data-act="view-edits">View edits</button>' : ''}
           ${badgeFor?.(item) || ''}
           <div class="var-qty-row">
             <div class="qty-stepper">
@@ -72,6 +133,7 @@ export function renderVariationList(container, items, {
     card.querySelector('[data-act="edit"]').addEventListener('click', e => { e.stopPropagation(); onEdit?.(item); });
     card.querySelector('[data-act="dup"]').addEventListener('click', e => { e.stopPropagation(); onDuplicate?.(item); });
     card.querySelector('[data-act="del"]').addEventListener('click', e => { e.stopPropagation(); onDelete?.(item); });
+    card.querySelector('[data-act="view-edits"]')?.addEventListener('click', e => { e.stopPropagation(); onViewEdits?.(item); });
 
     const qtyInput = card.querySelector('.var-qty-input');
     card.querySelector('.var-qty-row').addEventListener('click', e => e.stopPropagation());
@@ -87,6 +149,10 @@ export function renderVariationList(container, items, {
 
     const thumbEl = document.getElementById(thumbId(item));
     if (thumbEl) renderThumb?.(thumbEl, item);
+    if (showBackThumb(item)) {
+      const backThumbEl = document.getElementById(backThumbId(item));
+      if (backThumbEl) renderBackThumb?.(backThumbEl, item);
+    }
   });
 }
 

@@ -1,8 +1,8 @@
-import { S, _dragLogoId, setDragLogoId } from '../state.js';
-import { getFlag, applyColors, showGsTagVariant, resolveColors, extractFrameElements } from '../render.js';
+import { S, _dragLogoId, setDragLogoId, findLogo } from '../state.js';
+import { getFlag, applyColors, showGsTagVariant, resolveColors, extractFrameElements, paintTextLayers, paintImageLayers } from '../render.js';
 import { uploadLogo } from '../supabase.js';
 import { logoThumbHtml } from '../media-utils.js';
-import { createImageBox } from '../image-box.js';
+import { createImageBox, enterCropEditOn } from '../image-box.js';
 
 let _onLibraryUpdated = () => {};
 let _ensureProject = async () => {};
@@ -97,6 +97,25 @@ document.addEventListener('keydown', e => {
   removeActiveLogo();
 });
 
+// Arrow keys nudge every selected logo image by 1 real screen px (10px with
+// Option/Alt held) — goes through image-box.js's own wrap._nudge so the
+// crop-carry/ghost/canvas-clamp logic that a drag gets stays shared, same as
+// the text-layer nudge in flags/text-layers.js. A multi-selection moves as a
+// block, same as Back/Front/Frame toggle above.
+document.addEventListener('keydown', e => {
+  if (_addActive || !_selectedIds.size || !_ctx) return;
+  const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  const d = arrows[e.key];
+  if (!d) return;
+  if (document.activeElement?.closest?.('input, textarea, select, [contenteditable]')) return;
+  e.preventDefault();
+  const step = e.altKey ? 10 : 1;
+  const dx = d[0] * step, dy = d[1] * step;
+  _selectedIds.forEach(id => {
+    _ctx.dz.querySelector(`.dz-logo-wrap[data-layer-id="${id}"]`)?._nudge?.(dx, dy);
+  });
+});
+
 function positionToolbar(anchorEl, show = false) {
   const tb = document.getElementById('dzToolbar');
   if (!tb || !anchorEl) return;
@@ -189,6 +208,15 @@ function showToolbar(anchorEl, isAdd) {
       : '<i class="fa-solid fa-arrow-up"></i> Above Template';
   }
 
+  const cropBtn = document.getElementById('dzTbCrop');
+  const cropSep = document.getElementById('dzTbCropSep');
+  cropBtn.style.display = isAdd ? 'none' : '';
+  cropSep.style.display = isAdd ? 'none' : '';
+  // Always just "Crop" — no "Uncrop" toggle-off. Clicking it re-engages
+  // crop-edit mode (see the click handler below) whether or not the layer
+  // is already cropped, same as double-clicking the image.
+  cropBtn.innerHTML = '<i class="fa-solid fa-crop-simple"></i> Crop';
+
   const picker = document.getElementById('dzLibPicker');
   picker.style.display = 'none';
   positionToolbar(anchorEl, true);
@@ -207,6 +235,8 @@ function ensureToolbar() {
     <div class="dz-tb-sep" id="dzTbOrderSep"></div>
     <button class="dz-tb-btn" id="dzTbFrame" title="Move relative to the template's border/tag frame"></button>
     <div class="dz-tb-sep" id="dzTbFrameSep"></div>
+    <button class="dz-tb-btn" id="dzTbCrop" title="Crop the logo to its box instead of showing the whole image"></button>
+    <div class="dz-tb-sep" id="dzTbCropSep"></div>
     <button class="dz-tb-btn" id="dzTbRemoveBg" title="Remove Background"><i class="fa-solid fa-wand-magic-sparkles"></i> Remove Background</button>
     <div class="dz-tb-sep" id="dzTbRemoveBgSep"></div>
     <div style="position:relative">
@@ -273,6 +303,24 @@ function ensureToolbar() {
     onChange();
   });
 
+  document.getElementById('dzTbCrop').addEventListener('click', () => {
+    if (_addActive || !_selectedIds.size || !_ctx) return;
+    const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
+    // Always (re-)engages crop-edit mode — no toggle-off. Jumps straight
+    // into it for exactly one selected layer, same landing spot as
+    // double-clicking the image; ambiguous (and skipped) for a
+    // multi-selection.
+    const editLayerId = _selectedIds.size === 1 ? [..._selectedIds][0] : null;
+    logos.forEach(l => { if (_selectedIds.has(l.id)) l.cropped = true; });
+    hideZoneToolbar();
+    renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
+    if (editLayerId) {
+      const freshWrap = document.getElementById(wrapId)?.querySelector(`.dz-logo-wrap[data-layer-id="${editLayerId}"]`);
+      enterCropEditOn(freshWrap);
+    }
+    onChange();
+  });
+
   document.getElementById('dzTbRemove').addEventListener('click', removeActiveLogo);
 
   document.getElementById('dzTbRemoveBg').addEventListener('click', async () => {
@@ -280,7 +328,7 @@ function ensureToolbar() {
     const layerId = [..._selectedIds][0];
     const { logos, dz, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = _ctx;
     const layer = logos.find(l => l.id === layerId);
-    const logo = layer && S.library.find(l => l.id === layer.logoId);
+    const logo = layer && findLogo(layer.logoId);
     if (!logo) return;
     const btn = document.getElementById('dzTbRemoveBg');
     const origHTML = btn.innerHTML;
@@ -341,8 +389,14 @@ function ensureToolbar() {
     } catch (err) { console.error('Upload failed', err); }
   });
 
+  // .dzone itself is excluded on purpose from nothing here — it's the whole
+  // (invisible, oversized relative to the logo it holds) placement-zone
+  // rectangle, not the placed logo. Only a click that actually lands on the
+  // toolbar or on a placed logo should keep the selection open; anywhere else
+  // in the zone is empty space and should deselect same as the rest of the
+  // canvas.
   document.addEventListener('click', e => {
-    if (!e.target.closest('#dzToolbar') && !e.target.closest('.dz-logo-wrap') && !e.target.closest('.dzone')) {
+    if (!e.target.closest('#dzToolbar') && !e.target.closest('.dz-logo-wrap')) {
       hideZoneToolbar();
     }
   });
@@ -379,6 +433,19 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
     const keyZone = flag.tagKeyZone || 'zone-primary';
     showGsTagVariant(svg, face, gst.mode, resolveColors(colors, flag)[keyZone]);
   }
+
+  // Template-level text/image layers (S.textLayers/S.imageLayers — Step 1's
+  // "Text"/"Images" rows) bake into this canvas's own SVG the same way
+  // makeSvg bakes them into an export, non-interactively — they're only ever
+  // edited from Step 1, so unlike a variation's own logos/text (below) they
+  // get no drop-zone/overlay of their own here. `face === 'back'` is
+  // unconditional (not `mirrorX`-gated like makeSvg) since this canvas always
+  // mirrors the template itself for the back face (see the svgContent `g`
+  // transform above).
+  const isBack = face === 'back';
+  const append = (el) => svg.appendChild(el);
+  paintTextLayers(S.textLayers, vbW, vbH, isBack, append);
+  paintImageLayers(S.imageLayers, vbW, vbH, isBack, append);
 
   // Relocate the template's frame (border + GS tag) into its own overlay
   // svg, appended after the logo layer, so it defaults to painting above
@@ -428,7 +495,7 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
 
   // Logo layers
   logos.forEach(layer => {
-    const logo = S.library.find(l => l.id === layer.logoId);
+    const logo = findLogo(layer.logoId);
     if (!logo) return;
 
     let logoWrap; // closed over by onClick below; assigned from createImageBox's return
@@ -436,6 +503,23 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
       src: logo.src,
       alt: logo.name,
       aboveFrame: layer.aboveFrame,
+      cropped: !!layer.cropped,
+      zoneSignW: zone.w,
+      zoneSignH: zone.h,
+      onCropChange: onChange,
+      // Double-clicking an image that isn't cropped yet — enable it, then
+      // re-render and resume straight into crop-edit mode on the fresh box
+      // (createImageBox can't switch a live box's visual from a plain <img>
+      // to the cropbox one, so this has to be a full rebuild).
+      onEnableCrop: () => {
+        layer.cropped = true;
+        renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
+        // renderDropZones rebuilds `dz` from scratch — the old `dz`/`wrap`
+        // closure above is now detached, so re-find the fresh box by id.
+        const freshWrap = document.getElementById(wrapId)?.querySelector(`.dz-logo-wrap[data-layer-id="${layer.id}"]`);
+        enterCropEditOn(freshWrap);
+        onChange();
+      },
       onStart: () => {
         const tb = document.getElementById('dzToolbar');
         if (tb) tb.style.visibility = 'hidden';

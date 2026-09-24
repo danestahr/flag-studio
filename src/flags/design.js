@@ -4,21 +4,24 @@ import { requireAuth, isStaffOrAdmin } from '../auth.js';
 
 const session = await requireAuth();
 
-import { S, setDragLogoId, DEFAULT_COLORS } from '../state.js';
-import { FLAGS, COLORS } from '../data.js';
+import { S, setDragLogoId, DEFAULT_COLORS, addCustomColor, allSwatches, navigateTo, mergeLibraries } from '../state.js';
+import { FLAGS } from '../data.js';
 import { getFlag, applyColors, showGsTagVariant, resolveColors } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
 import {
   createProject, updateProject, loadProject,
   saveFlagConfig, loadFlagConfig,
-  uploadLogo, loadLogosForProject, deleteLogo,
+  loadLogosForProject, deleteLogo,
+  uploadUserLogo, listUserLogos, deleteUserLogo,
   loadOrderIntake,
 } from '../supabase.js';
 import { initDropZones, renderDropZones, hideZoneToolbar } from './drop-zones.js';
+import { addFlagTextLayer, renderFlagTextOverlays } from './text-layers.js';
+import { addFlagImageLayer, renderFlagImageOverlays } from './image-layers.js';
 import { eyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
 import { esc } from '../dom-utils.js';
-import { logoThumbHtml } from '../media-utils.js';
-import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
+import { logoThumbHtml, downloadLogo } from '../media-utils.js';
+import { renderSidebar, setSidebarProjectName, paintCachedProjectName } from '../sidebar.js';
 import { renderCanvasPanel } from '../canvas-panel.js';
 import { refreshImageBoxClips } from '../image-box.js';
 
@@ -26,6 +29,11 @@ let isDirty = false;
 let _baseZoom = 100;
 let _flagExpZoom = 75;
 function safeHex(h) { return /^#[0-9A-Fa-f]{3,6}$/.test(h) ? h : '#cccccc'; }
+
+// Which Design-step submenu is drilled into — null shows the row list
+// (Style & Colors / Hole Numbers / Text / Images), mirroring hs/design.js's
+// UI.hsMenu pattern. Purely ephemeral UI state, not persisted.
+let p1Menu = null;
 
 renderCanvasPanel(document.getElementById('flagExpCanvasPanel'), {
   panelId: 'flagExpCanvasPanel',
@@ -72,7 +80,7 @@ function goStep(n) {
     if (i === n - 1) s.classList.add('active');
     else if (i < n - 1) s.classList.add('done');
   });
-  if (n === 1) renderP1Colors();
+  if (n === 1) renderFlagP1Controls();
   if (n === 2) setupColors();
   if (n === 3) setupLibrary();
   window.scrollTo(0, 0);
@@ -113,7 +121,14 @@ function refreshFlagExpanded() {
     const keyZone = flag.tagKeyZone || 'zone-primary';
     showGsTagVariant(svg, 'front', S.gsTagMode, resolveColors(S.colors, flag)[keyZone]);
   }
+  // Template-level Text/Images layers (Step 1's own rows — see the submenu
+  // below) — rebuilt on top of the fresh SVG every time it's replaced above,
+  // same as any other Step-1 canvas overlay in this app.
+  renderFlagTextOverlays('flagExpPreview', S.textLayers, onFlagLayersChange);
+  renderFlagImageOverlays('flagExpPreview', S.imageLayers, onFlagLayersChange);
 }
+
+function onFlagLayersChange() { markDirty(); }
 
 window.pickFlag = function (id) {
   if (S.flagId === id) return;
@@ -125,6 +140,130 @@ window.pickFlag = function (id) {
   syncSidebar();
   markDirty();
 };
+
+// ── Step 1 submenu (Style & Colors / Hole Numbers / Text / Images) ─────────
+// Mirrors the row-list + drill-in section pattern in hs/design.js
+// (renderDesignMenuList/renderDesignSection), reimplemented locally rather
+// than imported since the two designers' sections have no shared logic —
+// only the row-list markup/CSS classes are shared.
+
+const FLAG_P1_MENU_TITLES = {
+  colors: 'Style & Colors',
+  holeNumbers: 'Hole Numbers',
+};
+
+function flagP1MenuRow(key, label, hint, icon) {
+  const iconHtml = icon ? `<i class="fa-solid ${icon} hs-menu-row-icon" aria-hidden="true"></i>` : '';
+  return `
+    <button class="hs-menu-row" onclick="openFlagP1Menu('${key}')">
+      ${iconHtml}<span class="hs-menu-row-label">${label}</span>
+      <span class="hs-menu-row-hint">${hint}</span>
+      <span class="hs-menu-row-chev"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></span>
+    </button>`;
+}
+
+// An "add new" row — matches hs/design.js's addRow tile style (dashed,
+// accent-colored, no chevron/hint) instead of menuRow's drill-in look, since
+// Text/Images perform the add immediately on click rather than opening a
+// section. `onclick` is invoked directly, same as hs's Text/Images rows.
+function flagP1AddRow(label, onclick, icon) {
+  const iconHtml = icon ? `<i class="fa-solid ${icon} hs-menu-row-icon" aria-hidden="true"></i>` : '';
+  return `
+    <button class="hs-menu-row hs-menu-row-add" onclick="${onclick}">
+      ${iconHtml}<span class="hs-menu-row-label">${label}</span>
+    </button>`;
+}
+
+function flagP1SectionHeader(key) {
+  return `
+    <div class="hs-menu-section-header">
+      <button class="hs-menu-back" onclick="closeFlagP1Menu()"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
+      <span class="hs-menu-section-title">${FLAG_P1_MENU_TITLES[key] || ''}</span>
+    </div>`;
+}
+
+function renderFlagP1MenuList() {
+  const flag = getFlag();
+  const colorHint = flag && !flag.noColors
+    ? `<span class="hs-menu-swatch" style="background:${safeHex(S.colors['zone-primary'] || '#FFFFFF')}"></span><span class="hs-menu-swatch" style="background:${safeHex(S.colors['zone-secondary'] || '#111110')}"></span>`
+    : '';
+  const rows = [
+    flagP1MenuRow('colors', 'Style & Colors', colorHint, 'fa-palette'),
+    flagP1MenuRow('holeNumbers', 'Hole Numbers', 'Coming soon', 'fa-hashtag'),
+    flagP1AddRow('Text', 'addFlagP1Text()', 'fa-font'),
+    flagP1AddRow('Images', 'addFlagP1Image()', 'fa-image'),
+  ];
+  return `<div class="hs-menu-list">${rows.join('')}</div>`;
+}
+
+// Text/Images add straight to the canvas (S.textLayers/S.imageLayers) and
+// stay on the row list — unlike "Style & Colors"/"Hole Numbers" there's no
+// section to drill into; the new layer's own on-canvas toolbar/handles
+// (flags/text-layers.js, flags/image-layers.js) are what gets edited next,
+// same as hs/design.js's addTextLayer()/addTplImage().
+window.addFlagP1Text = function () {
+  addFlagTextLayer(S.textLayers, 'flagExpPreview', onFlagLayersChange);
+};
+window.addFlagP1Image = function () {
+  addFlagImageLayer(S.imageLayers, 'flagExpPreview', onFlagLayersChange);
+};
+
+function buildColorsSection() {
+  return `
+    ${flagP1SectionHeader('colors')}
+    <div class="p1zones p1-section" id="p1colorZones"></div>
+    <div id="gsTagSection" class="p1-section p1-section-divided">
+      <div class="zlabel">GolfStatus Tag</div>
+      <div class="gs-tag-row">
+        <label class="gs-tag-label">
+          <input type="checkbox" id="gsTagCheck" onchange="toggleGsTag(this.checked)" class="gs-toggle-input">
+          <span class="gs-toggle-switch"></span>
+          <span class="gs-toggle-text" id="gsTagToggleText">Off</span>
+        </label>
+        <div class="gs-mode-wrap" id="gsTagModeWrap" style="display:none">
+          <button class="gs-mode-btn active" id="gsMode-auto" onclick="setGsTagMode('auto')">Auto</button>
+          <button class="gs-mode-btn" id="gsMode-dark" onclick="setGsTagMode('dark')">Black</button>
+          <button class="gs-mode-btn" id="gsMode-light" onclick="setGsTagMode('light')">White</button>
+        </div>
+      </div>
+    </div>
+    <div id="flagStylesSection" class="p1-section">
+      <div class="zlabel">Flag Styles</div>
+      <div class="flag-grid" id="flagGrid"></div>
+    </div>`;
+}
+
+// Placeholder body for a submenu row whose functionality isn't built yet
+// (Hole Numbers awaits more requirements — see the CLAUDE.md note on the
+// planned per-hole workflow).
+function buildComingSoonSection(key, note) {
+  return `
+    ${flagP1SectionHeader(key)}
+    <div class="p1-section">
+      <div style="font-size:13px;color:var(--gray-400)">${note}</div>
+    </div>`;
+}
+
+function renderFlagP1Controls() {
+  const body = document.getElementById('flagP1ControlsBody');
+  if (!body) return;
+  if (p1Menu === 'colors') body.innerHTML = buildColorsSection();
+  else if (p1Menu === 'holeNumbers') body.innerHTML = buildComingSoonSection('holeNumbers', 'Per-hole number options are coming soon.');
+  else body.innerHTML = renderFlagP1MenuList();
+  body.classList.remove('hs-controls-enter');
+  void body.offsetWidth;
+  body.classList.add('hs-controls-enter');
+  if (p1Menu === 'colors') {
+    renderFlagGrid();
+    renderP1Colors();
+    syncGsTagUI();
+    refreshFlagPreviews();
+    checkStep1();
+  }
+}
+
+window.openFlagP1Menu = function (key) { p1Menu = key; renderFlagP1Controls(); };
+window.closeFlagP1Menu = function () { p1Menu = null; renderFlagP1Controls(); };
 
 // Custom-hex row (always visible, not a popover) + preset swatch grid for a
 // Step-1 zone. The leading swatch is a real <input type=color> once a color
@@ -142,7 +281,7 @@ function p1ZonePickerHtml(zid, hex) {
       ${eyedropperBtn(`p1Eyedrop('${zid}')`)}
     </div>
     <div class="swatch-grid" id="p1sg-${zid}">
-      ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${hex === c.hex ? 'sel' : ''}"
+      ${allSwatches().map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${hex === c.hex ? 'sel' : ''}"
         style="background:${c.hex}" title="${c.name}"
         onclick="pickColor('${zid}','${c.hex}')"></div>`).join('')}
     </div>`;
@@ -270,7 +409,7 @@ function s2ZonePickerHtml(zid) {
       ${eyedropperBtn(`cEyedrop('${zid}')`)}
     </div>
     <div class="swatch-grid" id="sg-${zid}">
-      ${COLORS.map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${hex === c.hex ? 'sel' : ''}"
+      ${allSwatches().map(c => `<div class="swatch ${c.hex === '#FFFFFF' ? 'ws' : ''} ${hex === c.hex ? 'sel' : ''}"
         style="background:${c.hex}" data-hex="${c.hex}" title="${c.name}"
         onclick="pickColor('${zid}','${c.hex}')"></div>`).join('')}
     </div>`;
@@ -318,6 +457,7 @@ function setupColors() {
 
 window.pickColor = function (zid, hex) {
   S.colors[zid] = hex;
+  addCustomColor(hex);
   // Full re-render (not just toggling .sel on the changed swatch) since the
   // border zone's preview can depend on whichever zone was just picked.
   renderP1Colors();
@@ -384,6 +524,12 @@ document.addEventListener('click', e => {
 
 // ── Step 3: Logo library ───────────────────────────────────
 
+// Every upload here becomes a shared logo (user_logos), reusable across all
+// of this user's projects — there's a single "Uploaded logos" section, not a
+// separate project-only vs. shared split. Logos already on the project from
+// before this change (project_logos rows, loaded alongside the shared ones
+// in mergeLibraries()) keep showing here too and stay deletable via
+// deleteLogo — only a newly uploaded logo is tagged `shared: true`.
 window.handleUpload = async function (e) {
   const files = Array.from(e.target.files);
   e.target.value = '';
@@ -398,8 +544,8 @@ window.handleUpload = async function (e) {
     renderLib();
     syncSidebar();
     try {
-      await ensureProject();
-      const logo = await uploadLogo(S.projectId, file);
+      const logo = await uploadUserLogo(file);
+      logo.shared = true;
       const idx = S.library.findIndex(l => l.id === tempId);
       if (idx !== -1) S.library[idx] = logo;
     } catch (err) {
@@ -420,9 +566,15 @@ function renderLib() {
       ondragstart="dragStart(event,'${l.id}')" ondragend="dragEnd('${l.id}')">
       ${logoThumbHtml(l.src, l.name)}
       <div class="lib-item-name">${l.uploading ? '<i class="fa-solid fa-upload" aria-hidden="true"></i> uploading…' : l.name}</div>
+      ${l.uploading ? '' : `<button class="lib-dl" onclick="downloadLibItem('${l.id}')"><i class="fa-solid fa-download" aria-hidden="true"></i></button>`}
       ${l.uploading ? '' : `<button class="lib-del" onclick="delLogo('${l.id}')"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>`}
     </div>`).join('');
 }
+
+window.downloadLibItem = function (id) {
+  const logo = S.library.find(l => l.id === id);
+  if (logo) downloadLogo(logo.src, logo.name);
+};
 
 window.delLogo = async function (id) {
   const logo = S.library.find(l => l.id === id);
@@ -437,7 +589,9 @@ window.delLogo = async function (id) {
   renderDropZones('baseWrap', 'baseSvg', S.baseAssignment);
   syncSidebar();
   if (logo?.storagePath) {
-    try { await deleteLogo(logo.storagePath, logo.id); } catch (err) { console.error('Storage delete failed', err); }
+    try {
+      await (logo.shared ? deleteUserLogo(logo.storagePath, logo.id) : deleteLogo(logo.storagePath, logo.id));
+    } catch (err) { console.error('Storage delete failed', err); }
   }
 };
 
@@ -488,35 +642,6 @@ window.setProjectName = function (val) {
   markDirty();
 };
 
-// ── Customer section ───────────────────────────────────────
-
-function renderCustomerSection(intake) {
-  const el = document.getElementById('customerSection');
-  if (!el) return;
-  const fmt = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
-  const addr = [intake.address_line1, intake.address_line2, intake.city, intake.state_province, intake.postal_code, intake.country].filter(Boolean).join(', ');
-  // flag_colors is either a legacy bare array (old orders) or { zones, gsTag, gsTagMode } (see order.js)
-  const colors = Array.isArray(intake.flag_colors) ? intake.flag_colors : (intake.flag_colors?.zones || []);
-  el.innerHTML = `
-    <div class="sdivider"></div>
-    <div class="cs-wrap">
-      <div class="cs-header" onclick="this.nextElementSibling.classList.toggle('hidden');this.querySelector('.cs-toggle').classList.toggle('open')">
-        <span class="cs-title">Customer</span><span class="cs-toggle open">▾</span>
-      </div>
-      <div class="cs-body">
-        <div class="cs-row"><span class="cs-label">Event</span><span class="cs-value">${esc(intake.event_name)}${intake.event_date ? ' · ' + fmt(intake.event_date) : ''}</span></div>
-        <div class="cs-row"><span class="cs-label">Contact</span><span class="cs-value">${esc(intake.contact_name)}<br><span style="color:var(--gray-600)">${esc(intake.contact_email)}</span></span></div>
-        <div class="cs-row"><span class="cs-label">Ship to</span><span class="cs-value">${esc(addr)}</span></div>
-        <div class="cs-row"><span class="cs-label">Setup</span><span class="cs-value">${intake.flag_setup === 'different' ? 'Different front &amp; back' : 'Same front &amp; back'}</span></div>
-        ${colors.length ? `<div class="cs-row"><span class="cs-label">Colors</span><div class="cs-colors">${colors.map(c => `<div class="cs-swatch" style="background:${safeHex(c.hex || c)}" title="${esc(c.name || c)}"></div>`).join('')}</div></div>` : ''}
-        ${intake.design_notes ? `<div class="cs-row"><span class="cs-label">Design Description</span><span class="cs-notes">${esc(intake.design_notes)}</span></div>` : ''}
-        ${intake.front_design_notes ? `<div class="cs-row"><span class="cs-label">Front Notes</span><span class="cs-notes">${esc(intake.front_design_notes)}</span></div>` : ''}
-        ${intake.back_design_notes ? `<div class="cs-row"><span class="cs-label">Back Notes</span><span class="cs-notes">${esc(intake.back_design_notes)}</span></div>` : ''}
-      </div>
-    </div>`;
-  el.style.display = '';
-}
-
 // ── Save & navigate ────────────────────────────────────────
 
 window.saveDraft = async function () {
@@ -543,16 +668,14 @@ window.saveDraft = async function () {
 
 window.goToVariations = async function () {
   await window.saveDraft();
-  if (S.projectId) window.location.href = 'flags-variations?project=' + S.projectId;
+  if (S.projectId) navigateTo('flags-variations?project=' + S.projectId);
 };
 
 // ── Init ──────────────────────────────────────────────────
 
+paintCachedProjectName(new URLSearchParams(window.location.search).get('project'));
 renderSidebar(document.getElementById('sidebar'), {
-  projectType: 'Tournament Flags',
   activeStep: 1,
-  customerSection: true,
-  projectId: new URLSearchParams(window.location.search).get('project'),
   steps: [
     { id: 'navDesign', label: 'Design', desc: 'Style, colors & logos' },
     {
@@ -561,50 +684,64 @@ renderSidebar(document.getElementById('sidebar'), {
         const p = new URLSearchParams(window.location.search).get('project');
         if (!p) return;
         await window.saveDraft?.();
-        window.location.href = 'flags-variations?project=' + p;
+        navigateTo('flags-variations?project=' + p);
       },
     },
     {
-      id: 'navGallery', label: 'Gallery', desc: 'Review & export',
+      id: 'navGallery', label: 'Review', desc: 'Review & export',
       onClick: async () => {
         const p = new URLSearchParams(window.location.search).get('project');
         if (!p) return;
         await window.saveDraft?.();
-        window.location.href = 'flags-gallery?project=' + p;
+        navigateTo('flags-gallery?project=' + p);
       },
     },
   ],
 });
+document.getElementById('sidebarPanelHeader').innerHTML = `
+  <div class="p1-header hs-panel-header">
+    <div>
+      <div class="ptitle">Design style</div>
+      <div class="psub">Pick your colors, then select a flag style.</div>
+    </div>
+    <div class="p1-header-actions">
+      <span class="s1hint-text" id="s1hint">Pick colors and select a style</span>
+      <button class="btn primary" id="s1next" disabled onclick="goToVariations()">Next: Variations <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+      <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" title="Save draft" style="display:none">Save draft</button>
+    </div>
+  </div>`;
 
 await loadAllFlags(FLAGS);
-renderFlagGrid();
-renderP1Colors();
-syncGsTagUI();
+renderFlagP1Controls();
 
 const _urlProject = new URLSearchParams(window.location.search).get('project');
 if (_urlProject) {
   try {
-    const [project, logos, flagCfg, intake] = await Promise.all([
-      loadProject(_urlProject),
+    const project = await loadProject(_urlProject);
+    const [logos, sharedLogos, flagCfg, intake] = await Promise.all([
       loadLogosForProject(_urlProject),
+      listUserLogos(project.created_by),
       loadFlagConfig(_urlProject).catch(() => null),
       loadOrderIntake(_urlProject).catch(() => null),
     ]);
 
-    // Customers can only edit while draft/needs_changes - once the project
+    // Customers can only edit while draft/needs_changes - once this design
     // is submitted/under review/approved, send them to the read-only
     // Gallery & export view instead of the editor. Staff/admin are never
     // blocked (see CLAUDE.md's "staff edits don't reset status" rule) - RLS
     // is the real boundary either way, this is just UI-convenience so a
-    // locked customer never even sees the editor load.
-    if (!(await isStaffOrAdmin(session)) && !['draft', 'needs_changes'].includes(project.status)) {
-      window.location.href = `flags-gallery?project=${_urlProject}`;
+    // locked customer never even sees the editor load. Gated on
+    // flag_config.status (this design's own status), not the whole project -
+    // a brand-new flagCfg (still null, nothing saved yet) is trivially
+    // editable.
+    if (!(await isStaffOrAdmin(session)) && flagCfg && !['draft', 'needs_changes'].includes(flagCfg.status)) {
+      navigateTo(`flags-gallery?project=${_urlProject}`);
       await new Promise(() => {});
     }
 
     S.projectId = project.id;
     S.projectName = project.name || '';
-    S.library = logos;
+    S.library = mergeLibraries(logos, sharedLogos);
     if (flagCfg) {
       S.flagId = flagCfg.flag_id;
       S.colors = (flagCfg.colors && Object.keys(flagCfg.colors).length) ? flagCfg.colors : { ...DEFAULT_COLORS };
@@ -614,9 +751,11 @@ if (_urlProject) {
       S.logoLayout = Array.isArray(varData) ? 'single' : (varData.layout || 'single');
       S.gsTag = Array.isArray(varData) ? true : (varData.gsTag ?? true);
       S.gsTagMode = Array.isArray(varData) ? 'auto' : (varData.gsTagMode ?? 'auto');
+      S.customColors = Array.isArray(varData) ? [] : (varData.customColors || []);
       S.gsTagColor = Array.isArray(varData) ? '#ffffff' : (varData.gsTagColor ?? '#ffffff');
+      S.textLayers = Array.isArray(varData) ? [] : (varData.textLayers || []);
+      S.imageLayers = Array.isArray(varData) ? [] : (varData.imageLayers || []);
       S.baseAssignment = flagCfg.base_assignment || {};
-      S.sameLogoOnBothSides = flagCfg.same_logo_on_both_sides ?? true;
       S.activeVarId = S.variations[0]?.id || null;
       const flag = getFlag();
       if (flag?.logoZoneSets) flag.logoZones = flag.logoZoneSets[S.logoLayout] || flag.logoZones;
@@ -639,6 +778,10 @@ if (_urlProject) {
         if (typeof fc.gsTag === 'boolean') S.gsTag = fc.gsTag;
         if (fc.gsTagMode) S.gsTagMode = fc.gsTagMode;
       }
+      // Whether new variations start with an independent back (the customer
+      // asked for different front/back designs at intake) is decided where
+      // variations are actually created — flags-variations.html's own
+      // defaultSameSides — not here; this page never creates any.
     }
     setSidebarProjectName(S.projectName, S.projectId);
     if (!S.flagId) {
@@ -648,12 +791,9 @@ if (_urlProject) {
       S.flagId = (templateParam && FLAGS.some(f => f.id === templateParam)) ? templateParam : 'plain';
     }
     showFlagExpanded(S.flagId);
-    renderP1Colors();
-    refreshFlagPreviews();
+    renderFlagP1Controls();
     checkStep1();
     syncSidebar();
-    syncGsTagUI();
-    if (intake) renderCustomerSection(intake);
   } catch (err) {
     console.error('Could not load project', err);
   }

@@ -1,7 +1,8 @@
 // Shared HTML chrome for every transactional email this project sends via
-// SendGrid (send-order-confirmation, send-proof-ready, send-print-sheet-ready,
-// send-prestige-order). Keeps the header/footer/button/footer-text in exactly
-// one place so a branding tweak doesn't require editing four functions.
+// SendGrid (send-order-confirmation, send-order-notification, send-proof-ready,
+// send-print-sheet-ready, send-prestige-order, send-review-decision). Keeps the
+// header/footer/button/footer-text in exactly one place so a branding tweak
+// doesn't require editing every function.
 //
 // Not used by supabase/templates/*.html — those are Supabase Auth's own
 // dashboard-pasted templates (a separate rendering system, see the comment at

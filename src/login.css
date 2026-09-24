@@ -48,7 +48,8 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 .header-cta-btn:hover { opacity:.85; }
 .account-avatar { width:30px; height:30px; border-radius:50%; background:var(--gold); color:#1B1B18; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; text-decoration:none; font-family:'DM Sans',sans-serif; flex-shrink:0; transition:opacity .15s; }
 .account-avatar:hover { opacity:.85; }
-/* login.js-only header addition (see injectViewProjectsLink) - left of the avatar. */
+/* Global header link (see auth.js's injectHeaderActions) - left of the avatar
+   on every authenticated page, replacing the old per-page sidebar back-link. */
 .header-view-projects-link { color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; text-decoration:none; transition:color .15s; }
 .header-view-projects-link:hover { color:#fff; text-decoration:underline; }
 .sign-out-btn { background:transparent; border:1px solid rgba(255,255,255,.35); color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; padding:5px 14px; border-radius:20px; cursor:pointer; transition:background .15s,color .15s; }

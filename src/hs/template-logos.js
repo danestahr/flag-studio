@@ -22,6 +22,24 @@ document.addEventListener('keydown', e => {
   [...UI.tlSelectedIdxs].sort((a, b) => b - a).forEach(idx => window.removeTlSlot(idx));
 });
 
+// Arrow keys nudge every selected template-logo slot by 1 real screen px
+// (10px with Option/Alt held) — goes through image-box.js's own wrap._nudge,
+// re-queried fresh by index same as the Delete handler above (a re-render can
+// replace the element, so nothing here can hold onto a stale reference).
+document.addEventListener('keydown', e => {
+  if (!UI.tlSelectedIdxs.size) return;
+  const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  const d = arrows[e.key];
+  if (!d) return;
+  if (document.activeElement?.closest?.('input, textarea, select, [contenteditable]')) return;
+  e.preventDefault();
+  const step = e.altKey ? 10 : 1;
+  const dx = d[0] * step, dy = d[1] * step;
+  UI.tlSelectedIdxs.forEach(idx => {
+    document.querySelector(`.dz-logo-wrap[data-tl-idx="${idx}"]`)?._nudge?.(dx, dy);
+  });
+});
+
 // ── Template logo controls ────────────────────────────────
 
 const IC = {
@@ -32,20 +50,6 @@ const IC = {
   spread: `<i class="fa-solid fa-arrows-left-right"></i>`,
   right:  `<i class="fa-solid fa-arrow-right"></i>`,
 };
-
-function slotAssignRow(tl, i) {
-  const slot = (tl.slots || [])[i];
-  const src = slot?.logoSrcTight || slot?.logoSrc;
-  return `
-    <div class="tl-assign-row">
-      <span class="tl-assign-label">Slot ${i + 1}</span>
-      ${src
-        ? logoThumbHtml(src, '', 'tl-assign-thumb')
-        : `<span class="tl-assign-empty">–</span>`}
-      <button class="btn sm tl-assign-btn" data-slot="${i}" onclick="openTlSlotPicker(${i})">${src ? 'Replace' : '+ Add logo'}</button>
-      ${src ? `<button class="btn sm tl-assign-rm" onclick="removeTlSlot(${i})" title="Remove"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>` : ''}
-    </div>`;
-}
 
 export function renderTemplateLogoControls() {
   const tl = tlSource();
@@ -61,7 +65,6 @@ export function renderTemplateLogoControls() {
   }
   const sz = normalizeTplLogoSize(tl.size);
   const pct = Math.round((sz - HS_TPL_LOGO_MIN) / (HS_TPL_LOGO_MAX - HS_TPL_LOGO_MIN) * 100);
-  const slotRows = Array.from({ length: tl.count }, (_, i) => slotAssignRow(tl, i)).join('');
   return `
     <div class="hs-section">
       <div class="hs-section-title">Template logos</div>
@@ -88,10 +91,42 @@ export function renderTemplateLogoControls() {
           <button class="hs-tog-btn hs-tog-icon${tl.hAlign === 'right' ? ' active' : ''}" onclick="setTplHAlign('right')" title="Right">${IC.right}</button>
         </div>
       </div>
-      <div class="tl-assign-rows">${slotRows}</div>
-      <div class="tl-hint">Drag slots in the preview to reposition and resize.</div>
+      <div class="tl-hint">Drag slots in the preview to reposition and resize. Assign logos to slots below.</div>
       <button class="btn sm" style="margin-top:6px" onclick="resetTlFreePositions()">Reset to defaults</button>
     </div>`;
+}
+
+// Persistent grid tile for the sidebar (#sidebarLogosTile) — the per-slot
+// assignment list used to live only inside the "Template logos" drill-down
+// section above (reached by clicking a slot on canvas). Reuses the same
+// openTlSlotPicker/removeTlSlot entry points, just as square tiles matching
+// the Variations step's sponsor-logo tile instead of labeled rows.
+// Always leads with a dashed "add" tile that goes straight to the OS file
+// picker (uploadNewTplLogo — a brand-new slot, not an assignment onto an
+// existing one) so there's always a way to add a logo straight from the
+// tile, the same as the Variations tile's upload button, instead of only
+// via the "+ Images" row in the main menu list. An unassigned slot (e.g.
+// left behind by cancelling addTplImage's own library-choice modal
+// elsewhere) is skipped rather than rendered as a second, identical-looking
+// dashed "add" tile — assign or clean it up from the canvas instead.
+export function renderTemplateLogoTileItems() {
+  const tl = tlSource();
+  const addBtn = `
+    <button type="button" class="var-upload-btn hslt-slot" title="Upload logo" onclick="document.getElementById('hsTplLogoUpload').click()">
+      <i class="fa-solid fa-plus" aria-hidden="true"></i>
+    </button>
+    <input type="file" id="hsTplLogoUpload" accept="image/*,.pdf,.ai,.eps" style="display:none" onchange="uploadNewTplLogo(this)">`;
+  const slots = Array.from({ length: tl.count }, (_, i) => {
+    const slot = (tl.slots || [])[i];
+    const src = slot?.logoSrcTight || slot?.logoSrc;
+    if (!src) return '';
+    return `
+      <div class="var-lib-item hslt-slot" title="Slot ${i + 1} — click to replace" onclick="openTlSlotPicker(${i})">
+        ${logoThumbHtml(src, '')}
+        <button class="var-lib-del" title="Remove" onclick="event.stopPropagation();removeTlSlot(${i})"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>`;
+  }).join('');
+  return addBtn + slots;
 }
 
 window.openTlSlotPicker = function (i) {
@@ -168,12 +203,15 @@ export function ensureTlSlots() {
   if (tl.slots.length > tl.count) tl.slots.length = tl.count;
 }
 
-// Appends one more image, uncapped — mirrors addTextLayer()'s pattern for
-// free text layers. Given a centered default free position/size (rather than
-// running the count-based auto-layout math, which isn't built to gracefully
-// re-flow an unbounded, incrementally-grown list) since free positioning is
-// already fully supported per-slot regardless of how it was created.
-window.addTplImage = function () {
+// Appends one more image slot, uncapped — mirrors addTextLayer()'s pattern
+// for free text layers. Given a centered default free position/size (rather
+// than running the count-based auto-layout math, which isn't built to
+// gracefully re-flow an unbounded, incrementally-grown list) since free
+// positioning is already fully supported per-slot regardless of how it was
+// created. Shared by addTplImage (opens the library-choice picker) and the
+// sidebar tile's direct-upload button (skips straight to a file, no slot
+// left behind to roll back — see uploadNewTplLogo below).
+function createNewTplSlot() {
   const tl = tlSource();
   const idx = tl.count;
   tl.count += 1;
@@ -182,6 +220,11 @@ window.addTplImage = function () {
   tl.customPositions = true;
   UI.tlSelectedIdxs = new Set([idx]);
   redrawTplStructural();
+  return idx;
+}
+
+window.addTplImage = function () {
+  const idx = createNewTplSlot();
   if (HS.editingVarId) {
     UI.hsVarMenuSlotIdx = idx;
     window.openHsVarMenu?.('tplSlot');
@@ -190,6 +233,31 @@ window.addTplImage = function () {
     window.openHsMenu?.('tplSlot');
   }
   openTlLibPicker(idx);
+};
+
+// The sidebar tile's own "add" tile (renderTemplateLogoTileItems below) goes
+// straight to the OS file picker instead of addTplImage's library-choice
+// modal — a plain upload shortcut, not a "pick an existing logo or upload"
+// decision. No slot is created until a file actually comes back, so
+// cancelling the OS dialog leaves nothing behind; a failed upload rolls the
+// slot back for the same reason (never an orphaned empty slot sitting in
+// the tile looking like a second, duplicate "add" tile).
+window.uploadNewTplLogo = async function (input) {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  const idx = createNewTplSlot();
+  try {
+    const logo = await uploadLogo(HS.projectId, file);
+    HS.library.push(logo);
+    assignTlSlot(idx, logo);
+  } catch (err) {
+    console.error('Upload failed', err);
+    const tl = tlSource();
+    tl.slots.splice(idx, 1);
+    tl.count = Math.max(0, tl.count - 1);
+    redrawTplStructural();
+  }
 };
 window.setTplSize = function (k) {
   const tl = tlSource();
@@ -450,6 +518,7 @@ async function removeTlSlotBg(idx) {
   spinner.remove();
   closeTlSlotToolbar();
   redrawTplPreview();
+  window._refreshDesignLogosTile?.();
 }
 
 export function assignTlSlot(idx, logo) {
@@ -486,8 +555,10 @@ export function assignTlSlot(idx, logo) {
       slot.freeW = Math.round(slotWidthForRatio(slot, slot.freeH));
     }
     redrawTplPreview();
+    window._refreshDesignLogosTile?.();
   }).catch(() => {});
   redrawTplPreview();
+  window._refreshDesignLogosTile?.();
 }
 
 // Renders the slot visual-options body as an HTML string for use in the

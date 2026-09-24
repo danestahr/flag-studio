@@ -99,29 +99,38 @@ header {
   line-height: 1.2;
 }
 
+.rv-hero-tag {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--gray-500);
+}
+
 .rv-meta {
   font-size: 14px;
   color: var(--gray-600);
 }
 
+/* Wraps the instructions banner ("description") and the name/email/notes
+   inputs as one section, 24px between the two. */
+.rv-info-section {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin-bottom: 2rem;
+}
+
 .rv-instructions {
-  background: var(--white);
-  border: 1px solid var(--gray-100);
-  border-radius: var(--rl);
-  padding: 1rem 1.25rem;
   font-size: 14px;
   color: var(--gray-600);
-  margin-top: 8px;
 }
 .rv-instructions.rv-instructions-locked {
-  background: #fef3c7;
-  border-color: #fcd34d;
   color: #92400e;
   font-weight: 500;
 }
 .rv-instructions.rv-instructions-approved {
-  background: #dcfce7;
-  border-color: #86efac;
   color: #15803d;
   font-weight: 500;
   display: flex;
@@ -144,16 +153,29 @@ header {
 
 .rv-name-readonly {
   padding: 10px 14px;
-  background: #f9fafb;
+  background: var(--gray-50);
   border: 1px solid var(--gray-100);
   border-radius: 6px;
   font-size: 14px;
   color: var(--black);
+  white-space: pre-wrap;
 }
 
 /* Name row */
 .rv-name-row {
-  margin-bottom: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rv-field { display: flex; flex-direction: column; }
+
+.rv-general-note {
+  min-height: 64px;
+}
+
+.rv-general-note:focus {
+  border-color: var(--accent);
 }
 
 .rv-field-label {
@@ -201,6 +223,12 @@ header {
   gap: 8px;
   flex: 1;
   min-width: 0;
+}
+
+.rv-summary-total {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-400);
 }
 
 .rv-summary-counts {
@@ -428,6 +456,7 @@ header {
 .rv-collapsed-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1rem;
 }
 
@@ -449,6 +478,27 @@ header {
 .rv-collapsed-row .rv-vname {
   flex: 1;
   margin-bottom: 0;
+}
+
+.rv-unapprove-btn {
+  padding: 6px 14px;
+  background: transparent;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--r);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-500);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all .15s;
+}
+
+.rv-unapprove-btn:hover {
+  border-color: #d97706;
+  color: #d97706;
+  background: #fffbeb;
 }
 
 /* Re-approval hint */
@@ -527,11 +577,220 @@ header {
   border-color: #d97706;
 }
 
-/* Submit row */
+/* Quick-pick "Request edits" extras (flag style/template, colors, logo) */
+.rv-quickpicks {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-100);
+}
+
+.rv-qp-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-500);
+  margin-bottom: 6px;
+}
+
+.rv-qp-styles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rv-qp-style-opt {
+  width: 72px;
+  cursor: pointer;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 6px;
+  padding: 4px;
+  transition: border-color .15s;
+}
+
+.rv-qp-style-opt:hover {
+  border-color: var(--gray-400);
+}
+
+.rv-qp-style-opt.selected {
+  border-color: #d97706;
+  background: #fffbeb;
+}
+
+.rv-qp-style-thumb {
+  width: 100%;
+  aspect-ratio: 7519 / 4669;
+  background: var(--gray-50);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.rv-qp-style-thumb svg { width: 100%; height: 100%; display: block; }
+
+.rv-qp-style-name {
+  font-size: 10px;
+  text-align: center;
+  color: var(--gray-500);
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rv-qp-select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--r);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  color: var(--black);
+  background: var(--white);
+}
+
+.rv-qp-empty {
+  font-size: 12px;
+  color: var(--gray-400);
+}
+
+.rv-qp-colors {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rv-qp-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rv-qp-color-label {
+  flex: 1;
+  font-size: 13px;
+  color: var(--gray-600);
+}
+
+.rv-qp-swatch {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.rv-qp-hex {
+  width: 84px;
+  padding: 6px 8px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 6px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  color: var(--black);
+  background: var(--white);
+}
+
+/* Logo replace rows — one per logo currently placed on the design, each
+   with its own "Replace logo" button; once a replacement file is chosen
+   that row instead shows old thumb → swap icon → new thumb, plus a way to
+   remove the pending replacement. */
+.rv-qp-logo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rv-qp-logo-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rv-qp-logo-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  border: 1.5px solid var(--gray-200);
+  background: var(--gray-50);
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rv-qp-logo-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.rv-qp-logo-thumb.rv-qp-logo-new {
+  border-color: #16a34a;
+}
+
+.rv-qp-swap-icon {
+  color: var(--gray-400);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.rv-qp-logo-replace-btn {
+  padding: 8px 14px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--r);
+  background: transparent;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  color: var(--gray-600);
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+
+.rv-qp-logo-replace-btn:hover {
+  border-color: var(--gray-400);
+  color: var(--black);
+}
+
+.rv-qp-logo-remove-btn {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gray-500);
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.rv-qp-logo-remove-btn:hover {
+  border-color: #dc2626;
+  color: #dc2626;
+  background: #fef2f2;
+}
+
+.rv-qp-logo-add-label {
+  font-size: 13px;
+  color: var(--gray-600);
+  flex: 1;
+}
+
+/* Submit row — sticky at the bottom of the viewport so the reviewer is
+   always reminded they still need to submit their decisions. */
 .rv-submit-row {
+  position: sticky;
+  bottom: 0;
   margin-top: 2.5rem;
+  padding: 16px;
+  background: var(--white);
+  border-top: 1px solid var(--gray-100);
   display: flex;
   justify-content: flex-end;
+  z-index: 10;
 }
 
 .rv-submit-btn {
@@ -608,6 +867,42 @@ header {
   color: var(--gray-600);
   margin-bottom: 1rem;
   letter-spacing: .01em;
+}
+
+/* Product tabs (Flags / Hole Signs) — only shown when a project has both */
+.rv-product-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 1.5rem;
+}
+
+.rv-product-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--r);
+  background: var(--white);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--gray-600);
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.rv-product-tab:hover {
+  border-color: var(--gray-400);
+  color: var(--black);
+}
+
+.rv-product-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
 }
 
 /* Status badges */

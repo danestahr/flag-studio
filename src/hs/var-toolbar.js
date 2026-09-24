@@ -5,6 +5,7 @@ import { buildLibStrip, renderVarList } from './variations.js';
 import { renderVariationPreview } from './var-canvas.js';
 import { logoThumbHtml } from '../media-utils.js';
 import { positionFloatingToolbar } from '../dom-utils.js';
+import { enterCropEditOn } from '../image-box.js';
 
 // ── Zone toolbar ───────────────────────────────────────────
 
@@ -61,6 +62,21 @@ document.addEventListener('keydown', e => {
   removeActiveHsLogo();
 });
 
+// Arrow keys nudge the selected logo image by 1 real screen px (10px with
+// Option/Alt held) — goes through image-box.js's own wrap._nudge so the
+// crop-carry/ghost/canvas-clamp logic that a drag gets stays shared, same as
+// the text-layer nudge in hs/text-layers.js.
+document.addEventListener('keydown', e => {
+  if (!UI.hsActiveZone?.wrap?._nudge) return;
+  if (document.activeElement?.closest?.('input, textarea, select, [contenteditable]')) return;
+  const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  const d = arrows[e.key];
+  if (!d) return;
+  e.preventDefault();
+  const step = e.altKey ? 10 : 1;
+  UI.hsActiveZone.wrap._nudge(d[0] * step, d[1] * step);
+});
+
 export function ensureHsToolbar() {
   if (document.getElementById('hsZoneToolbar')) return;
   const t = document.createElement('div');
@@ -69,6 +85,8 @@ export function ensureHsToolbar() {
   t.innerHTML = `
     <button class="dz-tb-btn" id="hsTbFill" title="Fill zone"><i class="fa-solid fa-expand"></i></button>
     <div class="dz-tb-sep" id="hsTbFillSep"></div>
+    <button class="dz-tb-btn" id="hsTbCrop" title="Crop the logo to its box instead of showing the whole image"></button>
+    <div class="dz-tb-sep" id="hsTbCropSep"></div>
     <button class="dz-tb-btn" id="hsTbRemoveBg" title="Remove Background"><i class="fa-solid fa-wand-magic-sparkles"></i> Remove Background</button>
     <div class="dz-tb-sep" id="hsTbRemoveBgSep"></div>
     <button class="dz-tb-btn" id="hsTbLayerToBack" title="Move to back"><i class="fa-solid fa-arrows-down-to-line"></i></button>
@@ -87,6 +105,19 @@ export function ensureHsToolbar() {
   document.body.appendChild(t);
 
   document.getElementById('hsTbFill').addEventListener('click', fillHsLogo);
+
+  document.getElementById('hsTbCrop').addEventListener('click', () => {
+    const layer = activeLogoLayer();
+    const v = UI.hsActiveZone?.variation;
+    if (!layer || !v) return;
+    // Always (re-)engages crop-edit mode — no toggle-off.
+    layer.cropped = true;
+    renderVarList();
+    renderVariationPreview();
+    reselectAfterRerender(v, layer.id);
+    const freshWrap = document.getElementById('hsSignPreview')?.querySelector(`.dz-logo-wrap[data-layer-id="${layer.id}"]`);
+    enterCropEditOn(freshWrap);
+  });
 
   document.getElementById('hsTbRemoveBg').addEventListener('click', async () => {
     const v = UI.hsActiveZone?.variation;
@@ -261,8 +292,13 @@ export function ensureHsToolbar() {
     } catch (err) { console.error('Artboard upload failed', err); }
   });
 
+  // .dzone is the whole (invisible, oversized relative to the logo it holds)
+  // placement-zone rectangle, not the placed logo itself — only a click that
+  // actually lands on the toolbar or a placed logo should keep the selection
+  // open; anywhere else in the zone is empty space and should deselect same
+  // as the rest of the canvas.
   document.addEventListener('click', e => {
-    if (!e.target.closest('#hsZoneToolbar') && !e.target.closest('.dz-logo-wrap') && !e.target.closest('.dzone')) {
+    if (!e.target.closest('#hsZoneToolbar') && !e.target.closest('.dz-logo-wrap')) {
       hideHsToolbar();
     }
   });
@@ -361,6 +397,12 @@ export function showHsToolbar(dz, openPicker = false) {
   const hasContent = hasLogo || hasText || hasArtboard;
   document.getElementById('hsTbFill').style.display         = hasLogo ? '' : 'none';
   document.getElementById('hsTbFillSep').style.display      = hasLogo ? '' : 'none';
+  document.getElementById('hsTbCrop').style.display         = hasLogo ? '' : 'none';
+  document.getElementById('hsTbCropSep').style.display      = hasLogo ? '' : 'none';
+  // Always just "Crop" — no "Uncrop" toggle-off. Clicking it re-engages
+  // crop-edit mode (see the click handler below) whether or not the layer
+  // is already cropped, same as double-clicking the image.
+  document.getElementById('hsTbCrop').innerHTML = '<i class="fa-solid fa-crop-simple"></i> Crop';
   document.getElementById('hsTbRemoveBg').style.display     = hasLogo ? '' : 'none';
   document.getElementById('hsTbRemoveBgSep').style.display  = hasLogo ? '' : 'none';
   document.getElementById('hsTbRemove').style.display       = hasContent ? '' : 'none';

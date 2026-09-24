@@ -1,11 +1,11 @@
-import { HS, UI } from './state.js';
+import { HS, UI, findLogo } from './state.js';
 import { HS_H, HS_W } from '../hole-sign-data.js';
 import { getEffectiveState, getEffectiveVariation } from './state.js';
 import { getLogoZone, getTemplateLogoSlots, renderHoleSignInto } from '../hole-sign-render.js';
 import { hideHsToolbar, addLogoLayer } from './logo-utils.js';
 import { deselectTlSlots } from './template-logos.js';
 import { stripSlotImages, paintTplSlotOverlays, paintTextLayerOverlays, rescaleTextOverlayFonts } from './design.js';
-import { createImageBox, refreshImageBoxClips, refreshTextLayerClips, refreshTlSlotClips } from '../image-box.js';
+import { createImageBox, enterCropEditOn, refreshImageBoxClips, refreshTextLayerClips, refreshTlSlotClips } from '../image-box.js';
 import { wireBannerHeightHandles, wireBannerSpacingHandles, wireCanvasTextEditing, wireElementDrag } from './banner.js';
 import { removeActiveHsLogo, showHsToolbar, hideHsToolbarPanel, reselectAfterRerender } from './var-toolbar.js';
 import { renderVarList, buildLibStrip } from './variations.js';
@@ -38,6 +38,22 @@ export function initHsVarCanvas(container) {
       const preview = document.getElementById('hsSignPreview');
       if (preview) { rescaleTextOverlayFonts(preview); refreshImageBoxClips(preview); refreshTextLayerClips(preview); refreshTlSlotClips(preview); }
     },
+    // Global (project-wide, not scoped to whichever variation is active) —
+    // the right-hand "Variations" list is where a specific variation's own
+    // request lives now (its "View edits" link, see variations.js), so this
+    // banner is just the project-wide entry point into that same sub-view.
+    // Content/visibility is driven by updateHsEditRequestsBanner in
+    // variations.js, not here — this only owns the markup shell.
+    noteHtml: `
+    <div id="hsVarEditNote" class="var-edit-note" style="display:none">
+      <div class="var-edit-note-row">
+        <div class="var-edit-note-body">
+          <span class="var-edit-note-label">Edit requested:</span>
+          <span id="hsVarEditNoteText"></span>
+        </div>
+        <button class="var-edit-viewall-btn" onclick="openHsEditRequests()">View all edits</button>
+      </div>
+    </div>`,
     canvasContentHtml: '<div class="hs-sign-preview" id="hsSignPreview"></div>',
     description: 'Drag logos into zones',
   });
@@ -353,6 +369,21 @@ export function renderVariationPreview() {
         alt: variation.name,
         aboveFrame: layer.aboveFrame,
         belowBackground: layer.belowBackground,
+        cropped: !!layer.cropped,
+        zoneSignW: lz.w,
+        zoneSignH: lz.h,
+        onCropChange: () => renderVarList(),
+        // Double-clicking an image that isn't cropped yet — enable it, then
+        // rebuild the canvas and resume straight into crop-edit mode on the
+        // fresh box (createImageBox can't switch a live box's visual from a
+        // plain <img> to the cropbox one, so this has to be a full rebuild).
+        onEnableCrop: () => {
+          layer.cropped = true;
+          renderVariationPreview();
+          renderVarList();
+          const freshWrap = document.getElementById('hsSignPreview')?.querySelector(`.dz-logo-wrap[data-layer-id="${layer.id}"]`);
+          enterCropEditOn(freshWrap);
+        },
         // Duck the toolbar out of the way while dragging/resizing, and bring
         // it back — freshly repositioned against the box's final size/place —
         // once released. Same hide-then-reappear pattern as the text-layer
@@ -422,15 +453,19 @@ export function renderVariationPreview() {
     }
 
     if (!UI.hsDragLogoId) return;
-    const logo = HS.library.find(l => l.id === UI.hsDragLogoId);
+    const logo = findLogo(UI.hsDragLogoId);
     if (!logo) return;
     UI.hsDragLogoId = null;
     dropLogo(logo);
   });
 
-  preview.appendChild(dzone);
-
   if (isEditingActive) {
+    // Full editor: template-logo slots are themselves interactive
+    // (createImageBox, `.dz-logo-wrap[data-tl-idx]`) and meant to sit above
+    // variation content regardless of DOM order — see style.css's explicit
+    // z-index:4 on that selector — so append order here doesn't matter; keep
+    // dzone first for readability.
+    preview.appendChild(dzone);
     wireElementDrag(preview, 'logos');
     paintTplSlotOverlays(preview, effState);
     paintTextLayerOverlays(preview, effState);
@@ -441,9 +476,20 @@ export function renderVariationPreview() {
     // Quick-edit: template logo slots / text bands / free text layers are
     // still click-to-edit (swap image, edit text), but no drag/resize — no
     // wireElementDrag, no banner height/spacing handles, positions stay put.
+    // These locked overlays carry no z-index of their own (plain DOM order
+    // decides who's on top), so appending dzone AFTER them — instead of
+    // before, as the interactive branch above does — keeps the *sponsor*
+    // logo/text reachable even when a template logo slot is sized large
+    // enough to otherwise sit on top of and fully cover it. This page's
+    // whole purpose is assigning per-variation content, so that should win a
+    // click over the secondary, click-to-quick-swap template logo — which
+    // stays reachable in any region the sponsor content doesn't cover.
     paintTplSlotOverlays(preview, effState, { locked: true, variation: activeVar });
     paintTextLayerOverlays(preview, effState, { locked: true, variation: activeVar });
     wireCanvasTextEditing(preview, { locked: true });
+    preview.appendChild(dzone);
+  } else {
+    preview.appendChild(dzone);
   }
   refreshHsVarSectionReset();
 }

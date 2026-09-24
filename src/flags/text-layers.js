@@ -585,11 +585,18 @@ document.addEventListener('keydown', e => {
   const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
   if (arrows[e.key]) {
     e.preventDefault();
-    const step = e.shiftKey ? 5 : 1;
-    const [dx, dy] = arrows[e.key];
-    layer.x += dx * step;
-    layer.y += dy * step;
+    // layer.x/y are percent of the zone wrap, not screen px — convert the
+    // desired real-pixel step through the wrap's current on-screen size (same
+    // as the drag handlers' own sx/sy px-per-percent math) so one arrow press
+    // always moves the layer by the same visual distance regardless of zoom
+    // or how large this particular zone is.
     const wrap = document.getElementById(wrapId);
+    const rect = wrap?.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return;
+    const stepPx = e.altKey ? 10 : 1;
+    const [dx, dy] = arrows[e.key];
+    layer.x += dx * stepPx / rect.width * 100;
+    layer.y += dy * stepPx / rect.height * 100;
     const overlay = wrap?.querySelector(`.flag-tl-overlay[data-tl-id="${_activeFlagTlId}"]`);
     if (overlay) {
       overlay.style.left = layer.x + '%';

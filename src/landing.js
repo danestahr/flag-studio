@@ -3,9 +3,10 @@ import './order.css'; // .flag-tmpl-* classes, reused by template-gallery.js
 import './icons.js';
 import { getSession } from './supabase.js';
 import { initHeaderForSession, injectHeaderCta } from './auth.js';
-import { listProjects, createProject, deleteProject, getMyRole } from './supabase.js';
+import { listProjects, createProject, deleteProject, getMyRole, listUserLogos, uploadUserLogo, deleteUserLogo } from './supabase.js';
 import { esc } from './dom-utils.js';
-import { STATUS_LABEL } from './status-labels.js';
+import { logoThumbHtml, downloadLogo } from './media-utils.js';
+import { STATUS_LABEL, STATUS_GROUPS } from './status-labels.js';
 import { renderTemplateGallery } from './template-gallery.js';
 
 const PAGE_SIZE = 30;
@@ -55,6 +56,11 @@ function onSelectType(type) {
 if (session) {
   await initHeaderForSession(session);
   initProjectHub(session.user.id, { openGalleryOnLoad: !!browseParam });
+  // Not called for now — #sharedLogosSection is hidden (see index.html):
+  // cross-project logo sharing isn't needed yet, only cross-tool (flags <->
+  // hole signs) within one project. Left wired up, not removed, in case a
+  // real cross-project library is wanted later.
+  // initSharedLogos();
 } else {
   // Anonymous visitor: the header otherwise has nothing but the logo (the
   // signed-in equivalent, injectHeaderActions() in auth.js, adds the avatar/
@@ -77,8 +83,19 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
   let loading = false;
 
   const statusFilter = document.getElementById('projectStatusFilter');
-  for (const [value, label] of Object.entries(STATUS_LABEL)) {
-    statusFilter.insertAdjacentHTML('beforeend', `<option value="${esc(value)}">${esc(label)}</option>`);
+  for (const [value, group] of Object.entries(STATUS_GROUPS)) {
+    statusFilter.insertAdjacentHTML('beforeend', `<option value="${esc(value)}">${esc(group.label)}</option>`);
+  }
+
+  // Flags and hole signs progress through review independently (see
+  // status-labels.js) - a project can have Flags: Draft and Hole Signs: In
+  // Review at once, so the card shows one pill per design type it actually
+  // has, instead of a single whole-project pill.
+  function designStatusPill(cfg, label) {
+    const status = cfg?.[0]?.status;
+    if (!status) return '';
+    const statusLabel = STATUS_LABEL[status] || status;
+    return `<span class="status-pill status-${esc(status)}" style="flex-shrink:0">${esc(label)}: ${esc(statusLabel)}</span>`;
   }
 
   function projectCardHtml(p) {
@@ -89,7 +106,6 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     const hasHoleSigns = p.hole_sign_config?.length > 0;
     const creatorName = [p.profiles?.first_name, p.profiles?.last_name].filter(Boolean).join(' ');
     const creator = creatorName || p.profiles?.email || null;
-    const statusLabel = STATUS_LABEL[p.status] || p.status;
     // An Untitled project (no name yet) never made it past the "what
     // tournament is this for" step (gallery-side-panel.js's
     // renderEventInfoStep, which creates the project immediately on arrival
@@ -103,11 +119,12 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     const clickHref = (!p.name && intendedType && intendedTemplate)
       ? `/login?${new URLSearchParams({ type: intendedType, template: intendedTemplate, project: p.id })}`
       : `/project?project=${p.id}`;
+    const statusPills = [designStatusPill(p.flag_config, 'Flags'), designStatusPill(p.hole_sign_config, 'Hole Signs')].filter(Boolean).join('');
     return `<div class="draft-card" onclick="window.location.href='${clickHref}'">
       <div class="draft-card-main">
-        <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div class="draft-card-name">${esc(name)}</div>
-          ${statusLabel ? `<span class="status-pill status-${esc(p.status)}" style="flex-shrink:0">${esc(statusLabel)}</span>` : ''}
+          ${statusPills}
         </div>
         <div class="draft-card-meta">Edited ${date}</div>
         ${creator ? `<div class="draft-card-meta">Created by ${esc(creator)}</div>` : ''}
@@ -141,20 +158,32 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     }
 
     try {
-      const { projects, nextCursor } = await listProjects({ userId, role, cursor, pageSize: PAGE_SIZE, q: query, status });
+      const { projects: fetched, nextCursor } = await listProjects({ userId, role, cursor, pageSize: PAGE_SIZE, q: query });
+      // Filtered client-side, not in the query: PostgREST can't express an
+      // OR across flag_config.status and hole_sign_config.status (two
+      // different embedded tables) in one request. A project matches if
+      // EITHER design type is currently in the selected group - each design
+      // progresses independently, so "In Review" should surface a project
+      // even when only one side has reached it.
+      const group = STATUS_GROUPS[status];
+      const projects = group
+        ? fetched.filter(p => group.statuses.includes(p.flag_config?.[0]?.status) || group.statuses.includes(p.hole_sign_config?.[0]?.status))
+        : fetched;
 
       if (reset && !projects.length) {
         container.innerHTML = (query || status)
-          ? `<div class="drafts-empty">No projects match${query ? ` “${esc(query)}”` : ''}${status ? ` with status “${esc(STATUS_LABEL[status] || status)}”` : ''}.</div>`
+          ? `<div class="drafts-empty">No projects match${query ? ` “${esc(query)}”` : ''}${status ? ` with status “${esc(STATUS_GROUPS[status]?.label || status)}”` : ''}.</div>`
           : '<div class="drafts-empty">No projects yet.</div>';
-        renderLoadMore(null);
+        renderLoadMore(nextCursor);
         return;
       }
 
       if (reset) {
         container.innerHTML = `<div class="drafts-grid">${projects.map(projectCardHtml).join('')}</div>`;
       } else {
-        container.querySelector('.drafts-grid').insertAdjacentHTML('beforeend', projects.map(projectCardHtml).join(''));
+        const grid = container.querySelector('.drafts-grid');
+        if (grid) grid.insertAdjacentHTML('beforeend', projects.map(projectCardHtml).join(''));
+        else container.innerHTML = `<div class="drafts-grid">${projects.map(projectCardHtml).join('')}</div>`;
       }
 
       cursor = nextCursor;
@@ -249,4 +278,91 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     document.getElementById('projectHub').style.display = '';
   }
   loadPage({ reset: true });
+}
+
+// Logos reusable across all of this user's projects (see user_logos /
+// listUserLogos in supabase.js), managed from the project hub rather than
+// any single project's designer. Deleting one here is the only place it can
+// be deleted at all — see the modal copy below for why that's a real delete,
+// not a per-project removal.
+async function initSharedLogos() {
+  let sharedLogos = [];
+
+  function renderSharedLogos() {
+    const grid = document.getElementById('sharedLogosGrid');
+    if (!sharedLogos.length) { grid.innerHTML = '<div class="ci-logo-empty">No shared logos yet</div>'; return; }
+    grid.innerHTML = sharedLogos.map(l => `
+      <div class="ci-logo-item" id="sl-${l.id}">
+        ${logoThumbHtml(l.src, l.name)}
+        <div class="ci-logo-name">${esc(l.name)}</div>
+        ${l.uploading ? '' : `<button class="ci-logo-dl" title="Download" onclick="downloadSharedLogo('${l.id}')"><i class="fa-solid fa-download" aria-hidden="true"></i></button>`}
+        ${l.uploading ? '' : `<button class="ci-logo-del" title="Delete" onclick="window.openDeleteLogoModal('${l.id}')"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>`}
+      </div>`).join('');
+  }
+
+  window.downloadSharedLogo = function (id) {
+    const logo = sharedLogos.find(l => l.id === id);
+    if (logo) downloadLogo(logo.src, logo.name);
+  };
+
+  window.handleSharedLogoUpload = async function (e) {
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    for (const file of files) {
+      const tempId = 'tmp-' + Date.now();
+      sharedLogos.push({ id: tempId, name: file.name.replace(/\.[^.]+$/, ''), uploading: true });
+      renderSharedLogos();
+      try {
+        const logo = await uploadUserLogo(file);
+        const idx = sharedLogos.findIndex(l => l.id === tempId);
+        if (idx !== -1) sharedLogos[idx] = logo;
+      } catch (err) {
+        console.error('Shared logo upload failed', err);
+        sharedLogos = sharedLogos.filter(l => l.id !== tempId);
+      }
+      renderSharedLogos();
+    }
+  };
+  document.getElementById('sharedLogoFile').addEventListener('change', window.handleSharedLogoUpload);
+
+  // ── Delete shared logo modal ───────────────────────────────
+  const deleteLogoModal = document.getElementById('deleteLogoModal');
+  const deleteLogoConfirmBtn = document.getElementById('deleteLogoConfirmBtn');
+  let deleteLogoTargetId = null;
+
+  window.openDeleteLogoModal = function (id) {
+    deleteLogoTargetId = id;
+    deleteLogoModal.style.display = 'flex';
+  };
+
+  window.closeDeleteLogoModal = function () {
+    deleteLogoModal.style.display = 'none';
+    deleteLogoTargetId = null;
+  };
+
+  window.confirmDeleteLogo = async function () {
+    if (!deleteLogoTargetId) return;
+    const logo = sharedLogos.find(l => l.id === deleteLogoTargetId);
+    deleteLogoConfirmBtn.disabled = true;
+    deleteLogoConfirmBtn.textContent = 'Deleting…';
+    try {
+      if (logo?.storagePath) await deleteUserLogo(logo.storagePath, logo.id);
+      sharedLogos = sharedLogos.filter(l => l.id !== deleteLogoTargetId);
+      renderSharedLogos();
+      window.closeDeleteLogoModal();
+    } catch (err) {
+      console.error(err);
+      alert('Could not delete logo.');
+    } finally {
+      deleteLogoConfirmBtn.disabled = false;
+      deleteLogoConfirmBtn.textContent = 'Delete';
+    }
+  };
+
+  try {
+    sharedLogos = await listUserLogos(session.user.id);
+  } catch (err) {
+    console.error('Could not load shared logos', err);
+  }
+  renderSharedLogos();
 }

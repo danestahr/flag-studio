@@ -129,8 +129,7 @@ async function attachSyncedLogo(projectId, syncedInfo, templateId) {
       flagId: templateId,
       colors: dominant ? { 'zone-primary': '#FFFFFF', 'zone-secondary': dominant } : { ...DEFAULT_COLORS },
       baseAssignment: {},
-      variations: [{ id: 'v' + Date.now(), name: 'Variation 1', logos: [placement], backLogos: [] }],
-      sameLogoOnBothSides: true,
+      variations: [{ id: crypto.randomUUID(), name: 'Variation 1', logos: [placement], backLogos: [] }],
       logoLayout: 'single',
     });
   } catch (err) {
@@ -159,7 +158,6 @@ async function retargetFlagTemplate(projectId, newTemplateId) {
       colors: flagCfg.colors || {},
       baseAssignment: flagCfg.base_assignment || {},
       variations: varItems,
-      sameLogoOnBothSides: flagCfg.same_logo_on_both_sides ?? true,
       logoLayout: Array.isArray(varData) ? 'single' : (varData.layout || 'single'),
     });
   } catch (err) {

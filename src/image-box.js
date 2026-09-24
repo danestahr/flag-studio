@@ -158,6 +158,62 @@ export function layoutImgDragThumb(wrap, thumb, bg, containerW, containerH, onNa
   }
 }
 
+// ── Cropped placed-image geometry ──────────────────────────────────────
+// A cropped logo box (createImageBox's `cropped` option) shows a resizable/
+// movable *window* (data.x/y/w/h, percent of zone, same as any other placed
+// image) onto an image that has its OWN fixed size/position — imageBaseW/
+// imageBaseH (percent of zone, set once and never touched again by a resize)
+// and imageAbsX/imageAbsY (percent of zone, the image's center — moved
+// rigidly along with the box on a plain drag, but otherwise untouched by a
+// resize) and imageScale (percent, 100 = imageBaseW/H at 1:1, adjusted by
+// the crop-edit wheel gesture). This is deliberately a different, simpler
+// shape than the coverFitBox/clampPanPct/coverImgBox trio above: those
+// recompute a fresh cover-fit from whatever the CURRENT container size is on
+// every call (right for a background image, which has no independent size of
+// its own), where this instead fixes the image's size/position so resizing
+// or moving the crop window can never move or rescale the image itself —
+// only pan (drag while in crop-edit mode) and zoom (wheel) do that.
+
+// Seeds imageBaseW/imageBaseH/imageAbsX/imageAbsY/imageScale the first time a
+// layer becomes cropped (a no-op once they exist) — a plain "cover the box
+// as it's sized right now" default, sized from the image's natural aspect
+// ratio. Reads the box's CURRENT data.w/data.h (percent of the zone's WIDTH/
+// HEIGHT respectively — see cropImageRect below) once, at seed time only —
+// never again afterward. zoneW/zoneH (the zone's real pixel size) are
+// required to convert those two percent bases and natW/natH's raw pixel
+// scale into one common unit before comparing them — data.w/data.h and
+// natW/natH are otherwise NOT directly comparable numbers (a percent isn't a
+// pixel, and "percent of width" isn't "percent of height" unless the zone
+// happens to be square), so skipping this conversion silently produces a
+// wildly wrong cover scale for any image/zone combination where those don't
+// happen to already match up — most visible on a naturally wide/short
+// logotype (many vector logos; a raster export is more often pre-padded
+// close to square) forced into the square default below.
+export function initCropImageGeometry(data, natW, natH, zoneW, zoneH) {
+  if (data.imageBaseW != null && data.imageBaseH != null) return;
+  const boxW = data.w / 100 * zoneW, boxH = data.h / 100 * zoneH;
+  const scale = Math.max(boxW / natW, boxH / natH);
+  data.imageBaseW = natW * scale / zoneW * 100;
+  data.imageBaseH = natH * scale / zoneH * 100;
+  data.imageAbsX = data.x;
+  data.imageAbsY = data.y;
+  data.imageScale = 100;
+}
+
+// The image's absolute rect in whatever consistent unit `unitW`/`unitH`
+// (percent-of-zone converted into) represent — px for the live canvas
+// (zoneRect.width/height), sign/viewBox units for the SVG exporters (zone.w/
+// zone.h) — same "percent of zone, converted by the caller" convention
+// data.x/data.y/data.w/data.h already use for the box itself.
+export function cropImageRect(data, unitW, unitH) {
+  const scale = (data.imageScale ?? 100) / 100;
+  const w = (data.imageBaseW ?? 0) / 100 * unitW * scale;
+  const h = (data.imageBaseH ?? 0) / 100 * unitH * scale;
+  const cx = (data.imageAbsX ?? 50) / 100 * unitW;
+  const cy = (data.imageAbsY ?? 50) / 100 * unitH;
+  return { x: cx - w / 2, y: cy - h / 2, w, h };
+}
+
 // Clamp bounds for drag/resize, expressed as percent of the zone box — the
 // zone is only a placement suggestion (not a hard boundary), so a logo can
 // be dragged/resized past it, but not past the canvas itself, which clips
@@ -288,6 +344,37 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
   const {
     src, alt = '', fileLabel, visualEl, aboveFrame = false, belowBackground = false,
     minW = 10, maxW = 150, onClick, onStart, onCommit, onRemove,
+    // cropped: the box's w/h independently of the image's own aspect ratio
+    // (unlike the default locked-image-aspect sizing), and the image inside
+    // it has its OWN fixed geometry (imageBaseW/imageBaseH/imageAbsX/
+    // imageAbsY/imageScale — see initCropImageGeometry/cropImageRect below).
+    // Resizing the box behaves differently depending on whether the box is
+    // currently in crop-edit mode (double-click, or the crop hover button —
+    // see enterCropEdit further down):
+    //   - IN crop-edit mode, each axis resizes independently (an edge handle
+    //     only touches its own axis) and the image's geometry is untouched —
+    //     this is what actually redefines the crop, revealing more/less of a
+    //     visually fixed image.
+    //   - NOT in crop-edit mode — the crop is already dialed in — resizing
+    //     instead scales the WHOLE cropped picture as one rigid unit (locked
+    //     aspect, same diagonal-projected math as a plain image box), moving
+    //     the image's geometry in lockstep so nothing re-crops.
+    // Only an explicit pan (drag) or zoom (wheel) while IN crop-edit mode
+    // otherwise changes the image's geometry. This is deliberately NOT the
+    // same model as the hole-sign background/banner cover-fit pan/zoom
+    // (coverFitBox/clampPanPct/coverImgBox above), which recomputes fresh
+    // from the CURRENT container size on every call — right for a
+    // background (nothing to "resize" independently of its container), but
+    // for a crop box it would mean the image rescales/reflows every time the
+    // box itself is resized, instead of staying fixed while a different
+    // amount of it shows through the crop window. onCropChange fires after
+    // every pan/zoom/scale-in-lockstep adjustment so the caller can
+    // markDirty/redraw. onEnableCrop fires on a double-click of a NOT-yet-
+    // cropped image — the caller's job is to set data.cropped = true and
+    // re-render (createImageBox can't switch a box from the plain <img>
+    // visual to the cropbox one after the fact); see enterCropEditOn below
+    // for resuming straight into crop-edit mode on the fresh box.
+    cropped = false, zoneSignW, zoneSignH, onCropChange, onEnableCrop,
   } = opts;
 
   const wrap = document.createElement('div');
@@ -295,12 +382,202 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
   wrap.style.left = data.x + '%';
   wrap.style.top = data.y + '%';
   wrap.style.width = data.w + '%';
+  // A square percent box (data.h = data.w) is just a placeholder until the
+  // image's natural size is known — see the `cropped` branch below, which
+  // corrects it (before the user ever sees it, when cached; in the very next
+  // paint otherwise) to actually match the image's aspect ratio, so entering
+  // crop mode never itself resizes/zooms the image.
+  let pendingSquareHeight = false;
+  if (cropped && data.h == null) { data.h = data.w; pendingSquareHeight = true; }
   if (data.h != null) wrap.style.height = data.h + '%';
 
-  let visual, ghost = null;
+  let visual, ghost = null, layoutCrop = null, cropRo = null;
+  let editingCrop = false, enterCropEdit = null;
+  // Set by the pan gesture in the shared pointerdown handler below, cleared
+  // there on pointerup — exitCropEditLocal reaches into these (not local to
+  // that handler) so exiting mid-drag (e.g. via Escape) actually cancels an
+  // in-progress pan instead of leaving a stale listener updating data.
+  // imageAbsX/imageAbsY after the box has visually left crop-editing.
+  let panMoveFn = null, panUpFn = null;
   if (visualEl) {
     wrap.appendChild(visualEl);
     visual = visualEl;
+  } else if (isDisplayableImage(src) && cropped) {
+    // A src change (e.g. the "Replace" toolbar action swapping in a
+    // different logo) invalidates any cached natural size AND the crop
+    // geometry derived from it — otherwise the new image would render
+    // cropped using the old logo's framing until something else happened to
+    // clear it.
+    if (data.imageUrl && data.imageUrl !== src) {
+      data.imageNaturalW = null;
+      data.imageNaturalH = null;
+      data.imageBaseW = null;
+      data.imageBaseH = null;
+    }
+    data.imageUrl = src;
+    const cropbox = document.createElement('div');
+    cropbox.className = 'dz-logo-cropbox';
+    const thumb = document.createElement('img');
+    thumb.className = 'dz-logo-crop-thumb';
+    thumb.alt = '';
+    thumb.draggable = false;
+    thumb.src = src;
+    cropbox.appendChild(thumb);
+    wrap.appendChild(cropbox);
+    visual = cropbox;
+
+    // Bleed layer — a full, dimmed copy of the SAME image at its actual
+    // position/size, shown ONLY in crop-edit mode (see enterCropEdit below)
+    // so the part that will be clipped away is still visible while adjusting
+    // (the classic "picture extends past its frame" crop-tool look). Lives
+    // as its own absolutely-positioned <img>, sized/positioned identically
+    // to `thumb` but outside the cropbox's overflow:hidden, specifically so
+    // it CAN paint past the crop window.
+    const bleedWrap = document.createElement('div');
+    bleedWrap.className = 'dz-logo-crop-bleed';
+    const bleedImg = document.createElement('img');
+    bleedImg.alt = '';
+    bleedImg.draggable = false;
+    bleedImg.src = src;
+    bleedWrap.appendChild(bleedImg);
+    wrap.appendChild(bleedWrap);
+
+    // Lays out `thumb`/`bleedImg` in px, relative to `wrap`'s own box, from
+    // the image's fixed geometry (data.imageAbsX/imageAbsY/imageBaseW/
+    // imageBaseH/imageScale, all percent-of-zone — same convention as data.x/
+    // data.y/data.w already use) — NOT from the box's current size, which is
+    // exactly what keeps a box resize from moving/rescaling the image (see
+    // the `cropped` doc above). Reads real layout rects (zone/wrap) rather
+    // than assuming any fixed px-per-percent, same as applyDragMove already
+    // does elsewhere in this function.
+    layoutCrop = () => {
+      if (!data.imageBaseW || !data.imageBaseH || !wrap.isConnected) return;
+      const zoneRect = zone.getBoundingClientRect();
+      const wrapRect = wrap.getBoundingClientRect();
+      if (!zoneRect.width || !zoneRect.height) return;
+      const rect = cropImageRect(data, zoneRect.width, zoneRect.height);
+      const left = rect.x - (wrapRect.left - zoneRect.left);
+      const top = rect.y - (wrapRect.top - zoneRect.top);
+      [thumb, bleedImg].forEach(img => {
+        img.style.left = left + 'px';
+        img.style.top = top + 'px';
+        img.style.width = rect.w + 'px';
+        img.style.height = rect.h + 'px';
+      });
+    };
+    // The image's fixed geometry doesn't exist yet on a freshly-cropped
+    // layer — seed it once (a plain "cover the box as it's sized right now"
+    // default) from the image's natural aspect ratio, backfilling that
+    // aspect ratio itself first if this is also the first time this image's
+    // size has ever been needed (mirrors loadNaturalImgSize's use elsewhere
+    // in this file for the exact same "not captured yet" case).
+    //
+    // If the box's height was only just defaulted to a square (see
+    // pendingSquareHeight above), replace it here with the height that
+    // actually matches the image's aspect ratio — through the zone's real
+    // pixel size, same as initCropImageGeometry itself needs (data.w/data.h
+    // are percent of the zone's width/height respectively, not a common
+    // scale) — so the box the user sees always matches the image's own
+    // shape at the moment crop is first enabled, instead of an arbitrary
+    // square that the (dimensionally-corrected) cover-fit would then have to
+    // zoom dramatically to fill.
+    const fixPendingHeight = (natW, natH, zoneRect) => {
+      if (!pendingSquareHeight) return;
+      data.h = data.w * (zoneRect.width / zoneRect.height) * (natH / natW);
+      wrap.style.height = data.h + '%';
+    };
+    // Seeding needs the ZONE's real pixel size (see initCropImageGeometry),
+    // but this whole box (and often its ancestor zone/svg too) is still
+    // being built off-document at this point in a fresh render — `wrap` and
+    // `zone` don't become part of the live, laid-out DOM until the caller
+    // appends the tree this box is part of, sometime after createImageBox
+    // returns. Seeding here regardless (using whatever getBoundingClientRect
+    // reports right now — reliably all-zero while disconnected) would bake
+    // in a divide-by-zero NaN forever, since initCropImageGeometry only ever
+    // seeds once (data.imageBaseW/H != null short-circuits every later
+    // call). So try seeding immediately (succeeds if this happens to be a
+    // re-render of an already-connected box), and otherwise let the
+    // ResizeObserver below retry once `wrap` actually gets connected and
+    // laid out — which, same as any ResizeObserver callback, still lands
+    // before the next paint, so there's nothing to visibly flash even
+    // though the seed didn't land on the very first attempt.
+    let geometrySeeded = false;
+    const seedGeometryIfReady = () => {
+      if (geometrySeeded || !data.imageNaturalW || !data.imageNaturalH) return;
+      const zoneRect = zone.getBoundingClientRect();
+      if (!zoneRect.width || !zoneRect.height) return;
+      geometrySeeded = true;
+      fixPendingHeight(data.imageNaturalW, data.imageNaturalH, zoneRect);
+      initCropImageGeometry(data, data.imageNaturalW, data.imageNaturalH, zoneRect.width, zoneRect.height);
+      layoutCrop();
+      onCropChange?.();
+    };
+    if (!data.imageNaturalW || !data.imageNaturalH) {
+      loadNaturalImgSize(src, (natW, natH) => {
+        data.imageNaturalW = natW;
+        data.imageNaturalH = natH;
+        seedGeometryIfReady();
+      });
+    }
+    seedGeometryIfReady();
+    // Catches container-size changes this box's own resize handles didn't
+    // cause (an editor zoom-level change, a window resize), AND is what
+    // actually completes the geometry seed above on a fresh (first-ever)
+    // crop, once `wrap` is connected and has a real size — the resize
+    // handlers below already call layoutCrop() directly after their own
+    // moves, same as clipToCanvas/refreshImageBoxClips do for the clip-path.
+    cropRo = new ResizeObserver(() => { seedGeometryIfReady(); layoutCrop(); });
+    cropRo.observe(wrap);
+
+    // ── Crop-edit mode ──────────────────────────────────────────────────
+    // Double-click enters/exits it (see the dblclick listener further
+    // below); while active, dragging directly on the image pans it within
+    // the fixed crop window (Option/Alt+drag instead moves the whole box+
+    // image together, same as a plain non-crop drag) and Option/Alt+wheel
+    // zooms it (a plain wheel is left alone, so the canvas's own ⌘+scroll
+    // zoom still works normally over an active crop box) — same math as the
+    // box-move/resize handlers elsewhere in this function, just targeting
+    // imageX/imageY/imageScale instead of data.x/y/w. The resize handles
+    // keep working unchanged throughout (they're wired on the handle
+    // elements, not on wrap), so the box's own corners double as the crop's
+    // bounding-box handles the whole time; hold Shift on a handle to resize
+    // without changing the box's own aspect ratio.
+    const exitCropEditLocal = () => {
+      editingCrop = false;
+      wrap.classList.remove('crop-editing');
+      if (panMoveFn) { wrap.removeEventListener('pointermove', panMoveFn); panMoveFn = null; }
+      if (panUpFn) { wrap.removeEventListener('pointerup', panUpFn); panUpFn = null; }
+    };
+    enterCropEdit = () => {
+      exitCropEdit();
+      editingCrop = true;
+      wrap.classList.add('crop-editing');
+      layoutCrop();
+      _activeCropEdit = { wrap, exit: exitCropEditLocal };
+    };
+    wrap._enterCropEdit = enterCropEdit;
+    ensureCropEditDocListener();
+
+    wrap.addEventListener('wheel', e => {
+      // Only Option/Alt+wheel zooms the image — a plain wheel (or ⌘+wheel,
+      // the canvas's own zoom gesture) is left untouched and unpreventDefault-
+      // ed so it reaches whatever handles canvas zoom normally, even while
+      // this box happens to be in crop-edit mode underneath the cursor.
+      if (!editingCrop || !e.altKey) return;
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -5 : 5;
+      data.imageScale = Math.max(20, Math.min(400, (data.imageScale ?? 100) + delta));
+      layoutCrop();
+      onCropChange?.();
+    });
+
+    wrap.addEventListener('dblclick', e => {
+      if (isCorner(e.target) || e.target.closest('.dz-logo-hover-actions')) return;
+      e.stopPropagation();
+      e.preventDefault();
+      if (editingCrop) exitCropEdit();
+      else enterCropEdit();
+    });
   } else if (isDisplayableImage(src)) {
     const img = document.createElement('img');
     img.className = 'placed-img';
@@ -310,9 +587,33 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
     // The natural size (and so the rendered height, since height:auto) isn't
     // known until the image loads — clipping any earlier would use a stale
     // (often zero) rect.
-    img.addEventListener('load', () => { clipToCanvas(img, canvasEl); if (ghost) clipToCanvas(ghost, canvasEl); });
+    img.addEventListener('load', () => {
+      clipToCanvas(img, canvasEl); if (ghost) clipToCanvas(ghost, canvasEl);
+      // Opportunistically cache the natural size on `data` while this image
+      // is shown plain (uncropped) — if crop is enabled on this same layer
+      // later (see the `cropped` branch above, and its data.imageNaturalW/H
+      // check), it can seed the crop geometry synchronously instead of
+      // loading the image a second time. Without this, that second load is
+      // async, so the freshly-cropped box first paints with a placeholder
+      // square (see pendingSquareHeight above) and only snaps to the
+      // image's real aspect ratio/position once that load resolves — a
+      // visible flash/jump right as crop mode is entered. Always overwrite
+      // (not just when unset) so a "Replace" that swaps `src` while the
+      // layer is still uncropped can't leave the previous image's now-stale
+      // size cached for whenever crop eventually gets enabled.
+      data.imageNaturalW = img.naturalWidth;
+      data.imageNaturalH = img.naturalHeight;
+    });
     wrap.appendChild(img);
     visual = img;
+
+    if (onEnableCrop) {
+      wrap.addEventListener('dblclick', e => {
+        e.stopPropagation();
+        e.preventDefault();
+        onEnableCrop();
+      });
+    }
 
     if (belowBackground) {
       // See the belowBackground doc above — the real img just stays laid
@@ -338,16 +639,29 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
     visual = badge;
   }
 
-  if (onRemove) {
+  if (onRemove || enterCropEdit) {
     const actions = document.createElement('div');
     actions.className = 'dz-logo-hover-actions';
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.className = 'dz-logo-mini-btn dz-logo-mini-remove';
-    removeBtn.title = 'Remove';
-    removeBtn.innerHTML = '<i class="fa-solid fa-trash" aria-hidden="true"></i>';
-    removeBtn.addEventListener('click', e => { e.stopPropagation(); onRemove(); });
-    actions.appendChild(removeBtn);
+    if (enterCropEdit) {
+      // Same as double-clicking the image — an explicit, discoverable
+      // affordance for the same in-place crop-edit mode.
+      const cropBtn = document.createElement('button');
+      cropBtn.type = 'button';
+      cropBtn.className = 'dz-logo-mini-btn dz-logo-mini-crop';
+      cropBtn.title = 'Adjust crop';
+      cropBtn.innerHTML = '<i class="fa-solid fa-crop-simple" aria-hidden="true"></i>';
+      cropBtn.addEventListener('click', e => { e.stopPropagation(); enterCropEdit(); });
+      actions.appendChild(cropBtn);
+    }
+    if (onRemove) {
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'dz-logo-mini-btn dz-logo-mini-remove';
+      removeBtn.title = 'Remove';
+      removeBtn.innerHTML = '<i class="fa-solid fa-trash" aria-hidden="true"></i>';
+      removeBtn.addEventListener('click', e => { e.stopPropagation(); onRemove(); });
+      actions.appendChild(removeBtn);
+    }
     wrap.appendChild(actions);
   }
 
@@ -361,6 +675,12 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
 
   // ── Drag ──────────────────────────────────────────────────
   let dragging = false, moved = false, startPX, startPY, startX, startY;
+  // Only used when `cropped` — the image's own abs position at drag-start,
+  // so applyDragMove can carry it along by the box's exact applied delta
+  // (post-snap/clamp), keeping image and box moving as one rigid unit
+  // instead of the image staying fixed in the zone while the box slides
+  // over it (that's what a *resize* does instead — see the resize handler).
+  let dragImageAbsX0, dragImageAbsY0;
   // A pointerdown+pointerup pair on the same element always fires a trailing
   // native 'click' afterward, even when a drag or resize moved the box in
   // between — the browser only cares that down/up landed on the same target,
@@ -378,7 +698,6 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
     // mouse events too), so the button's own click listener never runs and
     // this component's generic onClick fires in its place instead.
     if (isCorner(e.target) || e.target.closest('.dz-logo-hover-actions')) return;
-    onStart?.();
     // preventDefault below also suppresses the browser's default focus-blur
     // of whatever text field was previously focused elsewhere on the page —
     // without this, that stale field stays focused and a later Delete/
@@ -402,11 +721,73 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
         ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       return;
     }
+
+    // Crop-edit mode redefines what dragging on the image does — a plain
+    // drag pans the image within the fixed crop window (the resize handles
+    // are what redefines the window itself; Option/Alt+wheel is what zooms
+    // the image within it), while Option/Alt+drag instead moves the box AND
+    // the image together, as one rigid unit, same as a plain non-cropped
+    // drag would. Both are usable in the same crop-edit session this way,
+    // without switching gestures or leaving crop-edit mode in between. A
+    // totally separate gesture from the drag-to-move below (its own pointer
+    // capture/move/up), since the two are mutually exclusive for the
+    // duration of one pointerdown.
+    if (editingCrop) {
+      suppressNextClick = true;
+      wrap.setPointerCapture(e.pointerId);
+      const x0 = e.clientX, y0 = e.clientY;
+      const ix0 = data.imageAbsX ?? data.x, iy0 = data.imageAbsY ?? data.y;
+      const bx0 = data.x, by0 = data.y;
+      // Percent-of-ZONE (same convention as data.imageAbsX/Y and data.x/y
+      // themselves) — not percent-of-box, which would make the drag
+      // distance depend on the crop box's own current size.
+      const zoneRect = zone.getBoundingClientRect();
+      const onPanMove = ev => {
+        const dx = (ev.clientX - x0) / zoneRect.width * 100;
+        const dy = (ev.clientY - y0) / zoneRect.height * 100;
+        if (ev.altKey) {
+          // Move the whole cropped picture (box + image) together, same as
+          // a plain non-crop drag — the image's own delta is carried along
+          // by the box's ACTUAL applied delta (post-clamp), same idea as
+          // applyDragMove's cropped branch for a plain move.
+          const bounds = canvasBoundsInZonePct(zone, canvasEl);
+          const nx = Math.max(bounds.minX, Math.min(bounds.maxX, bx0 + dx));
+          const ny = Math.max(bounds.minY, Math.min(bounds.maxY, by0 + dy));
+          data.imageAbsX = ix0 + (nx - bx0);
+          data.imageAbsY = iy0 + (ny - by0);
+          data.x = nx;
+          data.y = ny;
+          wrap.style.left = nx + '%';
+          wrap.style.top = ny + '%';
+        } else {
+          // Plain drag: pan the image within the box — the box itself
+          // (data.x/data.y) never moves, only what the fixed window shows.
+          data.imageAbsX = ix0 + dx;
+          data.imageAbsY = iy0 + dy;
+        }
+        layoutCrop();
+        clipToCanvas(visual, canvasEl);
+        onCropChange?.();
+      };
+      const onPanUp = () => {
+        wrap.removeEventListener('pointermove', onPanMove);
+        wrap.removeEventListener('pointerup', onPanUp);
+        panMoveFn = null;
+        panUpFn = null;
+      };
+      panMoveFn = onPanMove;
+      panUpFn = onPanUp;
+      wrap.addEventListener('pointermove', onPanMove);
+      wrap.addEventListener('pointerup', onPanUp);
+      return;
+    }
+
     dragging = true;
     moved = false;
     wrap.setPointerCapture(e.pointerId);
     startPX = e.clientX; startPY = e.clientY;
     startX = data.x; startY = data.y;
+    dragImageAbsX0 = data.imageAbsX; dragImageAbsY0 = data.imageAbsY;
   });
 
   // Pointermove can fire far more often than the screen actually repaints
@@ -454,6 +835,17 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
     data.x = nx; data.y = ny;
     wrap.style.left = nx + '%';
     wrap.style.top = ny + '%';
+    // Carry the image along by the box's ACTUAL applied delta (post-snap/
+    // clamp, not the raw pointer delta) — this is a plain reposition of the
+    // whole placed logo, not a resize, so image and box move as one rigid
+    // unit. layoutCrop() only needs to recompute the DOM px position here
+    // (not the image's own data), since dragging never changes anything
+    // about the box's size that the layout math depends on.
+    if (data.imageBaseW != null) {
+      data.imageAbsX = dragImageAbsX0 + (nx - startX);
+      data.imageAbsY = dragImageAbsY0 + (ny - startY);
+      layoutCrop?.();
+    }
     clipToCanvas(visual, canvasEl);
     if (ghost) {
       ghost.style.left = nx + '%';
@@ -485,6 +877,12 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
       if (Math.hypot(dx, dy) < CLICK_MOVE_THRESHOLD) return;
       moved = true;
       suppressNextClick = true;
+      // Fired only now (not on pointerdown) so it stays symmetric with
+      // onCommit below, which likewise only fires when a drag actually
+      // happened — onStart hides the toolbar for the duration of a real
+      // drag, and a plain tap/click (no onStart call) never hides it, so
+      // there's nothing selecting-only code needs to undo.
+      onStart?.();
     }
     latestDragEvent = e;
     if (dragRaf == null) dragRaf = requestAnimationFrame(applyDragMove);
@@ -527,6 +925,9 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
     const [dirX, dirY] = RESIZE_DIR[pos];
     let resizing = false, rStartClientX, rStartClientY, rStartW, rStartH, rDzW, rDzH;
     let rStartCenterPxX, rStartCenterPxY, rStartHalfPxW, rStartHalfPxH;
+    // Only used when cropped and NOT in crop-edit mode — see the scale-in-
+    // lockstep branch in applyResizeMove below.
+    let rStartImageScale, rStartImageAbsX, rStartImageAbsY;
     // Same rAF-coalescing as the drag handler above: this fires on every raw
     // pointermove (which can outpace the screen's actual repaint rate) and
     // does a synchronous layout read (clipToCanvas) right after a style
@@ -541,6 +942,56 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
       const dy = e.clientY - rStartClientY;
       // dead-zone: ignore micro-movements
       if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+
+      if (cropped && editingCrop) {
+        // Only while actively in crop-edit mode does resizing redefine the
+        // crop window itself — each axis resizes independently instead of
+        // being projected onto a locked diagonal (an edge handle only ever
+        // touches its own axis), and the image's own geometry is left alone
+        // (see the cropped doc above), so a bigger/smaller box just reveals
+        // more/less of the same fixed image. Outside crop-edit mode (the
+        // `cropped` branch further below, sharing the default locked-aspect
+        // path with template-logo slots) resizing instead scales the WHOLE
+        // already-cropped picture as one unit — no more independent-axis
+        // resize once the crop itself is dialed in and confirmed.
+        let dwPx = dirX !== 0 ? dirX * dx : 0;
+        let dhPx = dirY !== 0 ? dirY * dy : 0;
+        if (e.metaKey) { dwPx *= 2; dhPx *= 2; }
+        let nw, nh;
+        if (e.shiftKey && rStartW > 0 && rStartH > 0) {
+          // Preserve the box's own aspect ratio instead of resizing each
+          // axis independently — a corner handle drives both axes at once,
+          // so use whichever one the pointer actually moved further to
+          // decide the scale (the other axis, driven by dirX/dirY === 0 on
+          // an edge handle, always contributes 0 here and just falls out).
+          const scaleW = 1 + (dwPx / rDzW * 100) / rStartW;
+          const scaleH = 1 + (dhPx / rDzH * 100) / rStartH;
+          const scale = Math.abs(dwPx) >= Math.abs(dhPx) ? scaleW : scaleH;
+          nw = Math.max(minW, Math.min(maxW, rStartW * scale));
+          nh = Math.max(minW, Math.min(maxW, rStartH * scale));
+        } else {
+          nw = Math.max(minW, Math.min(maxW, rStartW + dwPx / rDzW * 100));
+          nh = Math.max(minW, Math.min(maxW, rStartH + dhPx / rDzH * 100));
+        }
+        data.w = nw;
+        data.h = nh;
+        wrap.style.width = nw + '%';
+        wrap.style.height = nh + '%';
+        if (!e.metaKey) {
+          const halfPxW = (nw / 100 * rDzW) / 2;
+          const halfPxH = (nh / 100 * rDzH) / 2;
+          const cx = rStartCenterPxX + dirX * (halfPxW - rStartHalfPxW);
+          const cy = rStartCenterPxY + dirY * (halfPxH - rStartHalfPxH);
+          const bounds = canvasBoundsInZonePct(zone, canvasEl);
+          data.x = Math.max(bounds.minX, Math.min(bounds.maxX, (cx / rDzW) * 100));
+          data.y = Math.max(bounds.minY, Math.min(bounds.maxY, (cy / rDzH) * 100));
+          wrap.style.left = data.x + '%';
+          wrap.style.top = data.y + '%';
+        }
+        layoutCrop?.();
+        clipToCanvas(visual, canvasEl);
+        return;
+      }
       // Project the mouse displacement onto the box's fixed aspect-ratio
       // diagonal so the dragged point tracks the cursor 1:1. A naive per-axis
       // sum (dirX*rawDx + dirY*rawDy) double-counts corner handles, since
@@ -586,6 +1037,24 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
         wrap.style.top = data.y + '%';
         if (ghost) { ghost.style.left = data.x + '%'; ghost.style.top = data.y + '%'; }
       }
+      // Cropped, but NOT in crop-edit mode (that path returned early above)
+      // — the crop itself is already dialed in, so resizing now scales the
+      // whole already-cropped picture as one rigid unit instead of
+      // redefining what's visible: the image's own size (imageScale) scales
+      // by the exact same factor as the box, and its center is scaled away
+      // from/toward the same anchor point the box itself resizes from (the
+      // fixed opposite corner/edge, or the box's own center under Cmd/Meta),
+      // so image and box move together exactly as they visually appear to.
+      if (cropped) {
+        const anchorPxX = e.metaKey ? rStartCenterPxX : rStartCenterPxX - dirX * rStartHalfPxW;
+        const anchorPxY = e.metaKey ? rStartCenterPxY : rStartCenterPxY - dirY * rStartHalfPxH;
+        const imgCenterPxX0 = (rStartImageAbsX / 100) * rDzW;
+        const imgCenterPxY0 = (rStartImageAbsY / 100) * rDzH;
+        data.imageAbsX = (anchorPxX + (imgCenterPxX0 - anchorPxX) * scale) / rDzW * 100;
+        data.imageAbsY = (anchorPxY + (imgCenterPxY0 - anchorPxY) * scale) / rDzH * 100;
+        data.imageScale = Math.max(10, Math.min(2000, rStartImageScale * scale));
+        layoutCrop?.();
+      }
       clipToCanvas(visual, canvasEl);
       if (ghost) clipToCanvas(ghost, canvasEl);
     }
@@ -604,6 +1073,9 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
       rStartCenterPxY = (data.y / 100) * rDzH;
       rStartHalfPxW = wrap.offsetWidth / 2;
       rStartHalfPxH = wrap.offsetHeight / 2;
+      rStartImageScale = data.imageScale;
+      rStartImageAbsX = data.imageAbsX;
+      rStartImageAbsY = data.imageAbsY;
       onStart?.();
       document.activeElement?.blur?.();
       e.stopPropagation();
@@ -641,5 +1113,78 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
   // — clipping now would only see a zero-size, not-yet-laid-out rect.
   requestAnimationFrame(() => { clipToCanvas(visual, canvasEl); if (ghost) clipToCanvas(ghost, canvasEl); });
 
+  // Arrow-key nudge — moves the box by a real on-screen pixel delta (not a
+  // fixed percent), converting through the zone's live rect the same way
+  // applyDragMove does, and clamped to the same canvas bounds. Unlike a drag,
+  // each call is already one complete, discrete step, so it commits (and
+  // carries the crop image along, same as applyDragMove) immediately rather
+  // than waiting for a separate pointerup.
+  wrap._nudge = function nudgeBox(dxPx, dyPx) {
+    const zoneRect = zone.getBoundingClientRect();
+    if (!zoneRect.width || !zoneRect.height) return;
+    const bounds = canvasBoundsInZonePct(zone, canvasEl);
+    const nx = Math.max(bounds.minX, Math.min(bounds.maxX, data.x + dxPx / zoneRect.width * 100));
+    const ny = Math.max(bounds.minY, Math.min(bounds.maxY, data.y + dyPx / zoneRect.height * 100));
+    const dxPct = nx - data.x, dyPct = ny - data.y;
+    data.x = nx; data.y = ny;
+    wrap.style.left = nx + '%';
+    wrap.style.top = ny + '%';
+    if (data.imageBaseW != null) {
+      data.imageAbsX += dxPct;
+      data.imageAbsY += dyPct;
+      layoutCrop?.();
+    }
+    clipToCanvas(visual, canvasEl);
+    if (ghost) {
+      ghost.style.left = nx + '%';
+      ghost.style.top = ny + '%';
+      clipToCanvas(ghost, canvasEl);
+    }
+    onCommit?.();
+  };
+
   return wrap;
+}
+
+// ── Crop-edit mode (in-place, on-canvas) ────────────────────────────────
+// Only one box is ever in crop-edit mode at a time. A single module-level
+// document listener (guarded so it's only ever registered once, no matter
+// how many cropped boxes get created/torn down across re-renders) closes
+// whichever one is active on an outside click, Escape, or Enter — see
+// createImageBox's cropped-mode dblclick handler for how a box enters it.
+let _activeCropEdit = null;
+let _cropEditDocListenerAdded = false;
+
+function exitCropEdit() {
+  _activeCropEdit?.exit();
+  _activeCropEdit = null;
+}
+
+function ensureCropEditDocListener() {
+  if (_cropEditDocListenerAdded) return;
+  _cropEditDocListenerAdded = true;
+  document.addEventListener('pointerdown', e => {
+    if (_activeCropEdit && !_activeCropEdit.wrap.contains(e.target)) exitCropEdit();
+  }, true);
+  document.addEventListener('keydown', e => {
+    if (!_activeCropEdit) return;
+    // Enter "saves" the crop (same as double-clicking again or clicking
+    // away — there's nothing to actually commit beyond exiting, since every
+    // pan/zoom/resize during the gesture already wrote straight to `data`).
+    // Guarded like the rest of the app's global Delete/Backspace handling so
+    // Enter still submits an open text field instead of being hijacked here.
+    if (e.key !== 'Escape' && e.key !== 'Enter') return;
+    if (document.activeElement?.closest?.('input, textarea, select, [contenteditable]')) return;
+    exitCropEdit();
+  });
+}
+
+// Resumes crop-edit mode on a freshly re-rendered box — for the "double-click
+// a not-yet-cropped image" path, where the caller has to set data.cropped =
+// true and rebuild the whole box (createImageBox can't switch a live box's
+// visual from a plain <img> to the cropbox one) before there's anything to
+// enter edit mode on. Call this with the new box's wrap right after that
+// rebuild; a no-op on any wrap that wasn't built with `cropped: true`.
+export function enterCropEditOn(wrapEl) {
+  wrapEl?._enterCropEdit?.();
 }

@@ -35,6 +35,17 @@
     </div>
     <div id="projectsList"><div class="drafts-empty">Loading…</div></div>
     <div id="loadMoreWrap"></div>
+
+    <!-- Hidden for now — cross-project logo sharing isn't needed yet (logos
+         should be shared across a project's own tools, flags <-> hole signs,
+         not across a user's whole project list). Left in place, not ripped
+         out, since a real cross-project library may still be wanted later. -->
+    <div id="sharedLogosSection" style="margin-top:2rem;display:none">
+      <div class="section-title">Shared Logos</div>
+      <div class="ci-logo-grid" id="sharedLogosGrid"></div>
+      <button class="ci-add-logo-btn" onclick="document.getElementById('sharedLogoFile').click()">+ Add logo</button>
+      <input type="file" id="sharedLogoFile" accept="image/*,.pdf,.ai,.eps" multiple style="display:none">
+    </div>
   </div>
 </div>
 
@@ -46,6 +57,18 @@
     <div class="modal-actions">
       <button class="btn-secondary" onclick="window.closeDeleteProjectModal()">Cancel</button>
       <button id="deleteProjectConfirmBtn" class="btn-danger" onclick="window.confirmDeleteProject()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete shared logo confirmation modal -->
+<div id="deleteLogoModal" class="modal-backdrop" style="display:none">
+  <div class="modal-box">
+    <div class="modal-title">Delete this logo?</div>
+    <p class="modal-body">It may be used in other projects — deleting it removes it from any flag design that still references it.</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="window.closeDeleteLogoModal()">Cancel</button>
+      <button id="deleteLogoConfirmBtn" class="btn-danger" onclick="window.confirmDeleteLogo()">Delete</button>
     </div>
   </div>
 </div>

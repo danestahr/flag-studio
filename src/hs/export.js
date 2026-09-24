@@ -3,109 +3,208 @@ import { HS, UI, getEffectiveState, getEffectiveVariation } from './state.js';
 import { HS_H, HS_W } from '../hole-sign-data.js';
 import { escXml, makeHoleSignSvg, renderHoleSignInto } from '../hole-sign-render.js';
 import {
-  generateShareToken, loadEventName,
-  loadOrderIntake, uploadPrintSheet, sendPrintSheetReady,
-  upsertCustomerInfo, submitProjectForReview, sendOrderConfirmation,
+  generateShareToken, loadEventName, loadHoleSignConfig,
+  loadOrderIntake, uploadPrintSheet, sendPrintSheetReady, sendProofReady,
+  submitDesignForReview, adminSendDesignProof, resolveFeedback,
 } from '../supabase.js';
 import { PDFDocument, PDFName, PDFNumber, PDFOperator, PDFString } from 'pdf-lib';
 import JSZip from 'jszip';
-import { dl, esc, slug, sanitizeFilename, mapWithConcurrency, scrollToFirstError } from '../dom-utils.js';
+import { dl, slug, sanitizeFilename, mapWithConcurrency } from '../dom-utils.js';
 import { pngBlobToPdfBlob } from '../pdf-utils.js';
 import { saveDraftInternal } from './draft.js';
+import { applyRequestedHsTemplate, applyRequestedHsColors, applyRequestedHsLogo } from './variations.js';
 import { STATUS_LABEL } from '../status-labels.js';
-import {
-  renderContactShippingFields, attachContactShippingListeners, validateContactShipping,
-  renderAckItem, attachAckListeners, renderDeadlineCallout, renderRecapSection, formatDate,
-} from '../intake-shared.js';
 
-const ACK_DEADLINE_TEXT = 'I acknowledge that final artwork approval is required at least 17 days before the event to avoid rush fees. If the event is on a weekend or Monday, this deadline will be moved to the preceding Friday.';
+// ── Step 3: Review ──────────────────────────────────────────
 
-// ── Step 3: Gallery ─────────────────────────────────────────
+// Mirrors flags/gallery.js's reviewStatusOf/variation-list.js's statusTileHtml —
+// same three states, same class names (.var-status-tile), sourced from
+// HS.feedback instead of S.feedback.
+function reviewStatusOf(v) {
+  const fb = HS.feedback?.find(f => f.variation_id === v.id);
+  if (fb?.status === 'approved') return { cls: 'approved', label: 'Approved' };
+  if (fb?.status === 'needs_edits' && !fb?.resolved) return { cls: 'needs-edits', label: 'Needs edits' };
+  return { cls: 'not-reviewed', label: 'Not reviewed' };
+}
+
+function hsReviewStats() {
+  const total = HS.variations.length;
+  let approved = 0, needsEdits = 0;
+  HS.variations.forEach(v => {
+    const cls = reviewStatusOf(v).cls;
+    if (cls === 'approved') approved++;
+    else if (cls === 'needs-edits') needsEdits++;
+  });
+  return { total, approved, needsEdits, pending: total - approved - needsEdits };
+}
+
+// Only shown once a share-for-review link exists (see HS.shareToken) —
+// before that there's nothing for a customer to have responded to yet.
+function renderReviewProgress() {
+  if (!HS.shareToken || !HS.variations.length) return '';
+  const { total, approved, needsEdits, pending } = hsReviewStats();
+  return `
+    <div class="hs-review-progress" id="hsReviewProgress">
+      <div class="hs-review-progress-counts">
+        <span class="hs-review-progress-count approved">${approved} approved</span>
+        <span class="hs-review-progress-count needs-edits">${needsEdits} needs edits</span>
+        <span class="hs-review-progress-count pending">${pending} pending</span>
+      </div>
+      <div class="hs-review-progress-bar">
+        <div class="hs-review-progress-fill approved" style="width:${Math.round((approved / total) * 100)}%"></div>
+        <div class="hs-review-progress-fill needs-edits" style="width:${Math.round((needsEdits / total) * 100)}%"></div>
+      </div>
+    </div>`;
+}
+
 export function renderGallery() {
   const panel = document.getElementById('panel-3');
   panel.innerHTML = `
     <div class="hs-design-layout">
       <div class="hs-design-preview-col">
-        <div class="hs-gallery-grid" id="hsGalleryGrid"></div>
-      </div>
-      <div class="hs-design-controls">
-        <div class="p1-header hs-panel-header">
-          <div>
-            <div class="ptitle">Gallery & export</div>
-            <div class="psub">Review all variations and export or share.</div>
-          </div>
-          <div class="p1-header-actions">
-            ${UI.hsLocked ? '' : '<button class="btn sm" onclick="tryGoStep(2)"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Variations</button>'}
-            <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
-          </div>
-        </div>
-        <div class="hs-design-controls-body">
-          <div class="hs-stack-section">
-            <div class="rc-title">Selected</div>
-            <div class="hs-gallery-selected" id="hsGallerySelected"></div>
-            <div id="hsGallerySelectedName" style="font-size:13px;font-weight:500;text-align:center;margin-bottom:.5rem;color:var(--gray-600)"></div>
-            <div class="exp-row">
-              <button class="btn sm" id="hsExpPdf" onclick="exportHsPDF()">
-                <i class="fa-solid fa-file-pdf" aria-hidden="true"></i>PDF
-              </button>
-              <button class="btn sm" id="hsExpPng" onclick="exportHsPNG()">
-                <i class="fa-solid fa-download" aria-hidden="true"></i>PNG
-              </button>
-            </div>
-            <button class="btn sm" style="width:100%;justify-content:center" onclick="exportHsAllPNG()">Export all PNG</button>
-          </div>
-          <div class="share-section">
-            <div class="rc-title">Print files</div>
-            <button class="btn sm primary" id="hsExpPrintBtn" style="width:100%;justify-content:center" onclick="downloadHsPrint()"><i class="fa-solid fa-download" aria-hidden="true"></i> Download print sheets (zip)</button>
-            <div id="hsExpPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px"></div>
-          </div>
-          <div class="share-section" id="hsSubmitSection"></div>
-          <div class="share-section" id="hsEmailPrintSheetSection" style="display:${UI.isStaffOrAdmin ? '' : 'none'}">
-            <div class="rc-title">Email PDF sheet link</div>
-            <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openEmailPrintSheetModal()">Email PDF sheet link <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
-          </div>
-          <div class="share-section">
-            <div class="rc-title">Share</div>
-            <button class="btn sm primary" onclick="generateHsShareLink()">Generate share link</button>
-            <div class="share-link-box" id="hsShareLinkBox" style="display:none">
-              <input class="share-link-input" id="hsShareLinkInput" readonly>
-              <button class="btn sm" onclick="copyHsShareLink()">Copy</button>
-            </div>
-            <div id="hsShareStatus" style="font-size:12px;color:var(--gray-400)"></div>
-          </div>
-        </div>
+        ${renderReviewProgress()}
+        <div class="hs-review-list" id="hsReviewList"></div>
       </div>
     </div>
 `;
+  document.getElementById('sidebarPanelHeader').innerHTML = `
+    <div class="p1-header hs-panel-header">
+      <div>
+        <div class="ptitle">Review</div>
+        <div class="psub">Review all variations and export or share.</div>
+      </div>
+      <div class="p1-header-actions">
+        <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
+      </div>
+    </div>`;
+
+  // Share/print actions live in the left menu's logos-tile slot, same as the
+  // flag wizard's Gallery step (flags/gallery.js) — not a right-hand card
+  // full-width above the list.
+  const logosTile = document.getElementById('sidebarLogosTile');
+  if (logosTile) {
+    logosTile.style.display = '';
+    const shareUrl = HS.shareToken ? `${window.location.origin}/review?token=${HS.shareToken}&tab=hole-signs` : '';
+    logosTile.innerHTML = `
+    <div class="hs-design-controls-body">
+      <div class="share-section" id="shareSection">
+        <div class="rc-title">Share for review</div>
+        ${shareUrl ? `<div class="status-pill status-${HS.projectStatus}" style="margin-bottom:8px">${escXml(STATUS_LABEL[HS.projectStatus] || HS.projectStatus)}</div>` : ''}
+        <div id="hsShareStatus" style="font-size:13px;color:var(--gray-400);min-height:16px"></div>
+        <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openHsShareModal()">Share for review <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+        <div class="share-link-box" id="hsShareLinkBox" style="display:${shareUrl ? 'flex' : 'none'}">
+          <input class="share-link-input" id="hsShareLinkInput" readonly value="${escXml(shareUrl)}">
+          <button class="btn sm" onclick="copyHsShareLink()">Copy</button>
+          <button class="btn sm" onclick="window.refreshHsGallery()" title="Refresh with the latest saved design"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i> Update</button>
+        </div>
+      </div>
+      <div class="share-section">
+        <div class="rc-title">Print files</div>
+        <button class="btn sm primary" id="hsExpPrintBtn" style="width:100%;justify-content:center" onclick="downloadHsPrint()"><i class="fa-solid fa-download" aria-hidden="true"></i> Download print sheets (zip)</button>
+        <div id="hsExpPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px"></div>
+      </div>
+      <div class="share-section" id="hsEmailPrintSheetSection" style="display:${UI.isStaffOrAdmin ? '' : 'none'}">
+        <div class="rc-title">Email PDF sheet link</div>
+        <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openEmailPrintSheetModal()">Email PDF sheet link <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+      </div>
+    </div>`;
+  }
 
   ensureEmailPrintSheetModal();
-  renderHsSubmitSection();
+  ensureHsShareModal();
 
-  // Build gallery grid
-  const grid = document.getElementById('hsGalleryGrid');
+  const list = document.getElementById('hsReviewList');
   if (!HS.variations.length) {
-    grid.innerHTML = '<div style="font-size:13px;color:var(--gray-400);grid-column:1/-1">No variations yet.</div>';
+    list.innerHTML = '<div style="font-size:13px;color:var(--gray-400)">No variations yet.</div>';
     return;
   }
 
-  HS.variations.forEach((v, i) => {
-    const item = document.createElement('div');
-    item.className = 'hs-gallery-item' + (i === 0 ? ' selected' : '');
-    item.id = 'hsgal-' + v.id;
-    item.setAttribute('onclick', `selectHsGallery('${v.id}')`);
-    item.innerHTML = `<div class="hs-gallery-thumb" id="hsgalthumb-${v.id}"></div><div class="hs-gallery-name">${escXml(v.name)}</div>`;
-    grid.appendChild(item);
-  });
-
   HS.variations.forEach(v => {
-    const el = document.getElementById('hsgalthumb-' + v.id);
-    if (el) renderHoleSignInto(el, getEffectiveState(v), getEffectiveVariation(v));
+    const status = reviewStatusOf(v);
+    const fb = HS.feedback?.find(f => f.variation_id === v.id);
+    const requestedButtons = [];
+    if (fb?.status === 'needs_edits' && !fb?.resolved) {
+      if (fb.requested_template_id) requestedButtons.push(`<button type="button" class="hs-review-apply-btn" onclick="hsApplyRequestedTemplate('${v.id}')">Apply requested template</button>`);
+      if (fb.requested_colors && Object.keys(fb.requested_colors).length) requestedButtons.push(`<button type="button" class="hs-review-apply-btn" onclick="hsApplyRequestedColors('${v.id}')">Apply requested colors</button>`);
+      if (fb.requested_logo_url) requestedButtons.push(`<button type="button" class="hs-review-apply-btn" onclick="hsApplyRequestedLogo('${v.id}')">Apply requested logo</button>`);
+    }
+    const card = document.createElement('div');
+    card.className = 'hs-review-card';
+    card.id = 'hsrev-' + v.id;
+    card.innerHTML = `
+      <div class="hs-review-card-header">
+        <span class="hs-review-card-name">${escXml(v.name)}</span>
+        <div class="hs-review-card-meta">
+          <span class="var-status-tile ${status.cls}">${status.label}</span>
+          <div class="hs-review-actions">
+            ${UI.hsLocked ? '' : `<button class="btn sm" onclick="editHsVariation('${v.id}')"><i class="fa-solid fa-pen" aria-hidden="true"></i> Edit</button>`}
+            <button class="btn sm" onclick="exportHsPDF('${v.id}', this)"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i> PDF</button>
+          </div>
+        </div>
+      </div>
+      <div class="hs-review-card-body">
+        <div class="hs-review-image" id="hsrevimg-${v.id}"></div>
+        <div class="hs-review-info">
+          <div class="hs-review-notes">
+            <span class="hs-review-notes-label">Review notes</span>
+            ${fb?.note ? escXml(fb.note) : 'No notes yet.'}
+          </div>
+          ${requestedButtons.length ? `<div class="hs-review-requested">${requestedButtons.join('')}</div>` : ''}
+        </div>
+      </div>`;
+    list.appendChild(card);
+    const imgEl = document.getElementById('hsrevimg-' + v.id);
+    if (imgEl) renderHoleSignInto(imgEl, getEffectiveState(v), getEffectiveVariation(v));
   });
-
-  if (HS.variations.length) {
-    selectHsGallery(HS.variations[0].id);
-  }
 }
+
+// Jumps back to Variations with this design selected for editing — same
+// "resume where the reviewer was looking" pattern as flags/gallery.js's
+// per-card Edit link, just via goStep() instead of a page navigation since
+// the hole-sign wizard is a single page.
+window.editHsVariation = function (id) {
+  HS.activeVarId = id;
+  window.goStep(2);
+};
+
+// Apply a customer's requested quick-pick change (see review.js's
+// Request-edits quick-picks and the variation_feedback.requested_* columns)
+// straight onto this one variation — the mutation itself lives in
+// hs/variations.js (applyRequestedHsTemplate/Colors/Logo) so the "View
+// Edits" modal on the Variations step can apply the same requests without
+// duplicating this logic.
+async function resolveHsGalleryFeedback(fb) {
+  if (!fb) return;
+  await resolveFeedback(HS.projectId, 'hole-signs', fb.variation_id);
+  fb.resolved = true;
+}
+
+window.hsApplyRequestedTemplate = async function (id) {
+  const v = HS.variations.find(v => v.id === id);
+  const fb = HS.feedback?.find(f => f.variation_id === id);
+  if (!v || !applyRequestedHsTemplate(v, fb)) return;
+  await saveDraftInternal().catch(() => {});
+  await resolveHsGalleryFeedback(fb);
+  renderGallery();
+};
+
+window.hsApplyRequestedColors = async function (id) {
+  const v = HS.variations.find(v => v.id === id);
+  const fb = HS.feedback?.find(f => f.variation_id === id);
+  if (!v || !applyRequestedHsColors(v, fb)) return;
+  await saveDraftInternal().catch(() => {});
+  await resolveHsGalleryFeedback(fb);
+  renderGallery();
+};
+
+window.hsApplyRequestedLogo = async function (id) {
+  const v = HS.variations.find(v => v.id === id);
+  const fb = HS.feedback?.find(f => f.variation_id === id);
+  if (!v || !(await applyRequestedHsLogo(v, fb))) return;
+  await saveDraftInternal().catch(() => {});
+  await resolveHsGalleryFeedback(fb);
+  renderGallery();
+};
 
 // The gallery panel (unlike flags-gallery.html) is built entirely from JS,
 // so there's no static modal markup to add to - inject it once into the
@@ -134,119 +233,6 @@ function ensureEmailPrintSheetModal() {
   document.body.appendChild(overlay);
 }
 
-// ── Submit for review ────────────────────────────────────────
-// renderGallery() rebuilds #panel-3's whole innerHTML on every visit, so
-// this sub-render (and its listeners) must be re-run each time too — the
-// draft form values themselves live on UI.hsSubmit* (state.js), not the DOM,
-// so they survive that rebuild.
-function renderHsSubmitSection() {
-  const el = document.getElementById('hsSubmitSection');
-  if (!el) return;
-
-  const status = HS.projectStatus;
-  if (!['draft', 'needs_changes'].includes(status)) {
-    el.innerHTML = `<div class="rc-title">Status</div><div style="font-size:13px;color:var(--gray-600)">${esc(STATUS_LABEL[status] || status)}</div>`;
-    return;
-  }
-
-  if (!HS.hasFlagConfig && !UI.hsCrossSellDismissed) {
-    el.innerHTML = `
-      <div class="rc-title">Also need flags?</div>
-      <div style="font-size:13px;color:var(--gray-600);margin-bottom:10px">You can design tournament flags for this event too, or continue straight to submitting your hole signs.</div>
-      <button type="button" class="btn sm primary" style="width:100%;justify-content:center;margin-bottom:8px" id="hsCrossSellYesBtn">Yes, design flags</button>
-      <button type="button" class="btn sm" style="width:100%;justify-content:center" id="hsCrossSellNoBtn">No, continue to submit</button>`;
-    document.getElementById('hsCrossSellYesBtn').addEventListener('click', () => {
-      window.location.href = `/flags?project=${encodeURIComponent(HS.projectId)}`;
-    });
-    document.getElementById('hsCrossSellNoBtn').addEventListener('click', () => {
-      UI.hsCrossSellDismissed = true;
-      renderHsSubmitSection();
-    });
-    return;
-  }
-
-  const ci = HS.customerInfo || {};
-  const eventRows = [
-    ['Name', ci.event_name ? esc(ci.event_name) : null],
-    ['Course', ci.course_name ? esc(ci.course_name) : null],
-    ['Date', ci.event_date ? esc(formatDate(ci.event_date)) : null],
-  ];
-  const hasEventInfo = eventRows.some(([, v]) => v);
-  const e = UI.hsSubmitErrors;
-
-  el.innerHTML = `
-    <div class="rc-title">Submit for review</div>
-    ${e.submit ? `<div class="submit-error-banner">${esc(e.submit)}</div>` : ''}
-    ${hasEventInfo ? renderRecapSection('Event', eventRows) : ''}
-    ${renderDeadlineCallout(ci.event_date)}
-    ${renderContactShippingFields(UI.hsSubmitContact, e)}
-    ${renderAckItem('deadline', UI.hsSubmitAcks.deadline, ACK_DEADLINE_TEXT)}
-    ${e.ackDeadline ? `<div class="form-error">${esc(e.ackDeadline)}</div>` : ''}
-    <button type="button" class="btn sm primary" style="width:100%;justify-content:center;margin-top:10px" id="hsSubmitForReviewBtn"${UI.hsSubmitting ? ' disabled' : ''}>${UI.hsSubmitting ? 'Submitting…' : 'Submit for review'}</button>`;
-
-  attachContactShippingListeners(el, UI.hsSubmitContact, { onCountryChange: renderHsSubmitSection });
-  attachAckListeners(el, UI.hsSubmitAcks, () => { UI.hsSubmitErrors = {}; renderHsSubmitSection(); });
-  document.getElementById('hsSubmitForReviewBtn')?.addEventListener('click', handleHsSubmitForReview);
-}
-
-async function handleHsSubmitForReview() {
-  const contact = UI.hsSubmitContact;
-  const errors = validateContactShipping(contact);
-  if (!UI.hsSubmitAcks.deadline) errors.ackDeadline = 'Please acknowledge the deadline policy.';
-  if (Object.keys(errors).length) {
-    UI.hsSubmitErrors = errors;
-    renderHsSubmitSection();
-    scrollToFirstError(document.getElementById('hsSubmitSection'));
-    return;
-  }
-  UI.hsSubmitErrors = {};
-  UI.hsSubmitting = true;
-  renderHsSubmitSection();
-
-  try {
-    const info = {
-      ...HS.customerInfo,
-      contact_name: contact.contactName,
-      contact_email: contact.contactEmail,
-      attn: contact.attn !== null && contact.attn !== undefined ? contact.attn : contact.contactName,
-      address_line1: contact.addressLine1,
-      address_line2: contact.addressLine2 || null,
-      city: contact.city,
-      state_province: contact.stateProvince,
-      postal_code: contact.postalCode,
-      country: contact.country,
-    };
-    await upsertCustomerInfo(HS.projectId, info);
-    await submitProjectForReview(HS.projectId);
-    HS.customerInfo = info;
-    HS.projectStatus = 'submitted';
-
-    sendOrderConfirmation({
-      contactName: contact.contactName,
-      contactEmail: contact.contactEmail,
-      courseName: info.course_name || '',
-      eventName: info.event_name || HS.projectName || '',
-      eventDate: info.event_date || '',
-      shipping: {
-        addressLine1: contact.addressLine1,
-        addressLine2: contact.addressLine2 || '',
-        city: contact.city,
-        stateProvince: contact.stateProvince,
-        postalCode: contact.postalCode,
-        country: contact.country,
-      },
-      projectId: HS.projectId,
-    }).catch(err => console.warn('Order confirmation email failed', err));
-
-    window.location.href = `/submitted?project=${encodeURIComponent(HS.projectId)}`;
-  } catch (err) {
-    console.error('Submit for review failed', err);
-    UI.hsSubmitting = false;
-    UI.hsSubmitErrors = { submit: 'We couldn’t finish submitting your project. Please try again — if this keeps happening, contact us directly so we can follow up.' };
-    renderHsSubmitSection();
-  }
-}
-
 window.openEmailPrintSheetModal = async function () {
   if (!HS.projectId) { alert('Save your project first.'); return; }
   const emailInput = document.getElementById('hsEmailPrintSheetEmailInput');
@@ -270,20 +256,29 @@ window.sendHsPrintSheetEmail = async function () {
   const setStatus = msg => { status.textContent = msg; };
   try {
     const intake = await loadOrderIntake(HS.projectId).catch(() => null);
-    const { zipBlob } = await buildHsPrintZip(setStatus);
-    setStatus('Uploading…');
-    const storagePath = await uploadPrintSheet(HS.projectId, 'hole-signs', zipBlob);
-    setStatus('Sending…');
-    await sendPrintSheetReady({
-      projectId: HS.projectId,
-      storagePath,
-      recipientEmail: email,
-      recipientName: intake?.contact_name || '',
-      eventName: intake?.event_name || HS.projectName || 'your event',
-      productType: 'hole-signs',
+    const eventName = intake?.event_name || HS.projectName || 'your event';
+    const eventNameSlug = sanitizeFilename(eventName);
+    let sent = 0;
+    // One zip (and one email) per sheet, same reasoning as downloadHsPrint —
+    // uploading/sending as each sheet's zip is ready keeps memory bounded
+    // regardless of order size, at the cost of multiple emails for a
+    // multi-sheet order instead of one with several links.
+    await buildHsPrintSheets(eventNameSlug, setStatus, async ({ from, to, baseName, zipBlob, sheets }) => {
+      setStatus(`Uploading ${baseName}…`);
+      const storagePath = await uploadPrintSheet(HS.projectId, 'hole-signs', zipBlob);
+      setStatus(`Sending ${baseName}…`);
+      await sendPrintSheetReady({
+        projectId: HS.projectId,
+        storagePath,
+        recipientEmail: email,
+        recipientName: intake?.contact_name || '',
+        eventName: sheets === 1 ? eventName : `${eventName} — signs ${from}-${to}`,
+        productType: 'hole-signs',
+      });
+      sent++;
     });
     status.style.color = 'var(--green, #2d9d5c)';
-    status.textContent = 'Link sent!';
+    status.textContent = sent === 1 ? 'Link sent!' : `${sent} links sent!`;
     setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 3000);
   } catch (err) {
     console.error('sendHsPrintSheetEmail failed', err);
@@ -294,67 +289,17 @@ window.sendHsPrintSheetEmail = async function () {
   }
 };
 
-window.selectHsGallery = function (id) {
-  document.querySelectorAll('.hs-gallery-item').forEach(el => el.classList.remove('selected'));
-  const item = document.getElementById('hsgal-' + id);
-  if (item) item.classList.add('selected');
-  const v = HS.variations.find(v => v.id === id);
-  const nameEl = document.getElementById('hsGallerySelectedName');
-  if (nameEl && v) nameEl.textContent = v.name;
-  const sel = document.getElementById('hsGallerySelected');
-  if (sel && v) renderHoleSignInto(sel, getEffectiveState(v), getEffectiveVariation(v));
-  window._hsGallerySelectedId = id;
-};
-
 // ── Export ─────────────────────────────────────────────────
 export function hsSlug(s) { return slug(s, 'hole-sign'); }
 
-window.exportHsSVG = async function () {
-  const id = window._hsGallerySelectedId;
-  const v = HS.variations.find(v => v.id === id) || HS.variations[0];
+// Per-card PDF download on the Review step — id/btn identify which
+// variation and which button triggered it (there's no single "selected"
+// design anymore now that every variation gets its own row).
+window.exportHsPDF = async function (id, btn) {
+  const v = HS.variations.find(v => v.id === id);
   if (!v) return;
-  const btn = document.getElementById('hsExpSvg');
-  if (btn) { btn.textContent = '…'; btn.disabled = true; }
-  try {
-    const svgString = await hsBuildPortableSvg(v);
-    dl(URL.createObjectURL(new Blob([svgString], { type: 'image/svg+xml' })), hsSlug(v.name) + '.svg');
-  } catch (err) {
-    console.error('Hole sign SVG export failed', err);
-    alert('SVG export failed.');
-  } finally {
-    if (btn) {
-      btn.innerHTML = '<i class="fa-solid fa-download" aria-hidden="true"></i>SVG';
-      btn.disabled = false;
-    }
-  }
-};
-
-window.exportHsPNG = async function () {
-  const id = window._hsGallerySelectedId;
-  const v = HS.variations.find(v => v.id === id) || HS.variations[0];
-  if (!v) return;
-  const btn = document.getElementById('hsExpPng');
-  if (btn) { btn.textContent = '…'; btn.disabled = true; }
-  try {
-    const blob = await hsRasterize(v);
-    dl(URL.createObjectURL(blob), hsSlug(v.name) + '.png');
-  } catch (err) {
-    console.error('Hole sign PNG export failed', err);
-    alert('PNG export failed.');
-  } finally {
-    if (btn) {
-      btn.innerHTML = '<i class="fa-solid fa-download" aria-hidden="true"></i>PNG';
-      btn.disabled = false;
-    }
-  }
-};
-
-window.exportHsPDF = async function () {
-  const id = window._hsGallerySelectedId;
-  const v = HS.variations.find(v => v.id === id) || HS.variations[0];
-  if (!v) return;
-  const btn = document.getElementById('hsExpPdf');
-  if (btn) { btn.textContent = '…'; btn.disabled = true; }
+  const originalHtml = btn?.innerHTML;
+  if (btn) { btn.disabled = true; btn.innerHTML = '…'; }
   try {
     const blob = await hsRasterize(v);
     const ptW = 21.25 * 72;
@@ -365,20 +310,7 @@ window.exportHsPDF = async function () {
     console.error('Hole sign PDF export failed', err);
     alert('PDF export failed.');
   } finally {
-    if (btn) {
-      btn.innerHTML = '<i class="fa-solid fa-file-pdf" aria-hidden="true"></i>PDF';
-      btn.disabled = false;
-    }
-  }
-};
-
-window.exportHsAllPNG = async function () {
-  for (const v of HS.variations) {
-    try {
-      const blob = await hsRasterize(v);
-      dl(URL.createObjectURL(blob), hsSlug(v.name) + '.png');
-      await new Promise(r => setTimeout(r, 400));
-    } catch (err) { console.error('PNG export failed for', v.name, err); }
+    if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
   }
 };
 
@@ -401,10 +333,20 @@ const HS_PRINT = {
   dpi: 300,
 };
 
-// Build a 90° CW rotated PNG blob for one sign. Used for both front and back —
+// Sign artwork is always fully opaque — makeHoleSignSvg always paints a
+// full-bleed background rect first (hole-sign-render.js), color or image —
+// so there's no alpha channel to lose by rasterizing to JPEG instead of PNG
+// here. That choice matters beyond file size: pdf-lib's embedJpg just reads
+// the JPEG header and stores the compressed bytes as-is, while embedPng has
+// to fully decode the PNG (inflate + convert every pixel to RGBA) in pure
+// JS — for a 6375×5475 sign that decode is the actual bottleneck in the
+// print-sheet export, not the rasterization that produces this blob.
+const SIGN_JPEG_QUALITY = 0.92;
+
+// Build a 90° CW rotated JPEG blob for one sign. Used for both front and back —
 // the back sheet keeps the same per-sign orientation (text stays readable);
 // only the cell positions change (rows are swapped).
-export async function buildRotatedSignPng(signCanvas) {
+export async function buildRotatedSignJpeg(signCanvas) {
   const c = document.createElement('canvas');
   c.width  = HS_H;   // 5475 (rotated cell width)
   c.height = HS_W;   // 6375 (rotated cell height)
@@ -416,7 +358,7 @@ export async function buildRotatedSignPng(signCanvas) {
   ctx.drawImage(signCanvas, 0, 0);
   ctx.restore();
   return await new Promise((resolve, reject) =>
-    c.toBlob(b => b ? resolve(b) : reject(new Error('rotate toBlob failed')), 'image/png'));
+    c.toBlob(b => b ? resolve(b) : reject(new Error('rotate toBlob failed')), 'image/jpeg', SIGN_JPEG_QUALITY));
 }
 
 // Render the full-resolution PNG for a single variation (no rotation).
@@ -615,16 +557,31 @@ function drawFormOnPage(doc, page, formRef, x, y) {
   );
 }
 
-// How many unique variations to rasterize/rotate at once during print
-// export — a wall-clock lever only, doesn't change peak memory (see
-// mapWithConcurrency in dom-utils.js).
+// How many signs to rasterize/rotate concurrently. Since rotated PNGs are
+// built lazily per-sheet (see rotatedCache in buildHsPrintSheets) rather than
+// for the whole order up front, this also bounds peak memory: at most this
+// many full-resolution native canvases exist at once, regardless of how
+// many unique signs are in the order.
 const HS_EXPORT_CONCURRENCY = 4;
 
-// Builds the print-ready zip (front/back PDF per sheet) without triggering
-// any download or DOM side effect - shared by the local "Download print
-// sheets" button and the "Email PDF sheet link" flow, so the actual
-// rendering only lives in one place.
-export async function buildHsPrintZip(setStatus = () => {}) {
+// Builds one small zip per print sheet (front/back PDF, ~10-20MB total)
+// instead of one big zip for the whole order, and hands each to
+// `onSheetReady` as soon as it's ready rather than accumulating them —
+// shared by the local "Download print sheets" button and the "Email PDF
+// sheet link" flow, so the actual rendering only lives in one place.
+//
+// Why per-sheet instead of one zip: JSZip's generateAsync assembles
+// everything it's been given into one contiguous output. Bundling every
+// sheet's PDFs into a single JSZip instance means that final assembly's
+// size — and the memory still resident from every prior sheet's rendering
+// that hasn't been GC'd yet — grows with the order's total sign count, and
+// large real orders (with actual photo/logo content, not flat test swatches)
+// were hitting "Array buffer allocation failed" there even after rendering
+// itself was already bounded per-sheet. Generating a tiny zip per sheet and
+// handing it off immediately means every JSZip call and its inputs are
+// released before the next sheet starts, so peak memory no longer scales
+// with order size at all.
+export async function buildHsPrintSheets(eventNameSlug, setStatus = () => {}, onSheetReady = () => {}) {
   if (!HS.variations.length) throw new Error('No variations to export.');
 
   // Build flat sequence: variation repeated by its qty.
@@ -639,10 +596,6 @@ export async function buildHsPrintZip(setStatus = () => {}) {
 
     setStatus(`Rendering ${total} sign${total === 1 ? '' : 's'} across ${sheets} sheet${sheets === 1 ? '' : 's'}…`);
 
-    // Render each unique variation once at native size, then re-use across cells.
-    // Rendered/rotated with bounded concurrency (see mapWithConcurrency) — a
-    // wall-clock win for large orders since the zip is only assembled once at
-    // the end regardless, so this doesn't change peak memory.
     const sigOf = v => v.id;
     const seenSigs = new Set();
     const uniqueVariations = sequence.filter(v => {
@@ -651,17 +604,32 @@ export async function buildHsPrintZip(setStatus = () => {}) {
       return true;
     });
 
+    // Rotated JPEG per unique variation (same orientation for both sides),
+    // built lazily and cached by sig — NOT pre-rendered for the whole order
+    // up front. A native canvas is full print resolution (6375×5475, ~133MB
+    // of raw pixels); at large order sizes, rendering every unique sign
+    // before building any sheet would hold gigabytes of raw canvases at
+    // once. A sign only needs to exist as a rotated JPEG (already compressed)
+    // by the time its sheet is built, so the native canvas is rasterized,
+    // rotated, and dropped one sheet's worth at a time (see the
+    // ensureRotatedJpeg prefetch in the sheet loop below) — peak memory is
+    // bounded by HS_EXPORT_CONCURRENCY, not by the order's total unique
+    // sign count. The rotated JPEG itself (compressed, much smaller) is kept
+    // cached across sheets in case a sign repeats on a later one.
     let renderedCount = 0;
-    const nativeCanvases = await mapWithConcurrency(uniqueVariations, HS_EXPORT_CONCURRENCY, async v => {
-      const canvas = await rasterizeSignNative(v);
-      setStatus(`Rendering variation ${++renderedCount}/${uniqueVariations.length}: ${v.name}…`);
-      return canvas;
-    });
-    const nativeBySig = new Map(uniqueVariations.map((v, i) => [sigOf(v), nativeCanvases[i]]));
-
-    // Pre-compute rotated PNG once per variation (same orientation for both sides).
-    const rotatedPngs = await mapWithConcurrency(uniqueVariations, HS_EXPORT_CONCURRENCY, (v, i) => buildRotatedSignPng(nativeCanvases[i]));
-    const rotated = new Map(uniqueVariations.map((v, i) => [sigOf(v), rotatedPngs[i]]));
+    const rotatedCache = new Map(); // sig -> Promise<Blob>
+    const ensureRotatedJpeg = v => {
+      const sig = sigOf(v);
+      if (!rotatedCache.has(sig)) {
+        rotatedCache.set(sig, (async () => {
+          const nativeCanvas = await rasterizeSignNative(v);
+          const jpeg = await buildRotatedSignJpeg(nativeCanvas);
+          setStatus(`Rendering variation ${++renderedCount}/${uniqueVariations.length}: ${v.name}…`);
+          return jpeg;
+        })());
+      }
+      return rotatedCache.get(sig);
+    };
 
     // Build the PDFs. Each cell is a fixed bleed-box size (the rotated sign
     // dimensions), not derived from the sheet size — the sheet is the cells
@@ -700,8 +668,9 @@ export async function buildHsPrintZip(setStatus = () => {}) {
         const sig = sigOf(cell);
         let image = imageCache.get(sig);
         if (!image) {
-          const pngBytes = await (rotated.get(sig)).arrayBuffer();
-          image = await doc.embedPng(pngBytes);
+          const jpegBlob = await ensureRotatedJpeg(cell);
+          const jpegBytes = await jpegBlob.arrayBuffer();
+          image = await doc.embedJpg(jpegBytes);
           imageCache.set(sig, image);
         }
         signRefs.push(buildSignForm(doc, image, cellWpt, cellHpt));
@@ -710,12 +679,19 @@ export async function buildHsPrintZip(setStatus = () => {}) {
       drawFormOnPage(doc, page, rowFormRef, marginPt, y);
     };
 
-    const zip = new JSZip();
-
     for (let s = 0; s < sheets; s++) {
       setStatus(`Building sheet ${s + 1} of ${sheets}…`);
       const start = s * HS_PRINT.perSheet;
       const cells = sequence.slice(start, start + HS_PRINT.perSheet);
+      const from = start + 1;
+      const to = Math.min(start + HS_PRINT.perSheet, total);
+      const baseName = `${eventNameSlug}_Signs_${from}-${to}`;
+
+      // Rasterize/rotate this sheet's unique signs up front, with bounded
+      // concurrency, before building its pages — reused below for both the
+      // front and back layouts (drawArtRow just hits the now-warm cache).
+      const sheetVariations = [...new Map(cells.map(c => [sigOf(c), c])).values()];
+      await mapWithConcurrency(sheetVariations, HS_EXPORT_CONCURRENCY, ensureRotatedJpeg);
 
       // Front PDF
       const frontDoc = await PDFDocument.create();
@@ -765,14 +741,19 @@ export async function buildHsPrintZip(setStatus = () => {}) {
       endLayer(backPage);
       const backBytes = await backDoc.save();
 
-      const num = String(s + 1).padStart(2, '0');
-      zip.file(`sheet-${num}-front.pdf`, frontBytes);
-      zip.file(`sheet-${num}-back.pdf`,  backBytes);
+      setStatus(`Zipping sheet ${s + 1} of ${sheets}…`);
+      const sheetZip = new JSZip();
+      sheetZip.file(`${baseName}_Front.pdf`, frontBytes);
+      sheetZip.file(`${baseName}_Back.pdf`,  backBytes);
+      const zipBlob = await sheetZip.generateAsync({ type: 'blob' });
+
+      await onSheetReady({ index: s, from, to, baseName, zipBlob, sheets, total });
+      // Nothing from this sheet (cells' rasterized canvases aside, already
+      // freed) is referenced past this point, so it's eligible for GC before
+      // the next sheet's rendering starts.
     }
 
-  setStatus('Zipping…');
-  const zipBlob = await zip.generateAsync({ type: 'blob' });
-  return { zipBlob, total, sheets };
+  return { total, sheets };
 }
 
 window.downloadHsPrint = async function () {
@@ -783,10 +764,15 @@ window.downloadHsPrint = async function () {
   const setStatus = msg => { if (status) status.textContent = msg; };
 
   try {
-    const { zipBlob, total, sheets } = await buildHsPrintZip(setStatus);
     const eventName = await loadEventName(HS.projectId).catch(() => null);
-    dl(URL.createObjectURL(zipBlob), `HoleSigns_${sanitizeFilename(eventName || HS.projectName || 'Export')}.zip`);
-    setStatus(`Done — ${total} signs on ${sheets} sheet${sheets === 1 ? '' : 's'} (${sheets * 2} files).`);
+    const eventNameSlug = sanitizeFilename(eventName || HS.projectName || 'Export');
+    let downloaded = 0;
+    const { total, sheets } = await buildHsPrintSheets(eventNameSlug, setStatus, async ({ baseName, zipBlob, sheets }) => {
+      dl(URL.createObjectURL(zipBlob), `${baseName}.zip`);
+      downloaded++;
+      setStatus(`Downloaded ${downloaded} of ${sheets} zip${sheets === 1 ? '' : 's'}…`);
+    });
+    setStatus(`Done — ${total} signs across ${sheets} zip${sheets === 1 ? '' : 's'} (${sheets * 2} files).`);
   } catch (err) {
     console.error('Hole sign print export failed', err);
     setStatus('Export failed: ' + (err.message || err));
@@ -796,11 +782,21 @@ window.downloadHsPrint = async function () {
   }
 };
 
+// Keyed by source URL, not per-call — many signs in an order share the same
+// background/banner/template-logo asset (only the text differs between
+// them), so without this cache a large print export would re-fetch and
+// re-base64-encode the identical bytes once per sign that uses it. Same
+// "cache once, reuse across the whole export" reasoning as
+// UI.fontCssCache/getEmbeddedFontCss below.
+const _hsInlineHrefCache = new Map(); // src URL -> data: URI
+
 export async function hsInlineHrefs(svgEl) {
   const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' };
   await Promise.all(Array.from(svgEl.querySelectorAll('image')).map(async img => {
     const src = img.getAttribute('href') || img.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || '';
     if (!src || src.startsWith('data:')) return;
+    const cached = _hsInlineHrefCache.get(src);
+    if (cached) { img.setAttribute('href', cached); return; }
     try {
       const res = await fetch(src);
       if (!res.ok) return;
@@ -811,7 +807,9 @@ export async function hsInlineHrefs(svgEl) {
       const bytes = new Uint8Array(buf);
       let binary = '';
       for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      img.setAttribute('href', `data:${mime};base64,${btoa(binary)}`);
+      const dataUri = `data:${mime};base64,${btoa(binary)}`;
+      _hsInlineHrefCache.set(src, dataUri);
+      img.setAttribute('href', dataUri);
     } catch { /* leave as-is on failure */ }
   }));
 }
@@ -910,24 +908,94 @@ export async function hsRasterize(variation) {
 }
 
 // ── Share ──────────────────────────────────────────────────
-window.generateHsShareLink = async function () {
+
+// Mirrors flags.html's static "Share modal" markup - this page (unlike
+// flags-gallery.html) has no static HTML to add it to, same reasoning as
+// ensureEmailPrintSheetModal above.
+function ensureHsShareModal() {
+  if (document.getElementById('hsShareModalOverlay')) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'share-modal-overlay';
+  overlay.id = 'hsShareModalOverlay';
+  overlay.style.display = 'none';
+  overlay.setAttribute('onclick', 'closeHsShareModal(event)');
+  overlay.innerHTML = `
+    <div class="share-modal">
+      <div class="share-modal-header">
+        <span class="share-modal-title">Share for review</span>
+        <button class="share-modal-close" onclick="closeHsShareModal()" aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>
+      <div class="share-modal-body">
+        <p class="share-modal-label">Review link</p>
+        <div class="share-link-box">
+          <input class="share-link-input" id="hsShareModalLinkInput" readonly>
+          <button class="btn sm" onclick="copyHsShareModalLink()">Copy</button>
+        </div>
+        <p class="share-modal-label" style="margin-top:1.25rem">Notify customer by email</p>
+        <input class="share-email-input" id="hsShareModalEmailInput" type="email" placeholder="customer@email.com">
+        <div id="hsShareModalNotifyStatus" style="font-size:13px;color:var(--gray-400);min-height:16px;margin-top:6px"></div>
+        <button class="btn sm primary" style="width:100%;justify-content:center;margin-top:8px" onclick="notifyHsCustomer()">Send notification</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+// Mints/reuses the share link (same as the old generateHsShareLink), updates
+// the persistent sidebar copy box, then opens the modal to actually notify
+// the customer - mirrors flags/gallery.js's openShareModal/notifyCustomer
+// split so both designers behave the same way.
+window.openHsShareModal = async function () {
   const status = document.getElementById('hsShareStatus');
   if (!HS.projectId) { if (status) status.textContent = 'No project loaded.'; return; }
   if (status) status.textContent = 'Saving…';
   try {
     await saveDraftInternal();
     if (status) status.textContent = 'Generating link…';
-    const token = await generateShareToken(HS.projectId);
-    const url = `${window.location.origin}/review?token=${token}`;
+    if (!HS.shareToken) HS.shareToken = await generateShareToken(HS.projectId);
+    const url = `${window.location.origin}/review?token=${HS.shareToken}&tab=hole-signs`;
     const input = document.getElementById('hsShareLinkInput');
     const box   = document.getElementById('hsShareLinkBox');
     if (input) input.value = url;
     if (box)   box.style.display = 'flex';
     if (status) status.textContent = '';
+    // Same "insert now rather than wait for a full re-render" reasoning as
+    // the review-progress summary just below — this pill only exists in the
+    // template once shareUrl is truthy, which it wasn't on the initial render.
+    if (status && !document.querySelector('#shareSection .status-pill')) {
+      status.insertAdjacentHTML('beforebegin', `<div class="status-pill status-${HS.projectStatus}" style="margin-bottom:8px">${escXml(STATUS_LABEL[HS.projectStatus] || HS.projectStatus)}</div>`);
+    }
+    // The approval progress summary only appears once a link exists (see
+    // renderReviewProgress) — insert it now rather than waiting for the
+    // user to leave and revisit this step.
+    if (!document.getElementById('hsReviewProgress')) {
+      const col = document.querySelector('#panel-3 .hs-design-preview-col');
+      const html = renderReviewProgress();
+      if (col && html) col.insertAdjacentHTML('afterbegin', html);
+    }
+    const emailInput = document.getElementById('hsShareModalEmailInput');
+    emailInput.value = '';
+    loadOrderIntake(HS.projectId).then(intake => { if (intake?.contact_email) emailInput.value = intake.contact_email; }).catch(() => {});
+    document.getElementById('hsShareModalLinkInput').value = url;
+    document.getElementById('hsShareModalNotifyStatus').textContent = '';
+    document.getElementById('hsShareModalOverlay').style.display = 'flex';
   } catch (err) {
     console.error(err);
     if (status) status.textContent = 'Could not generate link.';
   }
+};
+
+window.closeHsShareModal = function (e) {
+  if (e && e.target !== document.getElementById('hsShareModalOverlay')) return;
+  document.getElementById('hsShareModalOverlay').style.display = 'none';
+};
+
+window.copyHsShareModalLink = function () {
+  const url = document.getElementById('hsShareModalLinkInput').value;
+  navigator.clipboard.writeText(url).then(() => {
+    const status = document.getElementById('hsShareModalNotifyStatus');
+    status.textContent = 'Link copied!';
+    setTimeout(() => { status.textContent = ''; }, 2000);
+  });
 };
 
 window.copyHsShareLink = function () {
@@ -937,6 +1005,79 @@ window.copyHsShareLink = function () {
   document.execCommand('copy');
   const status = document.getElementById('hsShareStatus');
   if (status) { status.textContent = 'Copied!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+};
+
+// Sending the notification is what actually commits to sharing the proof,
+// so this is where status moves to "In Review" (proof_sent) - not
+// openHsShareModal, which only previews/copies a link and may never be
+// followed by an actual send. Mirrors flags/gallery.js's notifyCustomer.
+window.notifyHsCustomer = async function () {
+  const email = document.getElementById('hsShareModalEmailInput').value.trim();
+  const url = document.getElementById('hsShareModalLinkInput').value;
+  const status = document.getElementById('hsShareModalNotifyStatus');
+  if (!email) { status.textContent = 'Enter an email address.'; return; }
+  const btn = document.querySelector('#hsShareModalOverlay .btn.primary');
+  if (btn) btn.disabled = true;
+  status.textContent = 'Sending…';
+  try {
+    // admin_send_design_proof only accepts submitted/needs_changes/proof_sent
+    // (see 20260913000000_per_design_status_workflow.sql), so a still-draft
+    // design (e.g. an admin fast-path project the customer never submitted)
+    // needs submit_design_for_review first. Only staff/admin may call either
+    // RPC - a customer can still generate/copy a link and notify via this
+    // same modal, it just never flips their own design's status for them.
+    if (UI.isStaffOrAdmin) {
+      if (HS.projectStatus === 'draft') await submitDesignForReview(HS.projectId, 'hole-signs');
+      await adminSendDesignProof(HS.projectId, 'hole-signs');
+    }
+    const intake = await loadOrderIntake(HS.projectId).catch(() => null);
+    await sendProofReady({
+      contactName: intake?.contact_name || '',
+      contactEmail: email,
+      eventName: intake?.event_name || 'your event',
+      reviewUrl: url,
+    });
+    if (UI.isStaffOrAdmin) {
+      HS.projectStatus = 'proof_sent';
+      const pill = document.querySelector('#shareSection .status-pill');
+      if (pill) { pill.className = `status-pill status-${HS.projectStatus}`; pill.textContent = STATUS_LABEL[HS.projectStatus] || HS.projectStatus; }
+    }
+    status.style.color = 'var(--green, #2d9d5c)';
+    status.textContent = 'Notification sent!';
+    setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 3000);
+  } catch (err) {
+    console.error(err);
+    status.style.color = 'var(--red, #c0392b)';
+    status.textContent = `Failed to send: ${err.message || err}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+
+// Re-fetches just the saved variations (not the full app.js init() — that
+// re-runs one-time legacy-data migrations, e.g. pushing newly-generated text
+// layers for an old banner-caption shape, that aren't safe to redo on every
+// click) and repaints this Review panel, for the same reason as flags'
+// refreshGallery (flags/gallery.js): this page reflects whatever HS held at
+// last load/save, with nothing pushing in a change made from another tab.
+window.refreshHsGallery = async function () {
+  // Look #hsShareStatus up AFTER renderGallery() below, not before — it
+  // regenerates the sidebar's innerHTML wholesale, so a reference grabbed
+  // beforehand would be a detached node the reviewer never sees updated.
+  try {
+    const hsCfg = await loadHoleSignConfig(HS.projectId);
+    if (hsCfg?.variations?.length) {
+      HS.variations = hsCfg.variations;
+      if (!HS.variations.some(v => v.id === HS.activeVarId)) HS.activeVarId = HS.variations[0]?.id || null;
+    }
+    renderGallery();
+    const status = document.getElementById('hsShareStatus');
+    if (status) { status.textContent = 'Updated with the latest design.'; setTimeout(() => { status.textContent = ''; }, 2000); }
+  } catch (err) {
+    console.error('Could not refresh hole sign gallery', err);
+    const status = document.getElementById('hsShareStatus');
+    if (status) status.textContent = 'Could not refresh — try again.';
+  }
 };
 
 // saveDraftInternal / window.saveDraft moved to ./draft.js so steps 1-2

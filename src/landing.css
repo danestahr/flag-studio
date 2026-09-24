@@ -11,6 +11,7 @@
 
   --accent: #232323; --accent-hover: #3E3E3E; --accent-contrast: #FFFFFF;
   --accent-tint: rgba(35,35,35,.06);
+  --card-bg: var(--gray-50);
 
   --r: 10px; --rl: 16px;
 }
@@ -31,6 +32,10 @@ body { font-family:'DM Sans',sans-serif; background:var(--gray-50); color:var(--
 header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
 .sign-out-btn { background:transparent; border:1px solid rgba(255,255,255,.35); color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; padding:5px 14px; border-radius:20px; cursor:pointer; transition:background .15s,color .15s; }
 .sign-out-btn:hover { background:rgba(255,255,255,.12); color:white; }
+/* Global header link (see auth.js's injectHeaderActions) - left of the avatar
+   on every authenticated page, replacing the old per-page sidebar back-link. */
+.header-view-projects-link { color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; text-decoration:none; transition:color .15s; }
+.header-view-projects-link:hover { color:#fff; text-decoration:underline; }
 .account-avatar { width:30px; height:30px; border-radius:50%; background:var(--gold); color:#1B1B18; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; text-decoration:none; font-family:'DM Sans',sans-serif; flex-shrink:0; transition:opacity .15s; }
 .account-avatar:hover { opacity:.85; }
 .account-avatar-lg { width:72px; height:72px; border-radius:50%; background:var(--gold); color:#1B1B18; display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:700; font-family:'DM Serif Display',serif; }
@@ -88,19 +93,54 @@ div.draft-card { cursor:pointer; }
 
 .tool-picker-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
 
-.tool-card { display:flex; flex-direction:column; gap:1rem; background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--rl); padding:1.75rem; text-decoration:none; color:var(--black); cursor:pointer; transition:border-color .15s, box-shadow .15s, transform .12s; }
-.tool-card:hover { border-color:var(--accent); box-shadow:0 4px 20px rgba(0,0,0,.08); transform:translateY(-2px); }
+.tool-card { display:flex; flex-direction:column; gap:1rem; background:var(--card-bg); border:1.5px solid var(--gray-100); border-radius:var(--rl); padding:1.75rem; text-decoration:none; color:var(--black); transition:background .15s; }
+.tool-card:hover { background:var(--gray-100); }
 
-.tool-card-icon { font-size:36px; line-height:1; }
-.tool-card-body { flex:1; }
 .tool-card-name { font-family:'DM Serif Display',serif; font-size:20px; margin-bottom:6px; }
 .tool-card-desc { font-size:13px; color:var(--gray-600); line-height:1.5; }
 
-.tool-card-footer { display:flex; align-items:center; justify-content:space-between; padding-top:.75rem; border-top:1px solid var(--gray-100); }
-.tool-status { font-size:12px; color:var(--gray-400); }
-.tool-status.configured { color:var(--accent); font-weight:500; }
-.tool-status.configured::before { content:'● '; }
-.tool-arrow { font-size:13px; font-weight:500; color:var(--accent); }
+/* Review/approval status + actions (admin) or submit/status (customer),
+   merged into the same card as the tool launcher - see project.js's
+   renderToolCards()/renderToolCardStatus(). The gap above it down to the
+   title is the parent .tool-card's own flex `gap`, same as every other
+   child - no extra padding/divider here, since the title and the group
+   below it are meant to read as one unit. A flex column itself, with a
+   large gap - that's what gives every "prominent section" inside it
+   (the title/status/numbers group, the review link, the actions, the
+   print section) consistent breathing room without per-element margins. */
+.tool-card-status { display:flex; flex-direction:column; gap:1.5rem; }
+
+/* .tool-card-group holds the title (a sibling above it, via the flex
+   column's own gap), status block and section-jump links as one tight
+   visual unit - no divider between them. Everything after it (review link,
+   actions, print) is separated by explicit <hr class="tool-card-divider">
+   elements instead. */
+.tool-card-group { display:flex; flex-direction:column; gap:.85rem; }
+
+.tool-card-footer { display:flex; align-items:center; justify-content:space-between; gap:.5rem; }
+.tool-arrow { font-size:13px; font-weight:500; color:var(--accent); text-decoration:none; cursor:pointer; }
+
+/* Prominent status block: colored container, small label + the actual
+   status value - replaces the old small .status-pill inside each tool
+   card. Same color-per-status mapping as .status-pill below (landing.js's
+   project-list filter chips) so a design's status reads the same color
+   everywhere. `loading` state (see project.js's setStatusValue()) swaps
+   the value for a spinner + in-progress message without losing the
+   status-colored container, so a send-proof/send-to-print action reads as
+   part of the same status instead of a separate transient line. */
+.status-block { border-radius:var(--r); padding:.85rem 1rem; }
+.status-block-label { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; opacity:.65; margin-bottom:3px; }
+.status-block-value { font-size:16px; font-weight:600; display:flex; align-items:center; gap:8px; }
+.status-block.status-draft, .status-block.status-submitted { background:var(--gray-50); color:var(--gray-600); }
+.status-block.status-proof_sent { background:rgba(230,180,30,.12); color:#a67c00; }
+.status-block.status-needs_changes { background:rgba(192,57,43,.12); color:#c0392b; }
+.status-block.status-approved { background:var(--accent-tint); color:var(--accent); }
+.status-block.status-sent_to_print { background:rgba(41,128,185,.12); color:#2471a3; }
+
+.tool-card-stats { font-size:12px; color:var(--gray-500); }
+
+.spinner-sm { width:13px; height:13px; border:2px solid var(--gray-200); border-top-color:currentColor; border-radius:50%; animation:spin-sm .7s linear infinite; flex-shrink:0; }
+@keyframes spin-sm { to { transform:rotate(360deg); } }
 
 .export-btn { padding:.55rem 1.1rem; font-size:13px; font-weight:500; background:var(--black); color:var(--white); border:none; border-radius:7px; cursor:pointer; transition:opacity .15s; }
 .export-btn:hover { opacity:.82; }
@@ -108,11 +148,51 @@ div.draft-card { cursor:pointer; }
 
 /* Admin review panel status pill + print-sheet rows */
 .status-pill { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:500; padding:4px 10px; border-radius:20px; background:var(--gray-50); color:var(--gray-600); }
-.status-pill.status-draft, .status-pill.status-needs_changes { background:var(--gray-50); color:var(--gray-600); }
-.status-pill.status-submitted, .status-pill.status-proof_sent { background:rgba(230,180,30,.12); color:#a67c00; }
+.status-pill.status-draft, .status-pill.status-submitted { background:var(--gray-50); color:var(--gray-600); }
+.status-pill.status-proof_sent { background:rgba(230,180,30,.12); color:#a67c00; }
+.status-pill.status-needs_changes { background:rgba(192,57,43,.12); color:#c0392b; }
 .status-pill.status-approved, .status-pill.status-sent_to_print { background:var(--accent-tint); color:var(--accent); }
+.share-link-box { display:flex; gap:6px; }
+.share-link-input { flex:1; font-size:11px; border:1px solid var(--gray-200); border-radius:8px; padding:6px 10px; color:var(--gray-600); background:var(--gray-50); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; outline:none; }
 .print-sheet-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--gray-100); font-size:13px; color:var(--black); }
 .print-sheet-row:last-child { border-bottom:none; }
+
+/* Review-link action row (project.js's renderReviewLinkSection()) - Copy /
+   Update / Send proof sit below the URL input instead of beside it, each
+   filling equal space and wrapping onto their own line if the card is too
+   narrow to fit them all on one. */
+.link-btn-row { display:flex; flex-wrap:wrap; gap:6px; }
+.link-btn-row .btn { flex:1 1 100px; justify-content:center; }
+
+/* Section divider - used both as a direct .tool-card-status child (before/
+   after the review-link row) and as the first child of #printSection-x.
+   No margin of its own: spacing on both sides comes entirely from its flex
+   parent's `gap` (.tool-card-status or #printSection-x below), so it never
+   doubles up with that gap. */
+.tool-card-divider { border:none; border-top:1px solid var(--gray-100); margin:0; }
+
+/* Tool card footer: numbered section-jump row once a design has been
+   started, or a full-width "Start designing" CTA (.btn.block) before it
+   has - see project.js's STEP_SECTIONS/renderToolCardStatus(). This is the
+   same step-item/step-num/step-label pattern as the designer sidebar's
+   .steps-nav (src/style.css) - active/done states, checkmark-on-done - laid
+   out as a compact horizontal row for a light card instead of a vertical
+   column on dark chrome. "done"/"active" here follow the same `n <
+   activeStep` rule as the sidebar; activeStep is derived from how far the
+   design has actually progressed (see renderToolCardStatus), not from which
+   wizard panel happens to be open, since no wizard is open here. */
+.tool-steps-nav { display:flex; align-items:flex-start; gap:2px; }
+.tool-steps-nav .step-item { display:flex; flex:1 1 0; min-width:0; flex-direction:column; align-items:center; gap:4px; padding:4px 6px; border-radius:var(--r); text-decoration:none; cursor:pointer; transition:background .15s; }
+.tool-steps-nav .step-item:hover { background:var(--gray-50); }
+.tool-steps-nav .step-num { width:22px; height:22px; border-radius:50%; border:1.5px solid var(--gray-200); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; color:var(--gray-400); flex-shrink:0; transition:all .2s; }
+.tool-steps-nav .step-item.active .step-num { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
+.tool-steps-nav .step-item.done .step-num { background:transparent; border-color:var(--accent); color:var(--accent); font-size:9px; }
+.tool-steps-nav .step-item.done .step-num::before { font-family:"Font Awesome 7 Free"; font-weight:900; content:"\f00c"; }
+.tool-steps-nav .step-item.done .step-num span { display:none; }
+.tool-steps-nav .step-label { font-size:10px; font-weight:500; color:var(--gray-400); text-align:center; line-height:1.2; }
+.tool-steps-nav .step-item.active .step-label { color:var(--black); font-weight:700; }
+.tool-steps-nav .step-item.done .step-label { color:var(--gray-600); }
+.btn.block { width:100%; justify-content:center; }
 
 /* Delete button on project overview */
 .danger-btn { appearance:none; -webkit-appearance:none; padding:.55rem 1.1rem; font-size:13px; font-weight:500; background:transparent; color:#c0392b; border:1.5px solid #c0392b; border-radius:7px; cursor:pointer; transition:background .15s, color .15s; }
@@ -172,6 +252,8 @@ div.draft-card { cursor:pointer; }
 .ci-logo-name { font-size:11px; color:var(--gray-600); margin-top:.3rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:80px; }
 .ci-logo-del { position:absolute; top:4px; right:4px; width:18px; height:18px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; font-size:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1; padding:0; opacity:0; transition:opacity .15s; }
 .ci-logo-item:hover .ci-logo-del { opacity:1; }
+.ci-logo-dl { position:absolute; top:4px; left:4px; width:18px; height:18px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; font-size:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1; padding:0; opacity:0; transition:opacity .15s; }
+.ci-logo-item:hover .ci-logo-dl { opacity:1; }
 
 .ci-add-logo-btn { padding:.45rem .9rem; font-size:12px; font-weight:500; background:transparent; border:1.5px dashed var(--gray-200); border-radius:7px; color:var(--gray-600); cursor:pointer; transition:border-color .15s, color .15s; }
 .ci-add-logo-btn:hover { border-color:var(--accent); color:var(--accent); }

@@ -1,10 +1,29 @@
-import { S, DEFAULT_COLORS } from './state.js';
+import { S, DEFAULT_COLORS, findLogo } from './state.js';
 import { FLAGS } from './data.js';
 import { isLightColor } from './gsTag.js';
 import { HS_FONTS } from './hole-sign-data.js';
 import { wrapText } from './text-utils.js';
 
 export const getFlag = () => FLAGS.find(f => f.id === S.flagId);
+
+// A cropped logo's clipPath id must be unique across the whole document, not
+// just within its own <svg> — the gallery (and other callers) render a
+// front and a back <svg> side by side in the same DOM, and "same front &
+// back" reuses the very same layer object/id for both, so keying the id on
+// layer.id alone produces two clipPath elements sharing one id. `url(#id)`
+// then resolves to whichever one the browser treats as canonical for that
+// id, regardless of which <svg> it's actually nested in — so one face's
+// <image> can end up clipped by the OTHER face's crop rect. A monotonic
+// per-render counter keeps every clipPath id distinct regardless of how
+// many times the same layer gets rendered into the same document.
+let cropClipSeq = 0;
+
+// Template-level text layers (S.textLayers) always render alongside whatever
+// variation-specific text layers a variation itself carries — same relation
+// as colors/gsTag to a variation's own content. Callers that already collect
+// `v.textLayers` for a render pass should thread it through here instead of
+// passing that array bare.
+export const withMasterText = (v) => [...(S.textLayers || []), ...((v && v.textLayers) || [])];
 
 // Fills in any zone the user hasn't picked a color for so rendering — and the
 // step "Next" buttons — never block on an unmade choice. Primary/secondary
@@ -170,7 +189,82 @@ export function preloadLogoAspects(logos) {
   return Promise.all((logos || []).map(loadLogoAspect));
 }
 
-export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null) {
+// Draws template-level free text layers (S.textLayers — see state.js) as
+// plain SVG <text>, independent of makeSvg's own frame/aboveEls bookkeeping
+// so drop-zones.js's editable canvases (which build their <svg> by hand, not
+// through makeSvg) can paint the same master content non-interactively —
+// `append(el, aboveFrame)` lets each caller decide where an element lands.
+export function paintTextLayers(textLayers, vbW, vbH, isBack, append) {
+  if (!textLayers?.length) return;
+  const ns = 'http://www.w3.org/2000/svg';
+  textLayers.forEach(layer => {
+    if (!layer.text) return;
+    const fontFamily = HS_FONTS.find(f => f.id === layer.font)?.family || "'DM Serif Display', serif";
+    const fsSvg = (layer.fontSize / 100) * vbH;
+    const cy = (layer.y / 100) * vbH + fsSvg * 0.82;
+
+    let cx, textAnchor;
+    if (isBack) {
+      if (layer.align === 'left') { cx = (1 - layer.x / 100) * vbW; textAnchor = 'end'; }
+      else if (layer.align === 'right') { cx = (1 - (layer.x + layer.w) / 100) * vbW; textAnchor = 'start'; }
+      else { cx = (1 - (layer.x + layer.w / 2) / 100) * vbW; textAnchor = 'middle'; }
+    } else {
+      if (layer.align === 'left') { cx = (layer.x / 100) * vbW; textAnchor = 'start'; }
+      else if (layer.align === 'right') { cx = ((layer.x + layer.w) / 100) * vbW; textAnchor = 'end'; }
+      else { cx = ((layer.x + layer.w / 2) / 100) * vbW; textAnchor = 'middle'; }
+    }
+
+    const boxWsvg = (layer.w / 100) * vbW;
+    const lines = wrapText(layer.text, boxWsvg, fsSvg);
+    const lineH = fsSvg * 1.1;
+
+    const t = document.createElementNS(ns, 'text');
+    t.setAttribute('y', cy);
+    t.setAttribute('font-family', fontFamily);
+    t.setAttribute('font-size', fsSvg);
+    t.setAttribute('fill', layer.color || '#000000');
+    t.setAttribute('text-anchor', textAnchor);
+    lines.forEach((line, i) => {
+      const tspan = document.createElementNS(ns, 'tspan');
+      tspan.setAttribute('x', cx);
+      if (i > 0) tspan.setAttribute('dy', lineH);
+      tspan.textContent = line;
+      t.appendChild(tspan);
+    });
+    append(t, layer.aboveFrame);
+  });
+}
+
+// Draws template-level free image layers (S.imageLayers) as plain SVG
+// <image> — x/y are the box's CENTER (percent of canvas), w is percent of
+// the viewBox's width, matching image-box.js's createImageBox data
+// convention (the interactive editor at Step 1 mutates these same fields
+// directly). Height is never stored on the layer — derived from the image's
+// own natural aspect ratio via the same cache makeSvg's logo loop uses,
+// exactly like an uncropped placed logo.
+export function paintImageLayers(imageLayers, vbW, vbH, isBack, append) {
+  if (!imageLayers?.length) return;
+  const ns = 'http://www.w3.org/2000/svg';
+  imageLayers.forEach(layer => {
+    if (!layer.src) return;
+    const w = (layer.w / 100) * vbW;
+    const h = w / getLogoAspect(layer);
+    const xFrac = isBack ? (1 - layer.x / 100) : (layer.x / 100);
+    const cx = xFrac * vbW;
+    const cy = (layer.y / 100) * vbH;
+    const img = document.createElementNS(ns, 'image');
+    img.setAttribute('href', layer.src);
+    img.setAttribute('x', cx - w / 2);
+    img.setAttribute('y', cy - h / 2);
+    img.setAttribute('width', w);
+    img.setAttribute('height', h);
+    img.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    img.setAttribute('draggable', 'false');
+    append(img, layer.aboveFrame);
+  });
+}
+
+export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null, imageLayers = []) {
   const flag = flagOverride || getFlag();
   if (!flag) return null;
   const colors = colorsOverride || S.colors;
@@ -221,83 +315,81 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
     // zone rect, or an oversized/repositioned logo gets cropped that the
     // editor shows in full.
     list.forEach(layer => {
-      const logo = S.library.find(l => l.id === layer.logoId);
+      const logo = findLogo(layer.logoId);
       if (!logo) return;
       const logoW = zone.w * (layer.w / 100);
-      const logoH = logoW / getLogoAspect(logo);
       const xFrac = (face === 'back' && mirrorX) ? (1 - layer.x / 100) : (layer.x / 100);
       const cx = zoneX + xFrac * zone.w;
       const cy = zone.y + (layer.y / 100) * zone.h;
       const img = document.createElementNS(ns, 'image');
       img.setAttribute('href', logo.src);
-      img.setAttribute('x', cx - logoW / 2);
-      img.setAttribute('y', cy - logoH / 2);
-      img.setAttribute('width', logoW);
-      img.setAttribute('height', logoH);
-      img.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      // Chrome offers a native "drag this image out" gesture on any <image>
+      // by default — with real mouse/trackpad jitter (unlike a scripted
+      // click), the tiniest movement between mousedown/mouseup on a logo is
+      // enough for the browser to start that native drag instead of firing a
+      // click, silently swallowing clicks on variation-card thumbnails (this
+      // same renderer paints those too — see paintVarThumb in
+      // flags/variations.js) and any other read-only preview. The editor's
+      // own logo-reposition drag is built on pointer events (image-box.js),
+      // never on this native mechanism, so disabling it here doesn't touch it.
+      img.setAttribute('draggable', 'false');
+
+      if (layer.cropped && layer.h != null && layer.imageBaseW != null) {
+        // Cropped layer — box is w/h independent of the artwork's own aspect
+        // (see createImageBox's `cropped` mode / image-box.js's module doc).
+        // The image has its OWN fixed geometry (imageAbsX/Y/imageBaseW/H/
+        // imageScale, percent-of-zone — same convention layer.x/y/w already
+        // use), completely independent of the box's own w/h/x/y, so it never
+        // rescales/shifts here just because the box was resized. On the back
+        // face, only the box's own center (cx, above) is mirrored; the
+        // image is carried along by its offset FROM the box, unmirrored —
+        // same "reposition the anchor, don't re-derive internal geometry"
+        // rule paintTextLayers/paintImageLayers follow above — so the same
+        // panned/zoomed crop window is visible on both faces instead of a
+        // different slice of the artwork.
+        const logoH = zone.h * (layer.h / 100);
+        const imgOffsetX = (layer.imageAbsX - layer.x) / 100 * zone.w;
+        const imgOffsetY = (layer.imageAbsY - layer.y) / 100 * zone.h;
+        const imgCx = cx + imgOffsetX;
+        const imgCy = cy + imgOffsetY;
+        const imgScale = (layer.imageScale ?? 100) / 100;
+        const imgW = (layer.imageBaseW / 100) * zone.w * imgScale;
+        const imgH = (layer.imageBaseH / 100) * zone.h * imgScale;
+        const left = cx - logoW / 2, top = cy - logoH / 2;
+        const clipId = 'logo-crop-clip-' + layer.id + '-' + (cropClipSeq++);
+        const clipPath = document.createElementNS(ns, 'clipPath');
+        clipPath.id = clipId;
+        const clipRect = document.createElementNS(ns, 'rect');
+        clipRect.setAttribute('x', left);
+        clipRect.setAttribute('y', top);
+        clipRect.setAttribute('width', logoW);
+        clipRect.setAttribute('height', logoH);
+        clipPath.appendChild(clipRect);
+        svg.appendChild(clipPath);
+        img.setAttribute('x', imgCx - imgW / 2);
+        img.setAttribute('y', imgCy - imgH / 2);
+        img.setAttribute('width', imgW);
+        img.setAttribute('height', imgH);
+        img.setAttribute('clip-path', `url(#${clipId})`);
+      } else {
+        const logoH = logoW / getLogoAspect(logo);
+        img.setAttribute('x', cx - logoW / 2);
+        img.setAttribute('y', cy - logoH / 2);
+        img.setAttribute('width', logoW);
+        img.setAttribute('height', logoH);
+        img.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      }
       if (layer.aboveFrame) aboveEls.push(img);
       else svg.appendChild(img);
     });
   }
 
-  if (textLayers?.length) {
-    const [vbW, vbH] = (flag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
+  if (textLayers?.length || imageLayers?.length) {
+    const [vbW2, vbH2] = (flag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
     const isBack = face === 'back' && mirrorX;
-    textLayers.forEach(layer => {
-      if (!layer.text) return;
-      const fontFamily = HS_FONTS.find(f => f.id === layer.font)?.family || "'DM Serif Display', serif";
-      const fsSvg = (layer.fontSize / 100) * vbH;
-      const cy = (layer.y / 100) * vbH + fsSvg * 0.82;
-
-      // anchor at the alignment edge of the text box; mirror x on back face
-      let cx, textAnchor;
-      if (isBack) {
-        // x coordinates are flipped; alignment direction reverses too
-        if (layer.align === 'left') {
-          cx = (1 - layer.x / 100) * vbW;
-          textAnchor = 'end';
-        } else if (layer.align === 'right') {
-          cx = (1 - (layer.x + layer.w) / 100) * vbW;
-          textAnchor = 'start';
-        } else {
-          cx = (1 - (layer.x + layer.w / 2) / 100) * vbW;
-          textAnchor = 'middle';
-        }
-      } else {
-        if (layer.align === 'left') {
-          cx = (layer.x / 100) * vbW;
-          textAnchor = 'start';
-        } else if (layer.align === 'right') {
-          cx = ((layer.x + layer.w) / 100) * vbW;
-          textAnchor = 'end';
-        } else {
-          cx = ((layer.x + layer.w / 2) / 100) * vbW;
-          textAnchor = 'middle';
-        }
-      }
-
-      // Wrap to the box width (same as the live editor's `width:100%` overlay
-      // with word-break wrapping) so multi-line text doesn't overflow its box.
-      const boxWsvg = (layer.w / 100) * vbW;
-      const lines = wrapText(layer.text, boxWsvg, fsSvg);
-      const lineH = fsSvg * 1.1;
-
-      const t = document.createElementNS(ns, 'text');
-      t.setAttribute('y', cy);
-      t.setAttribute('font-family', fontFamily);
-      t.setAttribute('font-size', fsSvg);
-      t.setAttribute('fill', layer.color || '#000000');
-      t.setAttribute('text-anchor', textAnchor);
-      lines.forEach((line, i) => {
-        const tspan = document.createElementNS(ns, 'tspan');
-        tspan.setAttribute('x', cx);
-        if (i > 0) tspan.setAttribute('dy', lineH);
-        tspan.textContent = line;
-        t.appendChild(tspan);
-      });
-      if (layer.aboveFrame) aboveEls.push(t);
-      else svg.appendChild(t);
-    });
+    const append = (el, aboveFrame) => { if (aboveFrame) aboveEls.push(el); else svg.appendChild(el); };
+    paintTextLayers(textLayers, vbW2, vbH2, isBack, append);
+    paintImageLayers(imageLayers, vbW2, vbH2, isBack, append);
   }
 
   // The grey bleed guide is left in its original (pre-frame) template
@@ -323,9 +415,9 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
   return svg;
 }
 
-export function renderInto(el, logos, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null) {
+export function renderInto(el, logos, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null, imageLayers = []) {
   el.innerHTML = '';
-  const svg = makeSvg(logos, '100%', '100%', face, mirrorX, flagOverride, colorsOverride, textLayers, gsTagOpts);
+  const svg = makeSvg(logos, '100%', '100%', face, mirrorX, flagOverride, colorsOverride, textLayers, gsTagOpts, imageLayers);
   if (svg) {
     svg.style.cssText = 'display:block;width:100%;height:100%';
     el.appendChild(svg);

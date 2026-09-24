@@ -76,8 +76,11 @@ function watchForSignOut() {
 
 // Header only ever had the logo/back-link group as its one child (CSS pushes
 // it left, everything else right via justify-content:space-between) — a
-// second bare child would land mid-header instead of alongside it, so both
-// the avatar link and sign-out button share one wrapper.
+// second bare child would land mid-header instead of alongside it, so the
+// Projects link, avatar link, and sign-out button all share one wrapper.
+// The Projects link replaces the old per-wizard sidebar "← Projects" back
+// link — a single global way back to the project list instead of one
+// per page.
 function injectHeaderActions(session) {
   const header = document.querySelector('header');
   if (!header || header.querySelector('.header-actions')) return;
@@ -85,6 +88,12 @@ function injectHeaderActions(session) {
   const wrap = document.createElement('div');
   wrap.className = 'header-actions';
   wrap.style.cssText = 'display:flex;align-items:center;gap:14px';
+
+  const projectsLink = document.createElement('a');
+  projectsLink.className = 'header-view-projects-link';
+  projectsLink.href = '/';
+  projectsLink.textContent = 'Projects';
+  wrap.appendChild(projectsLink);
 
   const avatar = document.createElement('a');
   avatar.className = 'account-avatar';

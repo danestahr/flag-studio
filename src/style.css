@@ -18,6 +18,7 @@
   --gray-800: #2E2E29; --gray-900: #1B1B18;
   --gold: #C8972A;
   --guides: #8049F6;
+  --crop-mode: #F59E0B; --crop-mode-dark: #B45309;
 
   /* Fixed brand chrome (header bar, floating canvas toolbars/badges) — always
      dark with light text regardless of theme, since these overlay arbitrary
@@ -54,6 +55,10 @@ body { font-family:'Proxima Nova', 'DM Sans', sans-serif; background:var(--gray-
 header { background:var(--chrome-bg); padding:0 1.5rem; height:80px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
 .sign-out-btn { background:transparent; border:1px solid rgba(255,255,255,.35); color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; padding:5px 14px; border-radius:20px; cursor:pointer; transition:background .15s,color .15s; }
 .sign-out-btn:hover { background:rgba(255,255,255,.12); color:white; }
+/* Global header link (see auth.js's injectHeaderActions) - left of the avatar
+   on every authenticated page, replacing the old per-page sidebar back-link. */
+.header-view-projects-link { color:rgba(255,255,255,.75); font-family:'DM Sans',sans-serif; font-size:13px; font-weight:500; text-decoration:none; transition:color .15s; }
+.header-view-projects-link:hover { color:#fff; text-decoration:underline; }
 .account-avatar { width:30px; height:30px; border-radius:50%; background:var(--gold); color:#1B1B18; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; text-decoration:none; font-family:'DM Sans',sans-serif; flex-shrink:0; transition:opacity .15s; }
 .account-avatar:hover { opacity:.85; }
 .logo { font-family:'DM Serif Display',serif; color:var(--chrome-text); font-size:20px; display:flex; align-items:center; gap:10px; }
@@ -63,48 +68,117 @@ header { background:var(--chrome-bg); padding:0 1.5rem; height:80px; display:fle
 
 .back-link { color:rgba(255,255,255,.6); font-size:13px; text-decoration:none; transition:color .15s; }
 .back-link:hover { color:var(--chrome-text); }
-.sidebar-back-link { display:flex; align-items:center; gap:7px; padding:1rem 1.5rem 0; color:var(--gray-400); font-size:12px; text-decoration:none; transition:color .15s; }
-.sidebar-back-link:hover { color:var(--gray-600); }
 
-.layout { display:grid; grid-template-columns:var(--sidebar-w, 240px) 1fr; height:calc(100vh - 80px); overflow:hidden; transition:grid-template-columns .18s ease; }
-.sidebar { background:var(--white); border-right:1px solid var(--gray-100); display:flex; flex-direction:column; height:100%; position:relative; min-width:0; }
+/* .sidebar floats over .main (position:absolute, taken out of flow) instead
+   of reserving its own grid column, so .main/the canvas is always full
+   width — visible behind and around the sidebar card, never cut off by a
+   reserved column. */
+.layout { position:relative; height:calc(100vh - 80px); overflow:hidden; }
+/* Positioning shell only — no background/border-radius of its own. The
+   collapse button is a direct child of this (not of .sidebar-tile below) so
+   it can sit outside the tile's rounded/clipped edge at left:100% without
+   itself getting clipped. */
+/* flex column so a second card (#sidebarLogosTile) can stack below the
+   primary .sidebar-tile with a gap between them, rather than being nested
+   inside it — see renderSidebar/renderLogosTileShell in sidebar.js. */
+.sidebar { position:absolute; top:0; left:0; z-index:10; width:var(--sidebar-w, 420px); margin:24px; min-width:0; display:flex; flex-direction:column; gap:16px; transition:width .25s ease; }
+/* The actual frosted-glass tile that hugs its own content size. Semi-
+   transparent + backdrop-filter blur (not fully transparent, not opaque) so
+   the canvas shows through softly rather than being cut off by a solid
+   card, while staying legible regardless of what's moving behind it.
+   overflow:hidden is required here (not just border-radius) — backdrop-
+   filter doesn't reliably respect border-radius clipping on its own, and
+   without it the blurred backdrop shows square past the rounded corners.
+   Always the fixed dark chrome tone (not the theme-branched --white) since
+   its light-text overrides below (.hs-panel-header .ptitle/.psub/.btn,
+   .step-label) assume a dark backdrop in both themes. Collapsing (see
+   .sidebar.collapsed below) is just a narrower version of this same tile,
+   not a different design. */
+.sidebar-tile { width:100%; background:rgba(35,35,35,.72); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,.12); border-radius:var(--rl); overflow:hidden; display:flex; flex-direction:column; min-width:0; }
 /* .main no longer scrolls — it's exactly one viewport tall and clips.
    Scrolling is confined to individual components inside each panel (the
    canvas/list side-panels below, sized live by fitCanvas/fitSidePanel in
    canvas-panel.js) so there's never a page scrollbar fighting an inner one. */
-.main { display:flex; flex-direction:column; gap:1.5rem; height:100%; overflow:hidden; }
+.main { display:flex; flex-direction:column; gap:1.5rem; width:100%; height:100%; min-width:0; overflow:hidden; }
 
-.steps-nav { padding:1.5rem 1.5rem 0; display:flex; flex-direction:column; gap:2px; }
-.step-item { display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:var(--r); cursor:pointer; transition:background .15s; }
-.step-item:not(.active):not(.done):hover { background:var(--gray-50); }
-.step-item.active { background:var(--gray-50); }
+/* Top of the card: a vertical step column on the left, the active step's
+   title/subtitle/actions (#sidebarPanelHeader) on the right. */
+.sidebar-top { display:flex; flex-direction:row; align-items:stretch; }
+
+/* Vertical step-number circles with labels stacked underneath — no
+   connecting line, spacing comes entirely from each .step-item's own
+   padding (the hover fill). Collapsed hides the label and lets the column
+   shrink to icon-only width. */
+.steps-nav { width:max-content; flex:0 0 auto; padding:1.5rem; display:flex; flex-direction:column; align-items:stretch; gap:0; transition:padding .25s ease; }
+.step-item { display:flex; flex-direction:column; align-items:flex-start; gap:6px; width:100%; min-width:0; box-sizing:border-box; padding:8px 16px; border-radius:var(--r); cursor:pointer; transition:background .15s; }
+.step-item:hover { background:rgba(255,255,255,.08); }
 .step-num { width:28px; height:28px; border-radius:50%; border:1.5px solid var(--gray-200); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:500; color:var(--gray-400); flex-shrink:0; transition:all .2s; }
 .step-item.active .step-num { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
-.step-item.done .step-num { background:var(--accent-hover); border-color:var(--accent-hover); color:var(--accent-contrast); font-size:10px; }
+.step-item.done .step-num { background:transparent; border-color:rgba(255,255,255,.9); color:rgba(255,255,255,.9); font-size:10px; }
 .step-item.done .step-num::before { font-family:"Font Awesome 7 Free"; font-weight:900; content:"\f00c"; }
 .step-item.done .step-num span { display:none; }
-.step-label { font-size:14px; font-weight:500; color:var(--gray-600); }
-.step-item.active .step-label { color:var(--black); }
-.step-item.done .step-label { color:var(--gray-400); }
-.step-desc { font-size:12px; color:var(--gray-400); line-height:1.3; }
+.step-label { font-size:11px; font-weight:500; color:rgba(255,255,255,.5); text-align:left; line-height:1.25; }
+.step-item.active .step-label { color:var(--chrome-text); font-weight:700; }
+.step-item.done .step-label { color:rgba(255,255,255,.5); }
+/* Still the active step (you're looking at it) but also complete (e.g. sent
+   to print) - keep the accent circle/highlighted label of .active, just swap
+   in .done's checkmark instead of the step number. */
+.step-item.active.done .step-num { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
+.step-item.active.done .step-label { color:var(--chrome-text); font-weight:700; }
+/* Only surfaced when the sidebar is collapsed (see .sidebar.collapsed
+   .step-forward-btn below) — with the labels and #sidebarPanelHeader's
+   "Save & Continue"/"Gallery & export" action hidden in that state, this is
+   the only way left to advance without expanding the rail back out. Reads
+   the currently-active .step-item at click time (not a captured index) so
+   it stays correct across goStep()'s direct active/done class toggling. */
+.step-forward-btn { display:none; width:28px; height:28px; margin-top:8px; border-radius:50%; border:1.5px solid rgba(255,255,255,.9); background:transparent; color:rgba(255,255,255,.9); align-items:center; justify-content:center; font-size:12px; cursor:pointer; transition:background .15s; }
+.step-forward-btn:hover { background:rgba(255,255,255,.12); }
 .sdivider { height:1px; background:var(--gray-100); margin:1rem 1.5rem; }
 
-.sidebar-header { position:relative; }
-.sidebar-collapse-btn { position:absolute; top:50%; right:14px; transform:translateY(-50%); width:30px; height:30px; border-radius:50%; border:1.5px solid var(--gray-200); background:var(--white); color:var(--gray-400); display:flex; align-items:center; justify-content:center; font-size:12px; cursor:pointer; transition:all .15s; z-index:2; }
+/* A sibling of .sidebar-tile (not nested inside it), positioned via
+   left:100% of .sidebar — its containing block, since .sidebar is
+   position:absolute — so it sits outside the tile's rounded/clipped edge as
+   a handle, rather than being clipped by .sidebar-tile's overflow:hidden or
+   competing with the title/actions for space inside it. Pinned 24px from
+   the top of .sidebar (roughly aligned with the primary tile's own top
+   edge) rather
+   than centered against the combined height of both tiles — with
+   #sidebarLogosTile now a second card stacked below, centering against the
+   total height would drift the button down past the primary tile depending
+   on how tall the logos tile happens to be. Same position and look whether
+   the card is expanded or collapsed — collapsing only changes .sidebar's
+   width and which children are visible, not this button's treatment. */
+.sidebar-collapse-btn { position:absolute; top:32px; left:100%; margin-left:10px; width:30px; height:30px; border-radius:50%; border:1.5px solid var(--gray-200); background:var(--white); color:var(--gray-400); display:flex; align-items:center; justify-content:center; font-size:12px; cursor:pointer; transition:all .15s; z-index:2; }
 .sidebar-collapse-btn:hover { background:var(--gray-50); color:var(--gray-600); }
-/* Collapsed rail: numbers only, real estate handed back to the canvas via --sidebar-w. */
-.sidebar.collapsed { overflow:hidden; }
-/* .sidebar-id (and with it the .sidebar-header box the button centers against)
-   is hidden below, collapsing .sidebar-header to zero height — pin the button
-   back to a fixed top instead of the now-meaningless 50%. */
-.sidebar.collapsed .sidebar-collapse-btn { top:14px; right:50%; transform:translateX(50%); }
-.sidebar.collapsed .sidebar-id,
+/* Collapsed: same floating, borderless-background, hugging card as
+   expanded — just narrower (icon-only step column, everything else
+   hidden), not a separate flush full-height rail design. */
+.sidebar.collapsed #sidebarPanelHeader,
 .sidebar.collapsed .sdivider,
-.sidebar.collapsed .sidebar-back-link,
-.sidebar.collapsed #customerSection { display:none; }
-.sidebar.collapsed .steps-nav { padding:52px .5rem 0; }
-.sidebar.collapsed .step-item { justify-content:center; padding:10px 0; gap:0; }
-.sidebar.collapsed .step-text { display:none; }
+.sidebar.collapsed #customerSection,
+.sidebar.collapsed .step-label { display:none; }
+/* Overrides the --sidebar-w-driven width from .sidebar above so the rail
+   hugs its icon-only content instead of a guessed pixel value — sizing is
+   then read back off the real box in sidebar.js's applyCollapsed() and
+   written into --sidebar-w, since other layout (canvas-scroll-inner's
+   padding-left, etc.) still needs that variable as a number. #sidebarLogosTile
+   below stretches to match this same fit-content width (both tiles are
+   width:100% of .sidebar), rather than sizing to its own content. */
+.sidebar.collapsed { width:fit-content; }
+.sidebar.collapsed .steps-nav { width:auto; flex:0 0 auto; padding:1.5rem 1rem; gap:10px; }
+.sidebar.collapsed .step-item { padding:8px; }
+.sidebar.collapsed .step-forward-btn { display:flex; }
+/* Unlike the primary tile, #sidebarLogosTile stays visible when the sidebar
+   collapses to its icon-only rail — the logos still need to be reachable
+   (dragged onto the canvas, clicked to replace) without expanding back out.
+   It just narrows to match: the title label goes (no room for text at rail
+   width) and the grid is forced into the same single-column vertical-scroll
+   list .hslt-items.collapsed already uses, regardless of that tile's own
+   expand/collapse state. */
+.sidebar.collapsed #sidebarLogosTile { padding:12px 8px; }
+.sidebar.collapsed .hslt-header { display:none; }
+.sidebar.collapsed .hslt-items { display:flex; flex-direction:column; align-items:center; gap:8px; max-height:50vh; }
+.sidebar.collapsed .step-item { max-width:none; }
 .ssummary { padding:0 1.5rem 1.5rem; flex:1; }
 .stitle { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.08em; color:var(--gray-400); margin-bottom:10px; }
 .srow { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--gray-100); font-size:13px; }
@@ -121,6 +195,7 @@ header { background:var(--chrome-bg); padding:0 1.5rem; height:80px; display:fle
 .panel.visible { display:flex; flex-direction:column; gap:1.5rem; flex:1; min-height:0; padding:0 2.5rem 2rem; }
 .ptitle { font-family:'DM Serif Display',serif; font-size:26px; margin-bottom:4px; }
 .psub { font-size:14px; color:var(--gray-600); }
+.p1-header-stats { font-size:12px; color:var(--gray-500); margin-top:6px; }
 
 .btn { padding:9px 22px; border-radius:var(--r); font-size:14px; font-weight:500; cursor:pointer; border:1.5px solid var(--gray-200); background:transparent; color:var(--black); font-family:'DM Sans',sans-serif; transition:background .15s, border-color .15s; display:inline-flex; align-items:center; gap:6px; }
 .btn:hover { background:var(--gray-50); border-color:var(--gray-400); }
@@ -150,7 +225,11 @@ header { background:var(--chrome-bg); padding:0 1.5rem; height:80px; display:fle
 .save-check { font-size:15px; color:var(--accent); font-weight:700; }
 .p1-split { display:flex; gap:2rem; align-items:flex-start; flex:1; min-height:0; }
 .p1-preview-col { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; gap:6px; }
-.flag-exp-preview { width:100%; aspect-ratio:7519/4669; max-height:calc(100vh - 80px - 2rem - 90px); background:var(--gray-50); border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+/* position:relative (not overflow:hidden, matching .flag-wrap elsewhere) so
+   the Step-1 "Text"/"Images" overlays (flags/text-layers.js,
+   flags/image-layers.js) can position/drag/resize against this container —
+   overflow:hidden would also clip their resize handles near an edge. */
+.flag-exp-preview { width:100%; aspect-ratio:7519/4669; max-height:calc(100vh - 80px - 2rem - 90px); background:var(--gray-50); border-radius:10px; display:flex; align-items:center; justify-content:center; position:relative; }
 .flag-exp-preview svg { width:100%; height:100%; display:block; }
 .flag-exp-placeholder { font-size:13px; color:var(--gray-300); pointer-events:none; }
 .flag-exp-name { font-size:13px; font-weight:500; color:var(--gray-500); text-align:center; min-height:18px; }
@@ -267,6 +346,8 @@ input[type=file] { display:none; }
 .lib-item-name { position:absolute; bottom:0; left:0; right:0; font-size:10px; background:rgba(0,0,0,.55); color:white; text-align:center; padding:2px 4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .lib-del { position:absolute; top:3px; right:3px; width:18px; height:18px; background:rgba(0,0,0,.5); color:white; border:none; border-radius:50%; font-size:11px; cursor:pointer; display:none; align-items:center; justify-content:center; }
 .lib-item:hover .lib-del { display:flex; }
+.lib-dl { position:absolute; top:3px; left:3px; width:18px; height:18px; background:rgba(0,0,0,.5); color:white; border:none; border-radius:50%; font-size:10px; cursor:pointer; display:none; align-items:center; justify-content:center; }
+.lib-item:hover .lib-dl { display:flex; }
 .lib-item.uploading { opacity:.6; cursor:default; }
 .lib-item.uploading .lib-item-name { background:rgba(26,74,46,.7); }
 .lib-empty { font-size:13px; color:var(--gray-400); text-align:center; padding:.5rem 0; grid-column:span 2; }
@@ -281,7 +362,7 @@ input[type=file] { display:none; }
    handles right along with the content), so each piece of content clips
    itself instead, via a JS-computed clip-path (see clipToCanvas in
    image-box.js) sized to this element's own on-screen rect. */
-.flag-wrap { width:100%; aspect-ratio:7519/4669; position:relative; border-radius:8px; background:var(--gray-50); }
+.flag-wrap { width:100%; aspect-ratio:7519/4669; position:relative; isolation:isolate; border-radius:8px; background:var(--gray-50); }
 .flag-wrap svg.bsvg { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
 /* The template's border/GS-tag frame, relocated here (see extractFrameElements)
    so it defaults to painting above logos/text. z-index (not DOM order) governs
@@ -372,6 +453,33 @@ input[type=file] { display:none; }
 .dz-logo-wrap .placed-img { display:block; width:100%; height:auto; object-fit:contain; pointer-events:none; }
 .dz-logo-wrap .placed-file-badge { display:flex; align-items:center; justify-content:center; width:100%; min-height:40px; background:#e8e8e8; border-radius:4px; font-size:11px; font-weight:700; color:#888; letter-spacing:.04em; pointer-events:none; }
 
+/* Cropped placed-image box (see createImageBox's `cropped` option) — the
+   box itself is w/h-independent (unlike .placed-img's height:auto), and the
+   image fills it via true cover-fit pan/zoom instead of showing whole. */
+.dz-logo-cropbox { position:relative; width:100%; height:100%; overflow:hidden; border-radius:4px; pointer-events:none; }
+/* left/top/width/height are always set inline by image-box.js's layoutCrop
+   (the image's own fixed geometry, independent of this box's size) — no
+   `inset` shorthand here, which would otherwise fight the inline width via
+   an over-constrained left+width+right. */
+.dz-logo-crop-thumb { position:absolute; }
+
+/* Bleed layer — the full image at its actual scale/position, shown only in
+   crop-edit mode (double-click, or the crop hover button) so the part that
+   will be clipped away stays visible while adjusting. z-index:-1 keeps it
+   behind .dz-logo-cropbox within .dz-logo-wrap's own stacking context
+   (the wrap's `transform` makes it one) without needing to escape the wrap
+   itself, unlike .dz-logo-ghost's below-background case. */
+.dz-logo-crop-bleed { position:absolute; inset:0; overflow:visible; pointer-events:none; z-index:-1; display:none; }
+.dz-logo-wrap.crop-editing .dz-logo-crop-bleed { display:block; }
+.dz-logo-crop-bleed img { position:absolute; opacity:.35; pointer-events:none; }
+.dz-logo-wrap.crop-editing { cursor:grab; outline:1.5px solid var(--crop-mode); }
+.dz-logo-wrap.crop-editing:active { cursor:grabbing; }
+/* Crop-mode handles get their own color (not the plain white resize handles,
+   not --guides' selected-outline purple) so it's obvious at a glance the box
+   is in crop-edit mode — dragging one now resizes the crop's bounding box,
+   not the box's own placement. */
+.dz-logo-wrap.crop-editing .dz-resize { display:block; background:var(--crop-mode); border-color:var(--crop-mode-dark); }
+
 /* File-type badge for non-image logos in library strips and pickers */
 .file-type-badge { display:flex; align-items:center; justify-content:center; width:100%; height:100%; background:#e8e8e8; font-size:11px; font-weight:700; color:#888; letter-spacing:.04em; }
 
@@ -382,6 +490,7 @@ input[type=file] { display:none; }
 .dz-logo-mini-btn { width:20px; height:20px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; display:flex; align-items:center; justify-content:center; font-size:10px; cursor:pointer; transition:background .15s; }
 .dz-logo-mini-btn:hover { background:rgba(0,0,0,.8); }
 .dz-logo-mini-remove:hover { background:#dc2626; }
+.dz-logo-mini-crop:hover { background:#2563eb; }
 
 /* Resize corner handles — centered on each corner of the wrap so half is always inside the hover zone */
 .dz-resize { position:absolute; width:10px; height:10px; background:#fff; border:1px solid var(--gray-400); box-shadow:0 1px 4px rgba(0,0,0,.25); z-index:5; display:none; }
@@ -442,12 +551,24 @@ input[type=file] { display:none; }
 .var-canvas-panel { background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; min-width:0; }
 .canvas-preview-box { }
 
-/* Canvas-panel shell (renderCanvasPanel in canvas-panel.js): header, the
-   Front/Back face-toggle row (hidden by default — see faceToggleHidden),
-   and the description/zoom-controls footer, shared by flags + hole signs. */
+/* Canvas-panel shell (renderCanvasPanel in canvas-panel.js): header, a
+   floating overlay slot (edit-request note + the Front/Back face-toggle row,
+   hidden by default — see faceToggleHidden), and the description/zoom-controls
+   footer, shared by flags + hole signs. */
 .canvas-panel-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:.75rem; }
 .canvas-panel-title { font-size:13px; font-weight:500; }
-.canvas-face-row { display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:.5rem; }
+/* Stacks whatever's passed as noteHtml above the face-toggle row — a shared
+   slot so a future addition (another contextual notice) can stack here too
+   instead of inventing its own floating position. Plain in-flow box by
+   default; .hs-canvas-bare below turns it into a floating pill over the
+   canvas, same technique as .canvas-panel-footer uses at the bottom. */
+.canvas-panel-overlay-top { display:flex; flex-direction:column; align-items:center; gap:.5rem; margin-bottom:.5rem; }
+/* Row order is source order: Front/Back tabs, then the "Same Front & Back
+   Design" toggle, then (when the add button lives here — see canvas-panel.js's
+   addBtnInFaceRow) the add button — justify-content:space-between pins the
+   tabs flush left and the button flush right, matching where it sat in the
+   header before it moved into this row. */
+.canvas-face-row { display:flex; flex-direction:row; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; width:100%; }
 .canvas-panel-footer { display:flex; flex-direction:column; justify-content:center; align-items:center; flex-wrap:wrap; gap:12px; margin-top:.5rem; text-align:center; }
 .canvas-panel-footer .canvas-bleed-hint { margin:0; text-align:center; }
 .canvas-panel-footer .canvas-zoom-row { margin:0; justify-content:center; }
@@ -470,8 +591,51 @@ input[type=file] { display:none; }
 .var-canvas-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; min-height:200px; color:var(--gray-400); font-size:13px; }
 /* Inner centering wrapper: fills the scroll container so flex-centering works when
    the canvas is smaller, and expands with the canvas when zoomed in so the outer
-   overflow:auto clips correctly without expanding the page. */
-.canvas-scroll-inner { min-width:100%; min-height:100%; display:flex; align-items:center; justify-content:center; }
+   overflow:auto clips correctly without expanding the page.
+   padding-left keeps the centering axis honest about the floating .sidebar
+   (position:absolute, see style.css's .sidebar comment) sitting on top of this
+   same column — without it, "centered" means centered across the full column
+   width including the part hidden under the sidebar, which visually drags the
+   artboard left and lets the sidebar eat far more of it than necessary. The
+   offset tracks --sidebar-w (kept live by sidebar.js's applyCollapsed) minus
+   the ~16px by which the sidebar's own left margin (24px) undercuts this
+   column's left padding (2.5rem) — the sidebar's actual encroachment into this
+   column's local coordinate space. Bleeding behind the sidebar (or the right
+   panel, on the other side) once the artboard is wider than what's left is
+   expected, not a bug: the boxes overlap in z-index, not clip each other. */
+.canvas-scroll-inner { min-width:100%; min-height:100%; display:flex; align-items:center; justify-content:center; padding-left:max(0px, calc(var(--sidebar-w, 420px) - 16px)); }
+/* Inside the full-bleed hs-design-layout shell, .hs-design-controls floats on
+   the right the same way .sidebar floats on the left (see .hs-design-controls
+   comment) — so this column's own centering axis needs a matching right-side
+   correction, not just the left one above, or the artboard centers across the
+   whole column (ignoring the right card) instead of the actual visible gap
+   between both floating cards. Unlike the generic left-only rule above, this
+   one starts from a clean slate (both paddings set here, not just adjusted)
+   since .hs-design-layout carries none of .panel.visible's baseline 2.5rem
+   padding that the "-16" correction above was netting against — padding-left
+   is the sidebar's real encroachment (margin + width), padding-right is
+   .hs-design-controls' (width 320px + its 24px margin, kept in sync with the
+   width/margin on that rule). */
+.hs-design-preview-col .canvas-scroll-inner { padding-left:calc(var(--sidebar-w, 420px) + 24px); padding-right:344px; }
+/* The floating sidebar and .hs-design-controls card overlap this column's
+   left/right edges the same way they do the artboard above — but the canvas
+   panel's own header row (name + add button) sits above .canvas-scroll-inner
+   as its own top-level child, so it needs the same left/right correction
+   applied as margin (not padding, since it's not the flex-centered artboard)
+   or it renders underneath those floating cards, illegible. The edit-request
+   note and front/back toggle used to need this too, but now that they're
+   centered inside the floating .canvas-panel-overlay-top (see that rule
+   below) they clear the side cards the same way .canvas-panel-footer always
+   has, with no margin correction needed. */
+.hs-canvas-bare > .canvas-panel-header {
+  /* +56px (not the scroll-inner's +24px) also clears .sidebar-collapse-btn,
+     which floats another ~40px past the sidebar's own right edge (left:100%
+     + 10px margin + 30px width — see .sidebar-collapse-btn) — this row
+     flushes its left edge against this margin, unlike the artboard above,
+     which is flex-centered so naturally clears the button with room to spare. */
+  margin-left:calc(var(--sidebar-w, 420px) + 56px);
+  margin-right:344px;
+}
 .canvas-zoom-wrap { margin:auto; flex-shrink:0; width:100%; }
 .canvas-zoom-wrap .hs-sign-preview, .canvas-zoom-wrap .hs-sign-thumb { width:100%; height:100%; }
 .canvas-zoom-wrap .flag-wrap, .canvas-zoom-wrap .flag-exp-preview { height:100%; max-height:none; }
@@ -490,11 +654,14 @@ input[type=file] { display:none; }
 .var-lib-del { position:absolute; top:2px; right:2px; width:18px; height:18px; background:rgba(0,0,0,.6); color:#fff; border:none; border-radius:50%; font-size:13px; line-height:1; cursor:pointer; display:none; align-items:center; justify-content:center; padding:0; z-index:2; }
 .var-lib-item:hover .var-lib-del { display:flex; }
 .var-lib-del:hover { background:#dc2626; }
+.var-lib-dl { position:absolute; top:2px; left:2px; width:18px; height:18px; background:rgba(0,0,0,.6); color:#fff; border:none; border-radius:50%; font-size:11px; line-height:1; cursor:pointer; display:none; align-items:center; justify-content:center; padding:0; z-index:2; }
+.var-lib-item:hover .var-lib-dl { display:flex; }
+.var-lib-dl:hover { background:var(--chrome-accent); }
 .var-lib-bgrem { position:absolute; bottom:2px; left:2px; width:18px; height:18px; background:rgba(0,0,0,.6); color:#fff; border:none; border-radius:50%; font-size:10px; line-height:1; cursor:pointer; display:none; align-items:center; justify-content:center; padding:0; z-index:2; }
 .var-lib-item:hover .var-lib-bgrem { display:flex; }
 .var-lib-bgrem:hover { background:var(--chrome-accent); }
 .var-lib-bgrem:disabled { opacity:.6; cursor:default; }
-.var-upload-btn { width:52px; height:52px; border:1.5px dashed var(--gray-200); border-radius:8px; background:transparent; flex-shrink:0; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:22px; color:var(--gray-400); transition:border-color .15s, color .15s; }
+.var-upload-btn { width:52px; height:52px; border:1.5px dashed var(--gray-200); border-radius:8px; background:transparent; flex-shrink:0; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:18px; color:var(--gray-400); transition:border-color .15s, color .15s; }
 .var-upload-btn:hover { border-color:var(--accent-hover); color:var(--accent); }
 .var-lib-item img, .var-lib-item .file-type-badge { width:100%; height:100%; object-fit:contain; padding:5px; pointer-events:none; }
 /* Height is set inline by fitSidePanel() (canvas-panel.js) using the same
@@ -507,6 +674,7 @@ input[type=file] { display:none; }
 .var-list-panel { display:flex; flex-direction:column; background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; overflow:hidden; }
 .var-list-header { display:flex; align-items:center; justify-content:space-between; flex-shrink:0; margin-bottom:.75rem; }
 .var-list-title { font-size:12px; font-weight:500; text-transform:uppercase; letter-spacing:.07em; color:var(--gray-600); }
+.var-list-summary { font-size:12px; color:var(--gray-500); flex-shrink:0; margin:-.5rem 0 .75rem; }
 
 /* Everything below the header (logo strip, canvas, variations list) — just a
    grouping div, so it needs its own flex+gap to replace the gap the
@@ -612,6 +780,11 @@ input[type=file] { display:none; }
 .var-card-left { display:flex; align-items:center; gap:10px; min-width:0; overflow:hidden; }
 .vthumb { width:80px; height:50px; border-radius:4px; overflow:hidden; background:var(--gray-50); flex-shrink:0; }
 .vthumb svg { width:100%; height:100%; display:block; }
+/* Front + independent-back thumbnail stack (flags Variations tile — see
+   showBackThumb in variation-list.js, only passed when the project-wide
+   "Same Front & Back Design" toggle is off). */
+.vthumb-group { display:flex; flex-direction:column; gap:3px; flex-shrink:0; }
+.vthumb-back-label { font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--gray-400); }
 .vname { font-size:13px; font-weight:500; font-family:'DM Sans',sans-serif; border:none; outline:none; background:transparent; color:var(--black); width:100%; cursor:text; min-width:0; }
 .vname:focus { background:var(--gray-50); border-radius:4px; padding:2px 4px; }
 .var-btns { display:flex; align-items:center; gap:4px; flex-shrink:0; }
@@ -620,23 +793,86 @@ input[type=file] { display:none; }
 .vbtn:disabled { opacity:.35; cursor:default; }
 .add-var { width:100%; padding:10px; border:1.5px dashed var(--gray-200); border-radius:var(--r); background:transparent; font-family:'DM Sans',sans-serif; font-size:13px; color:var(--gray-600); cursor:pointer; transition:border-color .15s, background .15s; }
 .add-var:hover { border-color:var(--accent-hover); background:var(--accent-tint); color:var(--accent); }
-.var-edit-note { background:#fef3c7; border:1px solid #fcd34d; border-radius:var(--r); padding:10px 14px; font-size:13px; color:#92400e; margin-bottom:1rem; display:flex; gap:10px; align-items:center; justify-content:space-between; line-height:1.5; }
+.var-edit-note { background:#fef3c7; border:1px solid #fcd34d; border-radius:var(--r); padding:10px 14px; font-size:13px; color:#92400e; margin-bottom:1rem; display:flex; flex-direction:column; gap:10px; line-height:1.5; }
 .var-edit-note.resolved { background:var(--gray-50); border-color:var(--gray-200); color:var(--gray-600); }
+.var-edit-note-row { display:flex; gap:10px; align-items:center; justify-content:space-between; }
 .var-edit-note-body { display:flex; gap:6px; align-items:flex-start; flex:1; min-width:0; }
 .var-edit-note-label { font-weight:600; flex-shrink:0; }
 .var-edit-resolve-btn { flex-shrink:0; padding:4px 12px; background:transparent; border:1px solid #d97706; border-radius:20px; font-size:12px; font-weight:500; color:#d97706; cursor:pointer; font-family:'DM Sans',sans-serif; transition:all .15s; white-space:nowrap; }
 .var-edit-resolve-btn:hover { background:#d97706; color:white; }
 .var-edit-resolved-tag { flex-shrink:0; font-size:12px; font-weight:500; color:var(--gray-400); padding:3px 10px; border-radius:20px; background:var(--gray-100); white-space:nowrap; }
+.var-edit-requested { display:flex; flex-wrap:wrap; gap:8px; }
+.var-edit-apply-btn { padding:4px 12px; background:transparent; border:1px solid #92400e; border-radius:20px; font-size:12px; font-weight:500; color:#92400e; cursor:pointer; font-family:'DM Sans',sans-serif; transition:all .15s; white-space:nowrap; }
+.var-edit-apply-btn:hover { background:#92400e; color:white; }
+
+/* Shared "Edit requests" sub-view (edit-requests-panel.js) — renders inline
+   into the right-hand "All variations"/"Variations" menu (reusing its
+   .hs-menu-section-header/.hs-menu-back back-button chrome, not a modal) so
+   it reads as another page of that same menu. Narrow (fits the ~272px-wide
+   .hs-design-controls column) — everything stacks vertically. Each row:
+   title, a combined "as if every pending change were applied" preview,
+   a row-wide Apply all, the customer's note, then one .erm-section per
+   requested field (Flag/Template, Colors, Logo) with its own label, its own
+   preview of just that field's requested value, and its own white Apply
+   button — so staff can act on one piece of feedback without the others. */
+.erm-list { display:flex; flex-direction:column; gap:16px; }
+.erm-empty { font-size:13px; color:var(--gray-400); padding:20px 0; text-align:center; }
+.erm-row { display:flex; flex-direction:column; gap:10px; padding:14px; background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--rl); }
+.erm-row.resolved { background:var(--gray-50); border-color:var(--gray-100); }
+.erm-row-title { font-size:14px; font-weight:600; color:var(--black); }
+.erm-thumb { width:100%; aspect-ratio:7519/4669; border-radius:6px; overflow:hidden; background:var(--gray-50); }
+.erm-thumb svg, .erm-thumb img { width:100%; height:100%; display:block; }
+.erm-row-note { font-size:12px; color:var(--gray-600); line-height:1.5; background:var(--gray-50); border-radius:6px; padding:8px 10px; }
+.erm-row-actions { display:flex; }
+/* White (not the old amber-outline) so every Apply action in this panel —
+   row-wide, panel-wide, and each field's own — reads as one consistent,
+   low-emphasis action rather than a mix of accent colors. */
+.erm-apply-all-btn { width:100%; padding:8px 12px; background:var(--white); border:1.5px solid var(--black); border-radius:var(--r); font-size:13px; font-weight:600; color:var(--black); cursor:pointer; font-family:'DM Sans',sans-serif; transition:all .15s; text-align:center; }
+.erm-apply-all-btn:hover { background:var(--gray-50); }
+/* The panel-wide "Apply all" sits inline in the title row (space-between
+   already positions it) rather than stretching to fill that row. */
+.erm-apply-all-btn-top { width:auto; }
+.erm-sections { display:flex; flex-direction:column; gap:12px; }
+.erm-section { display:flex; flex-direction:column; gap:6px; padding-top:10px; border-top:1px solid var(--gray-100); }
+.erm-section-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--gray-400); }
+.erm-section-preview:empty { display:none; }
+/* Colors: the same circular swatch + hex-code field pairing used everywhere
+   else a color is picked in this app (see .ve-custom-row/.hs-color-swatch/
+   .hexin) — a plain div (not a real <input type=color>) since this is a
+   read-only preview of the REQUESTED value, not an editable control; a
+   disabled color input would render visually washed-out in most browsers. */
+.erm-color-editor { display:flex; align-items:center; gap:8px; }
+.erm-color-dot { width:28px; height:28px; border-radius:8px; border:1.5px solid var(--gray-200); flex-shrink:0; }
+.erm-color-editor .hexin { flex:1; }
+/* Logo/flag-style previews: full width, auto (intrinsic) height — not
+   cropped into a fixed-aspect box like the combined preview above, since a
+   logo's own aspect ratio is part of what staff are checking. */
+.erm-section-preview img { display:block; width:100%; height:auto; border-radius:6px; }
+.erm-style-preview svg { display:block; width:100%; height:auto; }
+.erm-section-apply-btn { width:100%; padding:7px 12px; background:var(--white); border:1.5px solid var(--gray-200); border-radius:var(--r); font-size:12px; font-weight:600; color:var(--black); cursor:pointer; font-family:'DM Sans',sans-serif; transition:all .15s; }
+.erm-section-apply-btn:hover { background:var(--gray-50); border-color:var(--gray-400); }
+/* Per-variation "View edits" link on its own card (variation-list.js) and the
+   canvas banner's "View all edits" (flags/variations.js, hs/var-canvas.js) —
+   both open edit-requests-panel.js, just scoped differently. */
+.var-view-edits-link { padding:2px 10px; background:transparent; border:1px solid #d97706; border-radius:20px; font-size:11px; font-weight:500; color:#d97706; cursor:pointer; font-family:'DM Sans',sans-serif; transition:all .15s; white-space:nowrap; }
+.var-view-edits-link:hover { background:#d97706; color:white; }
+.var-edit-viewall-btn { flex-shrink:0; padding:4px 12px; background:transparent; border:1px solid #d97706; border-radius:20px; font-size:12px; font-weight:500; color:#d97706; cursor:pointer; font-family:'DM Sans',sans-serif; transition:all .15s; white-space:nowrap; }
+.var-edit-viewall-btn:hover { background:#d97706; color:white; }
 
 .var-list { display:flex; flex-direction:column; gap:1rem; }
 .var-card { background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; transition:border-color .2s; position:relative; }
 .var-card:hover { border-color:var(--gray-300); }
-.var-card-header { display:flex; align-items:center; gap:8px; margin-bottom:.875rem; padding-right:8.5rem; }
-.var-card-name { font-size:14px; font-weight:500; color:var(--black); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Name on its own row, status + actions together on the row below — mirrors
+   .hs-review-card-header/.hs-review-card-meta/.hs-review-actions (hole-sign
+   Review cards) so both galleries read the same way. align-items:center on
+   .var-card-header-meta is what keeps the Edit/PDF buttons vertically
+   centered against the status pill, not just left-aligned atop it. */
+.var-card-header { display:flex; flex-direction:column; gap:6px; margin-bottom:.875rem; }
+.var-card-name { font-size:14px; font-weight:500; color:var(--black); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.var-card-header-meta { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .var-status-tile { flex-shrink:0; }
-.var-card-actions { position:absolute; top:.625rem; right:.625rem; display:flex; align-items:center; gap:4px; z-index:2; }
-.var-card-edit, .var-card-pdf { padding:5px 6px; line-height:0; }
-.var-card-flags { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+.var-card-actions { display:flex; align-items:center; gap:8px; }
+.var-card-flags { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; margin-bottom:.875rem; }
 .var-card-face-label { font-size:10px; font-weight:500; text-transform:uppercase; letter-spacing:.06em; color:var(--gray-400); margin-bottom:4px; }
 .var-card-flag { width:100%; aspect-ratio:7519/4669; background:var(--gray-50); border-radius:8px; overflow:hidden; }
 .var-card-flag svg { width:100%; height:100%; display:block; }
@@ -690,41 +926,45 @@ input[type=file] { display:none; }
    .hs-design-layout rather than a specific #panel-N so every page using this
    shell picks it up automatically. */
 .panel.visible:has(.hs-design-layout) { padding: 0; }
-/* Grid rows stretch by default, so .hs-design-controls (the menu list, the
-   column that can grow past the viewport) fills the row's height and scrolls
-   internally; .hs-design-preview-col opts out (align-self:start below) to
-   stay its natural, compact size. */
-.hs-design-layout { display:grid; grid-template-columns:1fr 280px; gap:0; flex:1; min-height:0; }
-/* Step 2 (Variations) only: a dedicated vertical rail for the logo library on
-   the far left, ahead of the canvas — it frees the controls column to hold
-   just the variations list (matching Step 1's plain single-purpose list).
-   Matches the app sidebar's own background/border so it reads as an
-   extension of that sidebar rather than a floating strip. */
-.hs-design-layout:has(.hs-logo-rail) { grid-template-columns: 104px 1fr 280px; }
-.hs-logo-rail {
-  display:flex; flex-direction:column; align-items:center; gap:12px;
-  padding:24px 16px; min-height:0;
-  background:var(--white); border-right:1px solid var(--gray-100);
-}
-.hs-rail-title { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.06em; color:var(--gray-400); flex-shrink:0; }
-/* Only the item stack scrolls — the "Logos" title above stays put, same
-   pattern as .hs-panel-header + .hs-design-controls-body. */
-.hs-logo-rail-items { display:flex; flex-direction:column; align-items:center; gap:10px; width:100%; overflow-y:auto; min-height:0; flex:1; }
-/* Rail-only logo sizing (.var-lib-item/.var-upload-btn are shared with the
-   flag wizard's horizontal logo strip at a fixed 52x52 — scoped here so
-   that's untouched). Width-only: height is left to the image's own aspect
-   ratio instead of forcing a square crop, so a wide or tall logo doesn't get
-   squashed/cropped in the tray. The upload tile has no image to take a ratio
-   from, so it stays a fixed square. */
-.hs-logo-rail-items .var-lib-item { width:72px; height:auto; }
-/* display:block matters here: an <img> is inline by default, so at
-   height:auto (the box sizing to the image's own rendered height) the
-   default inline baseline leaves room for a descender below it — a gap at
-   the bottom of the box that overflow:hidden doesn't catch since it's
-   inside the box, not overflowing it. */
-.hs-logo-rail-items .var-lib-item img { display:block; width:100%; height:auto; object-fit:unset; padding:0; }
-.hs-logo-rail-items .var-lib-item .file-type-badge { width:100%; aspect-ratio:1; padding:0; }
-.hs-logo-rail-items .var-upload-btn { width:72px; height:72px; }
+/* .hs-design-controls floats over .hs-design-preview-col (position:absolute,
+   taken out of flow) instead of reserving its own grid column, so the canvas/
+   grid underneath is always full width — visible behind and around the
+   controls card, same reasoning as .sidebar floating over .main above. */
+.hs-design-layout { position:relative; flex:1; min-height:0; }
+/* ── Sidebar logos tile ─────────────────────────────────────
+   Design's template-logo slots and Variations' sponsor logo library both
+   render here, in their own separate .sidebar-tile card that floats below
+   the primary one (title/actions) — see #sidebarLogosTile in sidebar.js.
+   Sits on the same dark frosted-glass background as the primary tile, so
+   text/chevron colors are the light-on-dark tones (matches .hs-panel-
+   header's overrides), not the default light-page ones .hslt-title's
+   counterpart (.cs-title) uses. */
+#sidebarLogosTile { padding:20px 24px; }
+.hslt-header { display:flex; align-items:center; justify-content:space-between; cursor:pointer; user-select:none; margin-bottom:10px; }
+.hslt-title { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.06em; color:rgba(255,255,255,.6); }
+/* Expanded (default): a real multi-column grid — the tile is far wider than
+   the old 104px rail column, so a single vertical stack would waste most of
+   that width. Collapsed: back to a single-column vertical scroll list (not
+   horizontal — a sideways strip doesn't fit this card's vertical rhythm),
+   same layout the old rail used permanently. */
+.hslt-items { display:grid; grid-template-columns:repeat(auto-fill, minmax(52px, 1fr)); gap:10px; max-height:260px; overflow-y:auto; }
+.hslt-items.collapsed { display:flex; flex-direction:column; align-items:center; gap:8px; max-height:220px; }
+/* Design step's per-slot tiles reuse .var-lib-item/.var-upload-btn/.var-lib-del
+   as-is (drag cursor doesn't apply here — these aren't draggable). */
+.hslt-slot { cursor:pointer; }
+/* .var-lib-item/.var-upload-btn's default borders are var(--gray-100)/
+   var(--gray-200) — fine on the light .var-list-panel-style backgrounds
+   they were built for, but those tokens flip to near-black in a dark
+   OS/browser theme (see :root's dark-mode block), which is then nearly
+   indistinguishable from this tile's own fixed-dark background: the border
+   all but disappears, reading as if it'd been clipped off. Same fixed
+   light-on-dark treatment as .hs-panel-header's overrides above — not a
+   theme-branched token, since this tile's background never changes with
+   the OS/browser theme either. */
+#sidebarLogosTile .var-lib-item { border-color:rgba(255,255,255,.2); }
+#sidebarLogosTile .var-lib-item:hover { border-color:rgba(255,255,255,.4); }
+#sidebarLogosTile .var-upload-btn { border-color:rgba(255,255,255,.25); color:rgba(255,255,255,.5); }
+#sidebarLogosTile .var-upload-btn:hover { border-color:var(--accent-hover); color:var(--accent); }
 /* Placeholder shown in place of the thumbnail while a logo upload is in
    flight (see logo-tray.js) — reuses the same loading tile as the custom-
    artboard variation upload placeholder for a consistent look. */
@@ -758,23 +998,24 @@ input[type=file] { display:none; }
 .hs-ob-badge-edit { display:none; }
 .hs-ob-badge:hover .hs-ob-badge-default { display:none; }
 .hs-ob-badge:hover .hs-ob-badge-edit { display:inline; }
-/* Shared by every page using .hs-design-layout (both tools' Design/Templates,
-   Variations, and Gallery steps): each page's title/actions row lives inside
-   the (narrow, 280px) controls column instead of spanning the whole panel
-   like every other page's .p1-header — freeing the preview column to start at
-   the panel's top edge instead of below a full-width header, so the canvas
-   gets the vertical space that used to belong to the header. Stacks title
-   over actions (instead of .p1-header's side-by-side row) since 280px isn't
-   wide enough for both, and drops the full-bleed negative-margin trick
-   since it no longer needs to span past its own column. A plain
-   (non-sticky) block, not part of the scrolling region below it — see
-   .hs-design-controls-body — so it needs its own opaque background:
-   otherwise the list scrolling past underneath would read as running right
-   up against the Next/Save button. Matches the page/canvas background (not
-   a white card) so it reads as breathing room, not a separate panel sitting
-   on top of the page. */
-.hs-panel-header { flex-direction:column; align-items:stretch; position:static; padding:24px; margin:0; background:var(--gray-50); }
-.hs-panel-header .p1-header-actions { padding-top:.75rem; }
+/* Shared by every step of both wizards: each step's title/subtitle/actions
+   render into the left sidebar's #sidebarPanelHeader (see sidebar.js), to
+   the right of the vertical step column (.sidebar-top), rather than above
+   the right-hand controls column. No background of its own — .sidebar has
+   none either, so the canvas shows straight through behind the text.
+   Because of that, .ptitle/.psub/.btn (otherwise styled for a light-page
+   background) get legibility overrides scoped to this header only —
+   .ptitle/.psub/.btn are also used unscoped elsewhere (flags.html's
+   Master colors/Logo library steps, still on their normal light panel
+   background), so those base rules stay untouched. */
+#sidebarPanelHeader { flex:1 1 auto; min-width:0; }
+.hs-panel-header { flex-direction:column; align-items:stretch; justify-content:center; position:static; padding:24px; margin:0; height:100%; box-sizing:border-box; }
+.hs-panel-header .ptitle { color:var(--chrome-text); }
+.hs-panel-header .psub { color:rgba(255,255,255,.6); }
+.hs-panel-header .btn:not(.primary) { color:var(--chrome-text); border-color:rgba(255,255,255,.35); }
+.hs-panel-header .btn:not(.primary):hover { background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.5); }
+.hs-panel-header .s1hint-text { color:rgba(255,255,255,.5); }
+.hs-panel-header .p1-header-actions { padding-top:.75rem; flex-wrap:wrap; }
 /* Only .hs-design-controls-body scrolls — .hs-panel-header above stays put
    outside that scroll region, so the scrollbar/scroll boundary only ever
    runs alongside the list, not the whole column. For Step 1,
@@ -782,8 +1023,8 @@ input[type=file] { display:none; }
    closeHsMenuSection swap between the menu list and a drilled-into section
    — kept separate from .hs-panel-header above so those swaps never wipe out
    the header. */
-.hs-design-controls { display:flex; flex-direction:column; gap:16px; min-height:0; }
-.hs-design-controls-body { display:flex; flex-direction:column; gap:1rem; flex:1; min-height:0; overflow-y:auto; padding:24px; }
+.hs-design-controls { position:absolute; top:0; right:0; bottom:0; z-index:10; width:320px; display:flex; flex-direction:column; gap:16px; min-height:0; margin:24px; padding:24px; background:rgba(35,35,35,.72); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,.12); border-radius:var(--rl); overflow:hidden; }
+.hs-design-controls-body { display:flex; flex-direction:column; gap:1rem; flex:1; min-height:0; overflow-y:auto; }
 /* Strips the canvas card's own border/background/padding for Steps 1 and 2,
    so the sign fills the whole preview column (fitCanvas still finds this
    via .closest('.var-canvas-panel') for its chrome-height math — only the
@@ -796,9 +1037,17 @@ input[type=file] { display:none; }
    including the extra room a zoomed-in sign needs — while the zoom % /
    reset control (and, for Step 2, the "drag logos into zones" hint) stays
    reachable on top of it. */
+/* Centered the same way .canvas-panel-overlay-top below is — left/right
+   pinned to each card's real encroachment (not left:50%/translateX, which
+   centers across the column's full width and drags the pill toward
+   whichever side has the narrower card) with width:max-content + margin:auto
+   so it still hugs its own content as a pill instead of stretching to fill
+   the band the way the top bar does. */
 .hs-canvas-bare .canvas-panel-footer {
-  position:absolute; left:50%; bottom:16px; transform:translateX(-50%); z-index:5;
-  flex-direction:row; margin:0; width:max-content; max-width:calc(100% - 32px);
+  position:absolute; bottom:16px; z-index:5;
+  left:calc(var(--sidebar-w, 420px) + 24px); right:344px;
+  width:max-content; max-width:800px; margin:0 auto;
+  flex-direction:row;
   background:rgba(17,17,16,.72); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
   color:#fff; padding:8px 18px; border-radius:100px;
 }
@@ -807,6 +1056,41 @@ input[type=file] { display:none; }
 .hs-canvas-bare .canvas-zoom-reset { color:rgba(255,255,255,.85); }
 .hs-canvas-bare .canvas-zoom-reset:hover { color:#fff; }
 .hs-canvas-bare .canvas-zoom-hint { color:rgba(255,255,255,.55); }
+/* Same floating treatment as .canvas-panel-footer above, mirrored to the top
+   edge: the edit-request note and Front/Back toggle used to claim their own
+   row of height above the canvas, which is reclaimed the same way. The two
+   don't share one background (the note keeps its own amber banner and can be
+   hidden independently of the face-row) — instead .canvas-face-row itself
+   gets the footer's dark pill treatment below, so it still reads as a
+   floating control the same way the zoom bar does. Fills the canvas panel's
+   width (capped at 800px so it doesn't stretch edge to edge on wide panels)
+   rather than hugging its content, so the edit-request note reads as a
+   full-width bar across the top of the canvas.
+   Centered between the .sidebar (left) and .hs-design-controls (right) cards
+   that float over this same column — not across the column's full width,
+   which would visually drag it toward whichever side has the narrower card.
+   left/right pin the box to each card's real encroachment (same +24px/344px
+   correction .hs-design-preview-col's own .canvas-scroll-inner uses above)
+   and margin:auto splits whatever room is left over past max-width evenly
+   between them, same trick .hs-canvas-bare's .canvas-panel-footer isn't quite
+   as strict about. --sidebar-w is kept live by sidebar.js's applyCollapsed,
+   so this stays centered whether that sidebar is expanded or collapsed. */
+.hs-canvas-bare .canvas-panel-overlay-top {
+  position:absolute; top:16px; z-index:5;
+  left:calc(var(--sidebar-w, 420px) + 24px); right:344px;
+  max-width:800px; margin:0 auto;
+}
+.hs-canvas-bare .canvas-panel-overlay-top > .var-edit-note { margin-bottom:0; width:100%; max-width:100%; }
+.hs-canvas-bare .canvas-panel-overlay-top > .canvas-face-row {
+  width:100%; max-width:100%;
+  background:rgba(17,17,16,.72); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+  padding:8px 18px; border-radius:100px;
+}
+.hs-canvas-bare .face-tab { border-color:rgba(255,255,255,.3); color:rgba(255,255,255,.85); }
+.hs-canvas-bare .face-tab:hover { border-color:rgba(255,255,255,.6); color:#fff; }
+.hs-canvas-bare .face-tab.active { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
+.hs-canvas-bare .canvas-face-row .btn.sm { border-color:rgba(255,255,255,.3); color:#fff; }
+.hs-canvas-bare .canvas-face-row .btn.sm:hover { background:rgba(255,255,255,.12); border-color:rgba(255,255,255,.6); }
 /* Groups a controls-column section's own header + list (Step 2's variations
    list, Step 3's export/submit/share groups). */
 .hs-stack-section { display:flex; flex-direction:column; gap:10px; }
@@ -830,7 +1114,14 @@ input[type=file] { display:none; }
    so "top banner" vs "bottom banner" is visually distinct at a glance. */
 .hs-icon-flip { display:inline-block; transform:scaleY(-1); }
 .hs-menu-swatch { display:inline-block; width:16px; height:16px; border-radius:4px; border:1px solid var(--gray-200); }
-.hs-menu-section-header { display:flex; flex-direction:column; align-items:flex-start; gap:6px; margin-bottom:2px; }
+/* Sticky within whichever ancestor actually scrolls it (.hs-design-controls-
+   body for the top-level menu, .var-editor for a variation's own editor) —
+   same reasoning as .var-editor-actions' bottom-sticky treatment below, just
+   anchored to the top so Back stays reachable once a long section's content
+   scrolls past it. Reuses .hs-design-controls' own dark-glass recipe (color
+   + blur) rather than a solid fill, so it reads as part of that same card
+   instead of a flat bar dropped on top of it. */
+.hs-menu-section-header { display:flex; flex-direction:column; align-items:flex-start; gap:6px; margin-bottom:2px; position:sticky; top:0; z-index:2; background:rgba(35,35,35,.72); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); padding-bottom:6px; }
 .hs-menu-back { background:none; border:none; padding:4px 0; font-family:inherit; font-size:13px; font-weight:500; color:var(--gray-600); cursor:pointer; }
 .hs-menu-back:hover { color:var(--black); }
 .hs-menu-section-title { font-size:17px; font-weight:600; flex:1; }
@@ -908,22 +1199,28 @@ input[type=file] { display:none; }
 /* Step-1 variation-logo placeholder: dashed box that reads on any sign bg */
 .hs-logo-placeholder { border:2px dashed var(--guides) !important; }
 .hs-ph-label { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.05em; color:rgba(128,128,128,.85); background:rgba(255,255,255,.55); padding:2px 7px; border-radius:10px; }
-.hs-design-preview-col { min-width:0; align-self:start; }
-/* Step 3 (Gallery): the preview column holds a plain CSS grid of thumbnails
-   instead of a JS-sized canvas (steps 1-2), so unlike those it needs to
-   actually stretch to the row height and scroll internally once the grid
-   grows past one viewport — align-self:start (above) would otherwise just
-   let it grow the whole page. */
-.hs-design-preview-col:has(.hs-gallery-grid) { align-self:stretch; overflow-y:auto; min-height:0; }
+/* Fills .hs-design-layout entirely (position:relative parent, no grid track
+   reserved for it anymore) so it bleeds full-bleed behind the floating
+   .hs-design-controls card rather than stopping short of it. */
+.hs-design-preview-col { position:absolute; inset:0; min-width:0; }
+/* Step 3 (Review): the preview column holds a single scrollable column of
+   review cards instead of a JS-sized canvas (steps 1-2), so unlike those it
+   needs to scroll internally once the list grows past one viewport. Its
+   share/print actions live in #sidebarLogosTile below the left menu (see
+   hs/export.js), not in a floating right-hand card the way Steps 1-2 do —
+   so unlike the two rules below (which still reserve padding-right for that
+   card), this one only needs the left-side sidebar compensation. */
+.hs-design-preview-col:has(.hs-review-list) { padding-left:calc(var(--sidebar-w, 420px) + 24px); overflow-y:auto; }
 /* Flag wizard's Gallery page: same reasoning as the hole-sign thumbnail grid
    above, but for its own content model — a scrollable list of variation
    cards (each showing front+back together) rather than a click-to-select
-   thumbnail grid. */
-.hs-design-preview-col:has(> #varList) { align-self:stretch; overflow-y:auto; min-height:0; }
+   thumbnail grid. Its own actions also live in #sidebarLogosTile now (see
+   flags/gallery.js), so no right-hand card to reserve space for either. */
+.hs-design-preview-col:has(> #varList) { padding-left:calc(var(--sidebar-w, 420px) + 24px); overflow-y:auto; }
 /* Onboarding "Choose a template" grid (see .hs-ob-grid above): a scrollable
    grid of many cards rather than one JS-sized canvas, same reasoning as the
    two rules above. */
-.hs-design-preview-col:has(.hs-ob-grid) { align-self:stretch; overflow-y:auto; min-height:0; }
+.hs-design-preview-col:has(.hs-ob-grid) { padding-left:calc(var(--sidebar-w, 420px) + 24px); padding-right:344px; overflow-y:auto; }
 .hs-section { display:flex; flex-direction:column; gap:8px; background:var(--white); border:1px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; }
 .hs-section-title { font-size:13px; font-weight:500; }
 .hs-optional { font-size:12px; font-weight:400; color:var(--gray-400); }
@@ -934,13 +1231,6 @@ input[type=file] { display:none; }
 .hs-tog-btn.active { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
 .hs-tog-icon { padding:6px 10px; display:inline-flex; align-items:center; justify-content:center; line-height:0; }
 .hs-tog-icon-btn { padding:7px 12px; display:inline-flex; align-items:center; justify-content:center; }
-.tl-assign-rows { display:flex; flex-direction:column; gap:6px; margin:8px 0 4px; }
-.tl-assign-row { display:flex; align-items:center; gap:6px; }
-.tl-assign-label { font-size:11px; color:var(--gray-500); min-width:38px; }
-.tl-assign-thumb { width:36px; height:24px; object-fit:contain; border:1px solid var(--gray-200); border-radius:4px; background:var(--gray-300); flex-shrink:0; }
-.tl-assign-empty { font-size:11px; color:var(--gray-300); width:36px; text-align:center; }
-.tl-assign-btn { flex:1; }
-.tl-assign-rm { color:#dc2626; border-color:#fecaca; padding:4px 8px; }
 .hs-bg-img-row { display:flex; align-items:center; gap:.75rem; }
 .hs-color-swatch { width:34px; height:34px; border-radius:8px; border:1.5px solid var(--gray-200); cursor:pointer; padding:2px; background:none; }
 .hs-font-btns { display:flex; gap:6px; flex-wrap:wrap; }
@@ -1075,15 +1365,37 @@ input[type=file] { display:none; }
 .hs-vthumb-uploading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:var(--gray-50); border-radius:4px; }
 .hs-upload-spinner { width:16px; height:16px; border:2px solid var(--gray-200); border-top-color:var(--accent); border-radius:50%; animation:hs-spin .7s linear infinite; }
 @keyframes hs-spin { to { transform:rotate(360deg); } }
-.hs-gallery-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:1rem; margin-bottom:1.5rem; }
-.hs-gallery-item { cursor:pointer; border-radius:var(--r); overflow:hidden; border:1.5px solid var(--gray-100); transition:border-color .15s; }
-.hs-gallery-item:hover { border-color:var(--gray-400); }
-.hs-gallery-item.selected { border-color:var(--accent); }
-.hs-gallery-thumb { aspect-ratio:6375/5475; background:var(--gray-50); }
-.hs-gallery-thumb svg { width:100%; height:100%; display:block; }
-.hs-gallery-name { padding:5px 8px; font-size:12px; font-weight:500; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.hs-gallery-selected { aspect-ratio:6375/5475; background:var(--gray-50); border-radius:var(--r); overflow:hidden; margin-bottom:.5rem; }
-.hs-gallery-selected svg { width:100%; height:100%; display:block; }
+/* Review step: approval progress summary (only shown once a share-for-review
+   link has been generated — see HS.shareToken / hs/export.js) above a single
+   column of review cards, one per variation. Actions (Share for
+   review/Print files) live in the left menu's #sidebarLogosTile instead of
+   a right-hand card, same as the flag wizard's Gallery step
+   (flags/gallery.js) — see the .hs-design-preview-col:has() padding rule
+   above. */
+.hs-review-progress { display:flex; flex-direction:column; gap:8px; max-width:1000px; margin:0 auto; padding:24px 24px 0; }
+.hs-review-progress-counts { display:flex; gap:16px; font-size:13px; font-weight:500; }
+.hs-review-progress-count.approved { color:#16a34a; }
+.hs-review-progress-count.needs-edits { color:#b45309; }
+.hs-review-progress-count.pending { color:var(--gray-500); }
+.hs-review-progress-bar { display:flex; height:6px; border-radius:3px; background:var(--gray-100); overflow:hidden; }
+.hs-review-progress-fill.approved { background:#16a34a; }
+.hs-review-progress-fill.needs-edits { background:#d97706; }
+.hs-review-list { display:flex; flex-direction:column; gap:1rem; max-width:1000px; margin:0 auto; padding:24px; }
+.hs-review-card { background:var(--white); border:1.5px solid var(--gray-100); border-radius:var(--rl); padding:1.25rem; transition:border-color .2s; }
+.hs-review-card:hover { border-color:var(--gray-300); }
+.hs-review-card-header { display:flex; flex-direction:column; gap:6px; margin-bottom:.875rem; }
+.hs-review-card-name { font-size:14px; font-weight:500; color:var(--black); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hs-review-card-meta { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.hs-review-card-body { display:flex; gap:1.5rem; align-items:flex-start; }
+.hs-review-image { width:50%; aspect-ratio:6375/5475; background:var(--gray-50); border-radius:8px; overflow:hidden; flex-shrink:0; }
+.hs-review-image svg { width:100%; height:100%; display:block; }
+.hs-review-info { flex:1; min-width:0; align-self:stretch; display:flex; flex-direction:column; }
+.hs-review-actions { display:flex; gap:8px; }
+.hs-review-notes { flex:1; font-size:13px; color:var(--gray-600); line-height:1.5; background:var(--gray-50); border-radius:8px; padding:10px 12px; }
+.hs-review-notes-label { display:block; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--gray-400); margin-bottom:4px; }
+.hs-review-requested { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.hs-review-apply-btn { padding:4px 12px; background:transparent; border:1px solid #d97706; border-radius:20px; font-size:12px; font-weight:500; color:#d97706; cursor:pointer; font-family:'DM Sans',sans-serif; transition:all .15s; white-space:nowrap; }
+.hs-review-apply-btn:hover { background:#d97706; color:white; }
 
 /* Template logos */
 .tl-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }

@@ -31,8 +31,12 @@ function extractSlug(rawUrl: string): { slug: string; apiBase: string } | null {
   }
   if (!GOLFSTATUS_EVENT_HOSTS.has(parsed.hostname)) return null;
   const segments = parsed.pathname.split('/').filter(Boolean);
-  const slug = segments[segments.length - 1];
-  if (!slug) return null;
+  // pathname segments stay percent-encoded (e.g. a space in the event name
+  // survives as "%20") — decode before treating it as the raw slug, or the
+  // encodeURIComponent() below double-encodes it and the API 404s.
+  const rawSlug = segments[segments.length - 1];
+  if (!rawSlug) return null;
+  const slug = decodeURIComponent(rawSlug);
   // "events.golfstatus.<env>" -> "api.golfstatus.<env>" — same environment's API, not always prod.
   const env = parsed.hostname.slice('events.golfstatus.'.length);
   return { slug, apiBase: `https://api.golfstatus.${env}/v2/tournaments` };
