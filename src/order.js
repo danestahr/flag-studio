@@ -290,9 +290,6 @@ function validate(step) {
       errors.designNotes = 'Flag design is required.';
     }
   }
-  if (step === 4) {
-    if (!O.logoFiles.length) errors.logoFiles = 'At least one logo is required.';
-  }
   if (step === 5) {
     if (!O.ackDeadline) errors.ackDeadline = 'Please acknowledge the deadline policy.';
   }
@@ -333,13 +330,7 @@ function renderProgressDots() {
   const stepNums = [1, 2, 3, 4, 5];
   return stepNums.map((n) => {
     const label = STEP_HEADERS[n].title;
-    // Step 4 (Logos) can't rely on n < O.step alone: a reload restores
-    // O.logoFiles from IndexedDB (see loadLogoFilesFromDb), but that restore
-    // can fail (private browsing, quota, disabled storage), leaving a draft
-    // resumed past this step with O.logoFiles empty even though O.step says
-    // it's done. Only show the checkmark if a logo is actually present right
-    // now.
-    const done = !O.syncStep && n < O.step && (n !== 4 || O.logoFiles.length > 0);
+    const done = !O.syncStep && n < O.step;
     const active = !O.syncStep && n === O.step;
     const cls = done ? 'op-step done' : active ? 'op-step active' : 'op-step';
     const lineCls = done ? 'op-line done' : 'op-line';
@@ -400,16 +391,8 @@ function render() {
 function renderNav() {
   let nextBtn;
   if (O.step === 5) {
-    // Logos are normally restored from IndexedDB on reload (see
-    // loadLogoFilesFromDb), but that restore can fail (private browsing,
-    // quota, disabled storage), leaving a draft resumed on Review with
-    // O.logoFiles empty. Disable Submit rather than letting the customer
-    // send an order with no logo attached; renderStep5's Logos section is
-    // what points them back to Step 4 to fix it.
     nextBtn = O.submitting
       ? `<button class="btn primary" disabled style="flex:1;justify-content:center">Submitting…</button>`
-      : !O.logoFiles.length
-      ? `<button class="btn primary" disabled title="Re-add your logos before submitting" style="flex:1;justify-content:center">Submit Order</button>`
       : `<button class="btn primary" onclick="window.orderSubmit()" style="flex:1;justify-content:center">Submit Order</button>`;
   } else if (O.returnToReview) {
     nextBtn = `<button class="btn primary" onclick="window.orderNext()" style="flex:1;justify-content:center">Save</button>`;
@@ -676,7 +659,7 @@ function renderStep4() {
 
   return `
     <div class="form-field">
-      <label class="form-label">Logos${req()}</label>
+      <label class="form-label">Logos</label>
       <div class="logo-dropzone" id="logoDropzone">
         <div class="logo-dropzone-icon"><i class="fa-solid fa-upload" aria-hidden="true"></i></div>
         <div class="logo-dropzone-text">Drop logos here or click to upload</div>
@@ -786,16 +769,11 @@ function renderStep5() {
       <div class="rs-rows">
         ${O.logoFiles.length
           ? O.logoFiles.map(lf => `<div class="rs-row"><span class="rs-label">File</span><span class="rs-value">${esc(lf.file.name)}</span></div>`).join('')
-          // Reaching Review with zero logos is only possible after a page
-          // reload failed to restore the logo files from IndexedDB (see
-          // loadLogoFilesFromDb — private browsing, quota, disabled storage)
-          // — orderNext()'s validate(4) blocks getting here any other way —
-          // so say so plainly instead of implying nothing was ever added,
-          // and give a direct way back to Step 4 (Submit is also disabled
-          // for this same case — see renderNav).
+          // Logos are optional — a customer can submit without one and add
+          // it later via the upload link in their confirmation email.
           : `<div class="rs-row" style="flex-direction:column;align-items:flex-start;gap:10px">
-              <span class="rs-value" style="color:#c0392b">Logos weren’t saved through your last visit — please re-add them before submitting.</span>
-              <button type="button" class="btn sm" onclick="window.editStep(4)"><i class="fa-solid fa-upload" aria-hidden="true"></i> Re-add Logos</button>
+              <span class="rs-value" style="color:var(--gray-400)">No logos added — you can upload them any time after submitting, or add one now.</span>
+              <button type="button" class="btn sm" onclick="window.editStep(4)"><i class="fa-solid fa-upload" aria-hidden="true"></i> Add Logos</button>
             </div>`}
       </div>
     </div>`;
@@ -1200,21 +1178,6 @@ window.resyncEvent = function () {
 };
 
 window.orderSubmit = async function () {
-  // validate(5) doesn't re-check logos — a reload normally restores
-  // O.logoFiles from IndexedDB (see loadLogoFilesFromDb), but that restore
-  // can fail (private browsing, quota, disabled storage), leaving a draft
-  // resumed past Step 4 with O.logoFiles empty even though O.step already
-  // says Step 4 is done. Without this, a customer who reloads on Review in
-  // that case and doesn't notice the empty Logos section could submit an
-  // order with no logo attached.
-  if (!O.logoFiles.length) {
-    O.errors = { logoFiles: 'Logos weren’t saved through your last visit — please re-add them.' };
-    O.returnToReview = true;
-    O.step = 4;
-    render();
-    window.scrollTo(0, 0);
-    return;
-  }
   const errors = validate(5);
   if (Object.keys(errors).length) {
     O.errors = errors;
@@ -1313,6 +1276,7 @@ window.orderSubmit = async function () {
       backDesignNotes: O.flagSetup === 'different' ? (O.backDesignNotes || '') : '',
       logoFileNames: O.logoFiles.map(lf => lf.file?.name).filter(Boolean),
       projectId,
+      uploadLogosUrl: `${window.location.origin}/upload-logos?project=${projectId}`,
     }).catch(err => {
       // The order itself already succeeded by this point (intake row is
       // inserted) — this only means the confirmation email didn't go out.

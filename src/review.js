@@ -582,6 +582,20 @@ function buildCard(v, fb) {
   }
 
   if (!isLocked) {
+    // wireFlagQuickPicks renders one full flag SVG per template (see below) —
+    // cheap for a single card, but multiplied across every variation on the
+    // page it added a full extra render pass of every flag style, for a
+    // panel that stays collapsed until the reviewer actually clicks "Request
+    // edits". Build it lazily the first time that panel is shown (either
+    // right now, if it's already open from a previous session, or on that
+    // click) instead of unconditionally for every card up front.
+    let quickPicksWired = false;
+    const ensureFlagQuickPicksWired = () => {
+      if (quickPicksWired) return;
+      quickPicksWired = true;
+      wireFlagQuickPicks(card, v);
+    };
+
     card.querySelector('#rapprove-' + v.id).addEventListener('click', () => {
       localFeedback[v.id] = { ...(localFeedback[v.id] || {}), status: 'approved' };
       collapseCard(card, v); updateSummary();
@@ -594,12 +608,13 @@ function buildCard(v, fb) {
       card.className = 'rv-card rv-needs-edits';
       card.querySelector('#rnote-' + v.id)?.focus();
       updateSummary();
+      ensureFlagQuickPicksWired();
     });
     card.querySelector('#rnote-' + v.id)?.addEventListener('input', e => {
       if (!localFeedback[v.id]) localFeedback[v.id] = {};
       localFeedback[v.id].note = e.target.value;
     });
-    wireFlagQuickPicks(card, v);
+    if (effectiveStatus === 'needs_edits') ensureFlagQuickPicksWired();
   }
 
   return card;
@@ -671,23 +686,32 @@ function hsLogoRefs(v) {
 }
 
 // Renders one row per current logo (`logoRefs`), each with its own "Replace
-// logo" button, plus one trailing "Add a logo" row that isn't tied to
+// logo" button, plus a trailing "Add a logo" row that isn't tied to
 // replacing anything — covers both a variation with no logo placed yet (no
 // row to attach a replacement to) and a variation that already has one but
-// the customer just wants to add another rather than swap it out. Only one
-// pending upload is tracked per variation (requestedLogoFile/
-// requestedLogoTargetId on the fb object, matching the single
-// requested_logo_url/path/target_id columns it's ultimately submitted as) —
-// picking a different row's button just moves the pending state to that
-// row, same as requestedColors/requestedFlagId already being overwritten
-// wholesale on each edit rather than accumulating a history. A pending
-// upload with no target (the "Add" row) is told apart from "not chosen yet"
-// by requestedLogoFile itself being set — requestedLogoTargetId is only
-// ever falsy-but-meaningful once a file exists alongside it.
+// the customer just wants to add another rather than swap it out. Any
+// number of pending uploads can be queued at once — one per existing logo
+// row, plus any number of "Add a logo" entries — tracked as
+// fb.requestedLogos, an object keyed by a locally-generated id (not
+// review.js's own ref.id, since more than one "Add" entry can exist with no
+// target to key off of) to `{ file, targetId }`, matching the
+// requested_logos jsonb array it's ultimately submitted as. Picking
+// "Replace" on a second logo no longer discards the first.
 function renderLogoReplaceRows(listEl, logoRefs, map, variationId) {
   const rerender = () => renderLogoReplaceRows(listEl, logoRefs, map, variationId);
   listEl.innerHTML = '';
   const fb = map[variationId] || {};
+  const pending = fb.requestedLogos || {};
+
+  const addPending = (key, file, targetId) => {
+    if (!map[variationId]) map[variationId] = {};
+    if (!map[variationId].requestedLogos) map[variationId].requestedLogos = {};
+    map[variationId].requestedLogos[key] = { file, targetId };
+  };
+  const removePending = (key) => {
+    delete pending[key];
+    if (!Object.keys(pending).length) delete fb.requestedLogos;
+  };
 
   if (!logoRefs.length) {
     const empty = document.createElement('div');
@@ -697,7 +721,8 @@ function renderLogoReplaceRows(listEl, logoRefs, map, variationId) {
   }
 
   logoRefs.forEach(ref => {
-    const isPending = !!fb.requestedLogoFile && fb.requestedLogoTargetId === ref.id;
+    const pendingEntry = Object.entries(pending).find(([, p]) => p.targetId === ref.id);
+    const isPending = !!pendingEntry;
     const row = document.createElement('div');
     row.className = 'rv-qp-logo-item';
     row.innerHTML = `
@@ -713,12 +738,12 @@ function renderLogoReplaceRows(listEl, logoRefs, map, variationId) {
     listEl.appendChild(row);
 
     if (isPending) {
-      const objUrl = URL.createObjectURL(fb.requestedLogoFile);
+      const [key, p] = pendingEntry;
+      const objUrl = URL.createObjectURL(p.file);
       row.querySelector('.rv-qp-logo-new').innerHTML = `<img src="${objUrl}" alt="">`;
       row.querySelector('.rv-qp-logo-remove-btn').addEventListener('click', () => {
         URL.revokeObjectURL(objUrl);
-        delete fb.requestedLogoFile;
-        delete fb.requestedLogoTargetId;
+        removePending(key);
         rerender();
       });
     } else {
@@ -727,48 +752,43 @@ function renderLogoReplaceRows(listEl, logoRefs, map, variationId) {
       fileInput.addEventListener('change', e => {
         const file = e.target.files?.[0];
         if (!file) return;
-        if (!map[variationId]) map[variationId] = {};
-        map[variationId].requestedLogoFile = file;
-        map[variationId].requestedLogoTargetId = ref.id;
+        addPending(ref.id, file, ref.id);
         rerender();
       });
     }
   });
 
-  const addPending = !!fb.requestedLogoFile && !fb.requestedLogoTargetId;
+  const addEntries = Object.entries(pending).filter(([, p]) => !p.targetId);
+  addEntries.forEach(([key, p]) => {
+    const row = document.createElement('div');
+    row.className = 'rv-qp-logo-item';
+    const objUrl = URL.createObjectURL(p.file);
+    row.innerHTML = `
+      <div class="rv-qp-logo-thumb rv-qp-logo-new"><img src="${objUrl}" alt=""></div>
+      <span class="rv-qp-logo-add-label">New logo</span>
+      <button type="button" class="rv-qp-logo-remove-btn" title="Remove"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>`;
+    listEl.appendChild(row);
+    row.querySelector('.rv-qp-logo-remove-btn').addEventListener('click', () => {
+      URL.revokeObjectURL(objUrl);
+      removePending(key);
+      rerender();
+    });
+  });
+
   const addRow = document.createElement('div');
   addRow.className = 'rv-qp-logo-item';
-  addRow.innerHTML = addPending ? `
-    <div class="rv-qp-logo-thumb rv-qp-logo-new"></div>
-    <span class="rv-qp-logo-add-label">New logo</span>
-    <button type="button" class="rv-qp-logo-remove-btn" title="Remove"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
-  ` : `
+  addRow.innerHTML = `
     <button type="button" class="rv-qp-logo-replace-btn"><i class="fa-solid fa-plus" aria-hidden="true"></i> Add a logo</button>
-    <input type="file" accept="image/*" class="rv-qp-file" hidden>
-  `;
+    <input type="file" accept="image/*" class="rv-qp-file" hidden>`;
   listEl.appendChild(addRow);
-
-  if (addPending) {
-    const objUrl = URL.createObjectURL(fb.requestedLogoFile);
-    addRow.querySelector('.rv-qp-logo-new').innerHTML = `<img src="${objUrl}" alt="">`;
-    addRow.querySelector('.rv-qp-logo-remove-btn').addEventListener('click', () => {
-      URL.revokeObjectURL(objUrl);
-      delete fb.requestedLogoFile;
-      delete fb.requestedLogoTargetId;
-      rerender();
-    });
-  } else {
-    const fileInput = addRow.querySelector('.rv-qp-file');
-    addRow.querySelector('.rv-qp-logo-replace-btn').addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', e => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      if (!map[variationId]) map[variationId] = {};
-      map[variationId].requestedLogoFile = file;
-      delete map[variationId].requestedLogoTargetId;
-      rerender();
-    });
-  }
+  const fileInput = addRow.querySelector('.rv-qp-file');
+  addRow.querySelector('.rv-qp-logo-replace-btn').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    addPending('add-' + Date.now() + '-' + Math.random().toString(36).slice(2), file, null);
+    rerender();
+  });
 }
 
 function wireFlagQuickPicks(card, v) {
@@ -993,18 +1013,19 @@ function wireHsQuickPicks(card, v) {
 
 // ── Submit ────────────────────────────────────────────────────────────────────
 
-// Builds one variation_feedback row, uploading a pending quick-pick logo
-// file first (if any). Quick-pick fields the customer didn't touch are
-// written as explicit null — a fresh "Request edits" submission fully
-// replaces whatever was requested last time, same semantics note/status
-// already have via the same upsert (see submitFeedback, src/supabase.js).
+// Builds one variation_feedback row, uploading every pending quick-pick
+// logo file first (if any — fb.requestedLogos can hold any number of
+// them). Quick-pick fields the customer didn't touch are written as
+// explicit null — a fresh "Request edits" submission fully replaces
+// whatever was requested last time, same semantics note/status already
+// have via the same upsert (see submitFeedback, src/supabase.js).
 // Shared by both tabs' independent submitProductReview() calls below.
 async function buildFeedbackRow(variation_id, fb, reviewerName, reviewerEmail, generalNote, kind) {
-  let requested_logo_url = null, requested_logo_path = null;
-  if (fb.requestedLogoFile) {
-    const uploaded = await uploadFeedbackLogo(projectId, variation_id, fb.requestedLogoFile, reviewClient);
-    requested_logo_url = uploaded.url;
-    requested_logo_path = uploaded.storagePath;
+  const pendingLogos = Object.values(fb.requestedLogos || {});
+  const requested_logos = [];
+  for (const p of pendingLogos) {
+    const uploaded = await uploadFeedbackLogo(projectId, variation_id, p.file, reviewClient);
+    requested_logos.push({ target_id: p.targetId || null, url: uploaded.url, path: uploaded.storagePath });
   }
   return {
     variation_id,
@@ -1017,9 +1038,7 @@ async function buildFeedbackRow(variation_id, fb, reviewerName, reviewerEmail, g
     requested_flag_id: kind === 'flags' ? (fb.requestedFlagId || null) : null,
     requested_template_id: kind === 'hole-signs' ? (fb.requestedTemplateId || null) : null,
     requested_colors: (fb.requestedColors && Object.keys(fb.requestedColors).length) ? fb.requestedColors : null,
-    requested_logo_url,
-    requested_logo_path,
-    requested_logo_target_id: fb.requestedLogoFile ? (fb.requestedLogoTargetId || null) : null,
+    requested_logos: requested_logos.length ? requested_logos : null,
   };
 }
 

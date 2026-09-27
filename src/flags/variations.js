@@ -109,10 +109,6 @@ function getVarGsTagOpts(v) {
 
 // ── Logo library (strip) ───────────────────────────────────
 
-function hasAnyLogoPlacement() {
-  return S.variations.some(v => (v.logos?.length) || (v.backLogos?.length));
-}
-
 // Every upload becomes a shared logo (user_logos), reusable across all of
 // this user's projects — one flat "Logos" section, not a project-only vs.
 // shared split. Logos already on the project from before this change
@@ -134,23 +130,6 @@ async function handleFlagLogoUpload(files) {
       logo.shared = true;
       const idx = S.library.findIndex(l => l.id === tempId);
       if (idx !== -1) S.library[idx] = logo;
-      // First logo in the project — place it straight onto the active
-      // variation instead of making the customer drag it from the strip.
-      // Only fires for the very first upload (not every subsequent one),
-      // and only onto a variation with nothing placed yet, so it never
-      // clobbers a placement someone already made. Checked against actual
-      // placements rather than S.library.length, since the library can
-      // already hold logos carried over from this user's other projects
-      // (see mergeLibraries()).
-      if (!hasAnyLogoPlacement()) {
-        const v = S.variations.find(v => v.id === S.activeVarId) || S.variations[0];
-        if (v && Array.isArray(v.logos) && v.logos.length === 0) {
-          v.logos.push({ id: 'pl-' + Date.now(), logoId: logo.id, x: 50, y: 50, w: 75, aboveFrame: false });
-          renderVarCanvas();
-          refreshVarThumbs();
-          markDirty();
-        }
-      }
     } catch (err) {
       console.error('Logo upload failed', err);
       S.library = S.library.filter(l => l.id !== tempId);
@@ -635,16 +614,18 @@ function applyRequestedColorZoneTo(v, fb, zoneId) {
 // re-fetched from project_logos. Dedupe on storage path so re-applying (or
 // "Apply all") doesn't insert a second row for the same file; also drops the
 // preview-only placeholder previewVariation may have pushed (see below) so
-// the Logos tray doesn't end up with two tiles for the same image. Shared by
-// both the plain apply() (below) and the interactive swap picker, since both
-// need the exact same adopted entry.
-async function ensureRequestedLogoEntry(fb) {
-  let entry = S.library.find(l => l.storagePath && l.storagePath === fb.requested_logo_path);
+// the Logos tray doesn't end up with two tiles for the same image. `i` is
+// this entry's index into fb.requested_logos (a variation can now carry
+// several pending logo requests at once), used to key the placeholder id.
+async function ensureRequestedLogoEntry(fb, i) {
+  const rl = fb.requested_logos[i];
+  const placeholderId = `fb-${fb.id}-${i}`;
+  let entry = S.library.find(l => l.storagePath && l.storagePath === rl.path);
   if (!entry) {
-    entry = fb.requested_logo_path
-      ? await adoptFeedbackLogo(S.projectId, 'Requested logo', fb.requested_logo_url, fb.requested_logo_path)
-      : { id: 'fb-' + fb.id, name: 'Requested logo', src: fb.requested_logo_url };
-    S.library = S.library.filter(l => l.id !== 'fb-' + fb.id);
+    entry = rl.path
+      ? await adoptFeedbackLogo(S.projectId, 'Requested logo', rl.url, rl.path)
+      : { id: placeholderId, name: 'Requested logo', src: rl.url };
+    S.library = S.library.filter(l => l.id !== placeholderId);
     S.library.push(entry);
     renderVarStrip();
   }
@@ -652,101 +633,60 @@ async function ensureRequestedLogoEntry(fb) {
   return entry;
 }
 
-// Used by both "Apply all" paths (row-wide and panel-wide), which can't stop
-// to ask anything — a variation with 0 or 1 logos placed just gets the
-// requested one at the usual default placement (unchanged from before); one
-// with several gets the FIRST slot's image swapped in place (keeping its
-// existing x/y/w) rather than silently collapsing every other placement down
-// to just this one. The section's own button instead goes through
-// interactiveApply (below) so staff can pick which slot when there's more
-// than one — this is only the non-interactive fallback.
-async function applyRequestedLogoTo(v, fb) {
-  if (!fb?.requested_logo_url) return false;
-  const entry = await ensureRequestedLogoEntry(fb);
-  if (!Array.isArray(v.logos) || v.logos.length <= 1) {
-    v.logos = [{ id: 'pl-' + Date.now(), logoId: entry.id, x: 50, y: 50, w: 75 }];
+// Finds the exact placement a requested logo's target_id points at (an
+// existing v.logos/v.backLogos entry's own id — see flagLogoRefs in
+// review.js, which is where target_id's value originally came from) so a
+// "Replace logo" request can swap just that placement's logoId in place,
+// keeping its x/y/w, rather than guessing. Returns null for an "Add a logo"
+// request (no target_id) or a target that no longer resolves (a stale
+// request against a placement that's since been moved/removed, or one that
+// pointed at a template-level image layer rather than a per-variation
+// placement) — applyRequestedLogoTo falls back to adding a new placement in
+// that case, same as it always has for a request it can't resolve.
+function resolveLogoPlacement(v, targetId) {
+  if (!targetId) return null;
+  if (targetId.startsWith('back-')) {
+    const id = targetId.slice(5);
+    const idx = Array.isArray(v.backLogos) ? v.backLogos.findIndex(l => l.id === id) : -1;
+    return idx >= 0 ? { list: 'backLogos', idx } : null;
+  }
+  const idx = Array.isArray(v.logos) ? v.logos.findIndex(l => l.id === targetId) : -1;
+  return idx >= 0 ? { list: 'logos', idx } : null;
+}
+
+// Applies one requested logo (fb.requested_logos[i]) to `v` — used by both
+// "Apply all" paths (row-wide and panel-wide) and each Logo section's own
+// Apply button, since target_id now says exactly which placement (if any)
+// this request is meant to replace. A resolvable target swaps just that
+// placement's logoId, keeping its x/y/w; anything else (an "Add a logo"
+// request, or a target that doesn't resolve) adds a new placement at the
+// usual default position instead of overwriting one the customer didn't
+// pick, so applying several pending logos back-to-back never clobbers each
+// other.
+async function applyRequestedLogoTo(v, fb, i) {
+  const rl = fb?.requested_logos?.[i];
+  if (!rl?.url) return false;
+  const entry = await ensureRequestedLogoEntry(fb, i);
+  const placement = resolveLogoPlacement(v, rl.target_id);
+  if (placement) {
+    v[placement.list][placement.idx] = { ...v[placement.list][placement.idx], logoId: entry.id };
   } else {
-    v.logos[0] = { ...v.logos[0], logoId: entry.id };
+    const newLogo = { id: 'pl-' + Date.now() + '-' + i, logoId: entry.id, x: 50, y: 50, w: 75 };
+    if (Array.isArray(v.logos)) v.logos.push(newLogo);
+    else v.logos = [newLogo];
   }
   return true;
-}
-
-// Sub-view shown in place of the edit-requests list (same container, same
-// back-button chrome) when a variation carries more than one placed logo —
-// asks which one the requested logo should replace instead of guessing.
-// Picking a slot swaps only its logoId, keeping that slot's x/y/w; the back
-// button leaves the variation untouched. Either way, control returns to
-// openFlagEditRequests so the list re-renders from current state.
-function renderLogoSwapPicker(container, v, fb, entry) {
-  container.innerHTML = `
-    <div class="hs-menu-section-header">
-      <button class="hs-menu-back" id="lspBack"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>
-      <span class="hs-menu-section-title">Replace which logo?</span>
-    </div>
-    <div class="erm-sub">"${esc(v.name || 'Variation')}" has more than one logo placed — pick the one the requested logo should replace.</div>
-    <div class="erm-list" id="lspList"></div>`;
-  container.querySelector('#lspBack').addEventListener('click', () => window.openFlagEditRequests(v.id));
-  const list = container.querySelector('#lspList');
-  v.logos.forEach((logo, idx) => {
-    const row = document.createElement('div');
-    row.className = 'erm-row';
-    row.innerHTML = `
-      <div class="erm-thumb" id="lsp-thumb-${idx}"></div>
-      <div class="erm-row-actions"><button type="button" class="erm-apply-all-btn" data-idx="${idx}">Replace this logo</button></div>`;
-    list.appendChild(row);
-    paintVarThumb(row.querySelector(`#lsp-thumb-${idx}`), { ...v, logos: [logo] });
-  });
-  list.querySelectorAll('[data-idx]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const idx = Number(btn.dataset.idx);
-      v.logos[idx] = { ...v.logos[idx], logoId: entry.id };
-      markDirty();
-      refreshVarThumbs();
-      if (v.id === S.activeVarId) renderVarCanvas();
-      await window.saveDraft();
-      await resolveFeedback(S.projectId, 'flags', v.id);
-      fb.resolved = true;
-      updateEditRequestsBanner();
-      window.openFlagEditRequests(v.id);
-    });
-  });
-}
-
-// The Logo section's own button goes through this instead of plain apply()
-// so it can ask which slot to replace when there's more than one — see
-// renderLogoSwapPicker above. With 0 or 1 logos there's nothing to ask, so
-// it applies immediately (still through ensureRequestedLogoEntry, so both
-// paths adopt the exact same library entry) and refreshes the panel itself,
-// same as the picker's own choice does.
-async function applyRequestedLogoInteractive(v, fb) {
-  if (!fb?.requested_logo_url) return;
-  const entry = await ensureRequestedLogoEntry(fb);
-  if (!Array.isArray(v.logos) || v.logos.length <= 1) {
-    v.logos = [{ id: 'pl-' + Date.now(), logoId: entry.id, x: 50, y: 50, w: 75 }];
-    markDirty();
-    refreshVarThumbs();
-    if (v.id === S.activeVarId) renderVarCanvas();
-    await window.saveDraft();
-    await resolveFeedback(S.projectId, 'flags', v.id);
-    fb.resolved = true;
-    updateEditRequestsBanner();
-    window.openFlagEditRequests(v.id);
-    return;
-  }
-  const container = document.getElementById('varEditRequestsPanel');
-  if (!container) return;
-  renderLogoSwapPicker(container, v, fb, entry);
 }
 
 // A placeholder-only library entry so the combined preview below can resolve
 // a requested logo's image (findLogo/render.js needs an S.library entry, not
 // a raw src) before staff have actually applied anything — never persisted;
 // applyRequestedLogoTo drops it once a real, adopted entry exists.
-function previewLogoEntry(fb) {
-  const id = 'fb-' + fb.id;
+function previewLogoEntry(fb, i, rl) {
+  const id = `fb-${fb.id}-${i}`;
   let entry = S.library.find(l => l.id === id);
   if (!entry) {
-    entry = { id, name: 'Requested logo', src: fb.requested_logo_url };
+    entry = { id, name: 'Requested logo', src: rl.url };
     S.library.push(entry);
   }
   return entry;
@@ -755,15 +695,24 @@ function previewLogoEntry(fb) {
 // A throwaway copy of `v` with every present requested_* field merged on
 // top — never mutates the real variation — so the row's combined preview
 // shows what it would look like with everything applied together, not just
-// its current (unmodified) state.
+// its current (unmodified) state. Every pending requested logo is layered
+// on: a resolvable target_id swaps that placement's image, anything else is
+// appended as a new placement — mirrors applyRequestedLogoTo's own logic so
+// the preview matches what "Apply all" would actually produce.
 function previewVariation(v, fb) {
   const preview = { ...v };
   if (fb?.requested_flag_id) preview.flagId = fb.requested_flag_id;
   if (fb?.requested_colors) preview.colors = { ...(v.colors || S.colors), ...fb.requested_colors };
-  if (fb?.requested_logo_url) {
-    const entry = previewLogoEntry(fb);
-    preview.logos = [{ id: 'preview-logo', logoId: entry.id, x: 50, y: 50, w: 75 }];
-  }
+  (fb?.requested_logos || []).forEach((rl, i) => {
+    const entry = previewLogoEntry(fb, i, rl);
+    const placement = resolveLogoPlacement(preview, rl.target_id);
+    if (placement) {
+      preview[placement.list] = preview[placement.list].map((l, idx) => idx === placement.idx ? { ...l, logoId: entry.id } : l);
+    } else {
+      const newLogo = { id: 'preview-logo-' + i, logoId: entry.id, x: 50, y: 50, w: 75 };
+      preview.logos = Array.isArray(preview.logos) ? [...preview.logos, newLogo] : [newLogo];
+    }
+  });
   return preview;
 }
 
@@ -802,6 +751,32 @@ function zoneColorFields() {
   }));
 }
 
+// One field per logo-request "slot" present in ANY pending feedback in this
+// panel (mirrors zoneColorFields above) — a variation with several pending
+// logo requests (front + back replaced, plus a new one added) gets one
+// independent Logo section per request, each with its own preview and Apply
+// button, instead of one lumped "apply everything" action that would
+// otherwise clobber earlier requests when applied back-to-back (see
+// applyRequestedLogoTo's own resolveLogoPlacement fallback).
+function logoFields() {
+  let maxCount = 0;
+  (S.feedback || []).forEach(fb => {
+    if (fb.status === 'needs_edits' && Array.isArray(fb.requested_logos)) {
+      maxCount = Math.max(maxCount, fb.requested_logos.length);
+    }
+  });
+  return Array.from({ length: maxCount }, (_, i) => ({
+    key: 'logo-' + i,
+    sectionLabel: maxCount > 1 ? `Logo ${i + 1}` : 'Logo',
+    has: fb => !!fb.requested_logos?.[i]?.url,
+    apply: (v, fb) => applyRequestedLogoTo(v, fb, i),
+    preview: (el, fb) => {
+      const rl = fb.requested_logos?.[i];
+      if (rl) el.innerHTML = `<img src="${esc(rl.url)}" alt="">`;
+    },
+  }));
+}
+
 // ── "View edits" — reachable two ways, both opening the same in-panel
 // sub-view (edit-requests-panel.js) in place of the right-hand "All
 // variations" list: a specific variation's own "View edits" link (its card,
@@ -831,11 +806,7 @@ window.openFlagEditRequests = function (variationId) {
         },
       },
       ...zoneColorFields(),
-      {
-        key: 'logo', sectionLabel: 'Logos', has: fb => !!fb.requested_logo_url, apply: (v, fb) => applyRequestedLogoTo(v, fb),
-        interactiveApply: (v, fb) => applyRequestedLogoInteractive(v, fb),
-        preview: (el, fb) => { el.innerHTML = `<img src="${esc(fb.requested_logo_url)}" alt="">`; },
-      },
+      ...logoFields(),
     ],
     resolve: vid => resolveFeedback(S.projectId, 'flags', vid),
     onApplied: v => {
@@ -1152,22 +1123,10 @@ function setupVariations() {
     redistributeQty();
   }
   if (!S.activeVarId) S.activeVarId = S.variations[0].id;
-  // Project already has exactly one logo of its own (e.g. synced straight
-  // from the order intake / GolfStatus event) but no one has placed anything
-  // yet — place it for them instead of leaving the canvas empty until they
-  // drag it from the strip. Only fires while the active variation is
-  // untouched, so it never overwrites a placement someone already made.
-  // Checked against the project's own (non-shared) logos specifically, since
-  // S.library also carries this user's logos from other projects (see
-  // mergeLibraries()).
-  const ownLogos = S.library.filter(l => !l.shared);
-  if (ownLogos.length === 1) {
-    const v = S.variations.find(v => v.id === S.activeVarId);
-    if (v && Array.isArray(v.logos) && v.logos.length === 0) {
-      v.logos.push({ id: 'pl-' + Date.now(), logoId: ownLogos[0].id, x: 50, y: 50, w: 75, aboveFrame: false });
-      markDirty();
-    }
-  }
+  // Logos are never auto-placed on load — the customer/staff always drags
+  // them onto the canvas explicitly. The one exception is applyRequestedLogoTo
+  // (an edit-request "Replace logo"/"Add a logo" reply), which places a logo
+  // on the admin's explicit Apply action, not here.
   activeFace = 'front';
   syncLogoLayoutToggle();
   updateFaceUI();
@@ -1338,7 +1297,7 @@ document.getElementById('sidebarPanelHeader').innerHTML = `
       <button class="btn primary" onclick="goToGallery()">Review <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
     </div>
   </div>`;
-renderLogosTileShell('Logos', 'varStrip');
+renderLogosTileShell('Logos', 'varStrip', new URLSearchParams(window.location.search).get('project'));
 
 window.backToDesign = async function () {
   const p = new URLSearchParams(window.location.search).get('project');

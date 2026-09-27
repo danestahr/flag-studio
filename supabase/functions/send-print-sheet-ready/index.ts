@@ -129,6 +129,7 @@ serve(async (req) => {
         personalizations: [{ to: [{ email: recipientEmail, name: recipientName || recipientEmail }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
+        tracking_settings: { click_tracking: { enable: false } },
         subject: `Print-ready ${productType === 'hole-signs' ? 'hole sign' : 'flag'} files — ${eventName || 'your event'}`,
         content: [
           {

@@ -128,7 +128,7 @@ export function renderGallery() {
     if (fb?.status === 'needs_edits' && !fb?.resolved) {
       if (fb.requested_template_id) requestedButtons.push(`<button type="button" class="hs-review-apply-btn" onclick="hsApplyRequestedTemplate('${v.id}')">Apply requested template</button>`);
       if (fb.requested_colors && Object.keys(fb.requested_colors).length) requestedButtons.push(`<button type="button" class="hs-review-apply-btn" onclick="hsApplyRequestedColors('${v.id}')">Apply requested colors</button>`);
-      if (fb.requested_logo_url) requestedButtons.push(`<button type="button" class="hs-review-apply-btn" onclick="hsApplyRequestedLogo('${v.id}')">Apply requested logo</button>`);
+      if (fb.requested_logos?.length) requestedButtons.push(`<button type="button" class="hs-review-apply-btn" onclick="hsApplyRequestedLogo('${v.id}')">Apply requested logo${fb.requested_logos.length > 1 ? 's' : ''}</button>`);
     }
     const card = document.createElement('div');
     card.className = 'hs-review-card';
@@ -202,7 +202,12 @@ window.hsApplyRequestedColors = async function (id) {
 window.hsApplyRequestedLogo = async function (id) {
   const v = HS.variations.find(v => v.id === id);
   const fb = HS.feedback?.find(f => f.variation_id === id);
-  if (!v || !(await applyRequestedHsLogo(v, fb))) return;
+  if (!v || !fb?.requested_logos?.length) return;
+  let applied = false;
+  for (let i = 0; i < fb.requested_logos.length; i++) {
+    applied = (await applyRequestedHsLogo(v, fb, i)) || applied;
+  }
+  if (!applied) return;
   await saveDraftInternal().catch(() => {});
   await resolveHsGalleryFeedback(fb);
   renderGallery();

@@ -122,6 +122,7 @@ serve(async (req) => {
         personalizations: [{ to: [{ email: TO_EMAIL, name: TO_NAME }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
+        tracking_settings: { click_tracking: { enable: false } },
         subject: subjectFor(payload),
         content: [
           { type: 'text/plain', value: buildText({ ...payload, safeUrl }) },

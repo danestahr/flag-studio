@@ -288,7 +288,8 @@ export async function uploadFlagPreview(projectId, blob) {
 // RLS requires ownership/staff/an ownerless project — none apply to an
 // existing, already-owned project at review time), so this writes straight
 // to the public flag-logos bucket and the URL/path are stored directly on
-// the variation_feedback row instead (requested_logo_url/requested_logo_path).
+// the variation_feedback row instead, one entry per pending logo request in
+// its requested_logos jsonb array.
 export async function uploadFeedbackLogo(projectId, variationId, file, client = supabase) {
   const ext = file.name.split('.').pop();
   const path = `${projectId}/feedback/${variationId}-${Date.now()}.${ext}`;
@@ -306,11 +307,12 @@ export async function uploadFeedbackLogo(projectId, variationId, file, client = 
 // Staff "adopting" a reviewer-uploaded feedback logo (see uploadFeedbackLogo
 // above) into the project's regular logo library, once they apply it via the
 // edit-requests panel — the file already lives in the flag-logos bucket at
-// requested_logo_path (the feedback flow could only write there, not to
-// project_logos, per uploadFeedbackLogo's own comment), so this just adds the
-// missing project_logos row pointing at that same object instead of
-// re-uploading it. Unlike uploadFeedbackLogo, this runs in an authenticated
-// staff/owner session, so the normal project_logos insert RLS applies fine.
+// that requested_logos entry's path (the feedback flow could only write
+// there, not to project_logos, per uploadFeedbackLogo's own comment), so
+// this just adds the missing project_logos row pointing at that same object
+// instead of re-uploading it. Unlike uploadFeedbackLogo, this runs in an
+// authenticated staff/owner session, so the normal project_logos insert RLS
+// applies fine.
 export async function adoptFeedbackLogo(projectId, name, publicUrl, storagePath, client = supabase) {
   const { data, error } = await client
     .from('project_logos')
@@ -372,6 +374,11 @@ export async function uploadUserLogo(file) {
 // the migration) don't pull in every customer's personal library alongside
 // the one they're actually supposed to be looking at.
 export async function listUserLogos(ownerId, client = supabase) {
+  // Ownerless projects (order.html's public intake flow leaves created_by
+  // null) have no personal library to merge in. .eq() can't filter for null
+  // (PostgREST needs `is.null`, not `eq.null`) - it 400s instead of matching
+  // nothing, so short-circuit before that query ever fires.
+  if (!ownerId) return [];
   const { data, error } = await client
     .from('user_logos')
     .select('id, name, public_url, storage_path')
@@ -715,6 +722,13 @@ export async function sendOrderConfirmation(payload) {
 // order via /orders - see send-order-notification edge function.
 export async function sendOrderNotification(payload) {
   return callEdgeFunction('send-order-notification', payload);
+}
+
+// Internal notification (dane@danestahr.com) fired when a customer uploads
+// logos to their project via the public /upload-logos page — see
+// send-logo-upload-notification edge function.
+export async function sendLogoUploadNotification(payload) {
+  return callEdgeFunction('send-logo-upload-notification', payload);
 }
 
 // Given a GolfStatus event page URL, returns { eventName, courseName,

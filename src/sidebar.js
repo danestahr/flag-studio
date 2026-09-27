@@ -136,20 +136,41 @@ export function renderSidebar(container, { activeStep, steps, customerSection = 
 // shows this tile entirely in tandem with the primary tile; this one only
 // changes the density of what's already showing. itemsId lets a caller keep
 // an existing id (e.g. hsLibStrip) that other code already targets directly.
-export function renderLogosTileShell(title, itemsId) {
+export function renderLogosTileShell(title, itemsId, projectId) {
   const el = document.getElementById('sidebarLogosTile');
   if (!el) return null;
   // Undo the Gallery step's own display:none on this tile (see hs/export.js)
   // — Design/Variations always want it visible, whatever the last step left
   // it as.
   el.style.display = '';
+  const copyLinkHtml = projectId ? `
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="logosLinkStatus" style="font-size:10px;color:rgba(255,255,255,.5)"></span>
+        <button type="button" class="hslt-link-btn" onclick="event.stopPropagation();window.copyUploadLogosLink('${esc(projectId)}')" title="Copy the public link customers can use to upload logos to this project">
+          <i class="fa-solid fa-link" aria-hidden="true"></i> Copy upload link
+        </button>
+      </div>` : '';
   el.innerHTML = `
     <div class="hslt-header" onclick="this.nextElementSibling.classList.toggle('collapsed')">
       <span class="hslt-title">${esc(title)}</span>
+      ${copyLinkHtml}
     </div>
     <div class="hslt-items"${itemsId ? ` id="${itemsId}"` : ''}></div>`;
   return el.querySelector('.hslt-items');
 }
+
+// Mirrors window.copyReviewLink (src/project.js) — same clipboard-write +
+// transient status-text pattern, for the public /upload-logos link surfaced
+// next to the Logos tile in both designers' Variations panels.
+window.copyUploadLogosLink = function (projectId) {
+  const url = `${window.location.origin}/upload-logos?project=${projectId}`;
+  const statusEl = document.getElementById('logosLinkStatus');
+  navigator.clipboard.writeText(url).then(() => {
+    if (!statusEl) return;
+    statusEl.textContent = 'Link copied!';
+    setTimeout(() => { statusEl.textContent = ''; }, 2000);
+  });
+};
 
 // Paints the last-known name from cache immediately (before the async
 // project fetch resolves) into whichever page currently has a

@@ -115,6 +115,7 @@ serve(async (req) => {
         personalizations: [{ to: [{ email: payload.contactEmail, name: payload.contactName }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
+        tracking_settings: { click_tracking: { enable: false } },
         subject: payload.isRevision
           ? `Your revised ${designNoun(payload.productType)} proof is ready — ${payload.eventName}`
           : `Your ${designNoun(payload.productType)} proof is ready — ${payload.eventName}`,

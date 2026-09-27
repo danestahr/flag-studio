@@ -231,12 +231,18 @@ function renderToolCardStatus(t) {
   else renderCustomerDesignBody(t, cfg, status);
 }
 
-// STATUS_LABEL (status-labels.js) deliberately collapses approved/
-// sent_to_print into one "Approved" bucket for the landing-page filter list
-// - but here on project.html, once a design has actually gone to print,
-// staff need that to read differently from merely "Approved" so a design
-// already sent doesn't look identical to one still waiting to be sent.
+// STATUS_LABEL (status-labels.js) deliberately collapses draft/submitted
+// (and approved/sent_to_print) into one bucket each for the landing-page
+// filter list - but here on project.html, the status badge sits directly
+// above renderCustomerDesignBody's/renderDesignAdminActions' own per-status
+// message ("Submitted - our design team will review it shortly", "Request
+// changes", etc.), which already reads the raw, uncollapsed status. Showing
+// the collapsed "Draft" bucket label right next to that text made a freshly
+// submitted design look stuck in Draft, so - same reasoning as
+// sent_to_print needing to read differently from merely "Approved" - both
+// get their own label here instead of falling through to the shared bucket.
 function displayStatusLabel(status) {
+  if (status === 'submitted') return 'Submitted';
   if (status === 'sent_to_print') return 'Sent to Print';
   return STATUS_LABEL[status] || status;
 }

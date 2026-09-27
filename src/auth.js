@@ -19,10 +19,17 @@ export async function requireAuth() {
 export async function initHeaderForSession(session) {
   injectHeaderActions(session);
   watchForSignOut();
-  // Best-effort: attach any anonymously-submitted orders under this account's
-  // own email. Never blocks page load on failure - this is a background
-  // reconciliation, not a critical path.
-  claimMyProjects().catch((err) => console.error('claimMyProjects failed', err));
+  // Attach any anonymously-submitted orders under this account's own email.
+  // Must be awaited, not fire-and-forget: requireAuth() callers immediately
+  // go on to load project-scoped data (loadProject/loadFlagConfig/etc.) for a
+  // project that may still be ownerless until this RPC commits, and RLS has
+  // no fallback branch for "not claimed yet" — an unawaited call here raced
+  // ahead of those loads and made a freshly-claimed project intermittently
+  // fail to load (blank designer, no console error) right after signup/login,
+  // since `single()` throws on the zero rows RLS returns for an unowned
+  // project. Still never blocks page load on *failure* - only awaited so it
+  // completes (success or error) before anything that depends on it runs.
+  await claimMyProjects().catch((err) => console.error('claimMyProjects failed', err));
 }
 
 // Anonymous-visitor equivalent of injectHeaderActions() below - a single CTA

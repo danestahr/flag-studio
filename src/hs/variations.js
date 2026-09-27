@@ -58,7 +58,7 @@ export function renderStep2() {
         <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" style="display:none">Save draft</button>
       </div>
     </div>`;
-  renderLogosTileShell('Logos', 'hsLibStrip');
+  renderLogosTileShell('Logos', 'hsLibStrip', new URLSearchParams(window.location.search).get('project'));
 
   document.getElementById('hsCustomArtboardFile').addEventListener('change', handleHsArtboardUpload);
   initHsVarCanvas(document.getElementById('hsCanvasPanel'));
@@ -464,25 +464,33 @@ function applyRequestedHsColorKeyTo(v, fb, key) {
   return true;
 }
 
-// Slot 0 only — the simplest defensible default given the feedback row
-// carries no signal for which of N template-logo slots was meant (mirrors
-// the flags side's single-primary-placement assumption). The reviewer's
-// uploaded file already lives in the flag-logos bucket (see uploadFeedbackLogo
-// in review.js) but, unlike a staff-uploaded logo, has no project_logos row
-// yet — adopt it into the real library (adoptFeedbackLogo) so it shows up in
-// the Logos tray for reuse and survives a reload. Dedupe on storage path so
-// re-applying (or "Apply all") doesn't insert a second row for the same file.
-export async function applyRequestedHsLogo(v, fb) {
-  if (!fb?.requested_logo_url) return false;
-  let entry = HS.library.find(l => l.storagePath && l.storagePath === fb.requested_logo_path);
+// `i` is this entry's index into fb.requested_logos (a variation can now
+// carry several pending logo requests at once — one per template-logo slot
+// the customer chose to replace, plus any "Add a logo" entries). target_id
+// is 'slot-<index>' for a "Replace" request (see hsLogoRefs in review.js,
+// where the id comes from) — slot 0 is only a fallback for an "Add a logo"
+// entry (target_id null) or a target that no longer resolves, same
+// simplest-defensible-default reasoning the single-logo version of this
+// function used to apply universally. The reviewer's uploaded file already
+// lives in the flag-logos bucket (see uploadFeedbackLogo in review.js) but,
+// unlike a staff-uploaded logo, has no project_logos row yet — adopt it into
+// the real library (adoptFeedbackLogo) so it shows up in the Logos tray for
+// reuse and survives a reload. Dedupe on storage path so re-applying (or
+// "Apply all") doesn't insert a second row for the same file.
+export async function applyRequestedHsLogo(v, fb, i) {
+  const rl = fb?.requested_logos?.[i];
+  if (!rl?.url) return false;
+  const placeholderId = `fb-${fb.id}-${i}`;
+  let entry = HS.library.find(l => l.storagePath && l.storagePath === rl.path);
   if (!entry) {
-    entry = fb.requested_logo_path
-      ? await adoptFeedbackLogo(HS.projectId, 'Requested logo', fb.requested_logo_url, fb.requested_logo_path)
-      : { id: 'fb-' + fb.id, name: 'Requested logo', src: fb.requested_logo_url };
+    entry = rl.path
+      ? await adoptFeedbackLogo(HS.projectId, 'Requested logo', rl.url, rl.path)
+      : { id: placeholderId, name: 'Requested logo', src: rl.url };
     HS.library.push(entry);
     buildLibStrip();
   }
-  v.templateLogoOverrides = { ...(v.templateLogoOverrides || {}), 0: { logoId: entry.id, logoSrc: entry.src } };
+  const slotIdx = rl.target_id?.startsWith('slot-') ? Number(rl.target_id.slice(5)) : 0;
+  v.templateLogoOverrides = { ...(v.templateLogoOverrides || {}), [slotIdx]: { logoId: entry.id, logoSrc: entry.src } };
   return true;
 }
 
@@ -504,8 +512,13 @@ function previewHsVariation(v, fb) {
     if (topText)    preview.topTextOverride    = { ...(v.topTextOverride    || {}), color: topText };
     if (bottomText) preview.bottomTextOverride = { ...(v.bottomTextOverride || {}), color: bottomText };
   }
-  if (fb?.requested_logo_url) {
-    preview.templateLogoOverrides = { ...(v.templateLogoOverrides || {}), 0: { logoId: 'preview', logoSrc: fb.requested_logo_url } };
+  if (Array.isArray(fb?.requested_logos) && fb.requested_logos.length) {
+    const overrides = { ...(v.templateLogoOverrides || {}) };
+    fb.requested_logos.forEach((rl, i) => {
+      const slotIdx = rl.target_id?.startsWith('slot-') ? Number(rl.target_id.slice(5)) : 0;
+      overrides[slotIdx] = { logoId: 'preview-' + i, logoSrc: rl.url };
+    });
+    preview.templateLogoOverrides = overrides;
   }
   return preview;
 }
@@ -535,6 +548,29 @@ function hsColorFields() {
           <div class="erm-color-dot" style="background:${safe}"></div>
           <input type="text" class="hexin" value="${escXml(hex || '')}" readonly>
         </div>`;
+    },
+  }));
+}
+
+// One field per logo-request slot present in ANY pending feedback in this
+// panel (mirrors hsColorFields/flags' logoFields) — a variation with
+// several pending logo requests gets one independent Logo section per
+// request, each with its own preview and Apply button.
+function hsLogoFields() {
+  let maxCount = 0;
+  (HS.feedback || []).forEach(fb => {
+    if (fb.status === 'needs_edits' && Array.isArray(fb.requested_logos)) {
+      maxCount = Math.max(maxCount, fb.requested_logos.length);
+    }
+  });
+  return Array.from({ length: maxCount }, (_, i) => ({
+    key: 'logo-' + i,
+    sectionLabel: maxCount > 1 ? `Logo ${i + 1}` : 'Logo',
+    has: fb => !!fb.requested_logos?.[i]?.url,
+    apply: (v, fb) => applyRequestedHsLogo(v, fb, i),
+    preview: (el, fb) => {
+      const rl = fb.requested_logos?.[i];
+      if (rl) el.innerHTML = `<img src="${escXml(rl.url)}" alt="">`;
     },
   }));
 }
@@ -573,10 +609,7 @@ window.openHsEditRequests = function (variationId) {
         },
       },
       ...hsColorFields(),
-      {
-        key: 'logo', sectionLabel: 'Logos', has: fb => !!fb.requested_logo_url, apply: (v, fb) => applyRequestedHsLogo(v, fb),
-        preview: (el, fb) => { el.innerHTML = `<img src="${escXml(fb.requested_logo_url)}" alt="">`; },
-      },
+      ...hsLogoFields(),
     ],
     resolve: vid => resolveFeedback(HS.projectId, 'hole-signs', vid),
     onApplied: v => {

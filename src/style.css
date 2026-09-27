@@ -942,6 +942,11 @@ input[type=file] { display:none; }
 #sidebarLogosTile { padding:20px 24px; }
 .hslt-header { display:flex; align-items:center; justify-content:space-between; cursor:pointer; user-select:none; margin-bottom:10px; }
 .hslt-title { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.06em; color:rgba(255,255,255,.6); }
+/* "Copy upload link" action in the header, next to .hslt-title — same
+   light-on-dark treatment as .var-upload-btn below rather than the default
+   .btn (built for light page backgrounds). */
+.hslt-link-btn { display:inline-flex; align-items:center; gap:5px; padding:0 9px; height:24px; border-radius:6px; border:1px solid rgba(255,255,255,.25); background:transparent; color:rgba(255,255,255,.7); font-family:inherit; font-size:11px; cursor:pointer; transition:border-color .15s, color .15s; }
+.hslt-link-btn:hover { border-color:rgba(255,255,255,.5); color:#fff; }
 /* Expanded (default): a real multi-column grid — the tile is far wider than
    the old 104px rail column, so a single vertical stack would waste most of
    that width. Collapsed: back to a single-column vertical scroll list (not

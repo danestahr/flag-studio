@@ -21,6 +21,7 @@ Each HTML file is a Vite entry point with its own JS module:
 | `project.html` | `project.js` | Project overview + export downloads |
 | `review.html` | `review.js` | Customer-facing proof review |
 | `order.html` | `order.js` | Order intake form |
+| `upload-logos.html` | `upload-logos.js` | Public post-order logo upload (no login required) |
 
 Project ID always flows via `?project=<uuid>` URL param.
 
@@ -54,10 +55,11 @@ Key: `getEffectiveState(variation)` merges global `HS` → variation override �
 - `project_logos` — uploaded logo metadata; files in `flag-logos` storage bucket
 - `order_intakes` — order form submissions
 - `variation_feedback` — customer feedback on proofs (realtime subscribed in editors)
+- `admin_actions` — review-workflow audit trail (submit/request-changes/send-proof/approve/reject/sent-to-print), see "Submission/review workflow" below
 
 Storage buckets: `flag-logos` (logo uploads, public), `renders` (legacy, holds a few historical objects — not written to by any current code path), `print-sheets` (admin-generated print-ready PDFs, private — signed URLs only, 7-day expiry).
 
-Edge functions: `send-order-confirmation`, `send-proof-ready`, `send-print-sheet-ready` (email, SendGrid), `send-prestige-order` (internal), `sweep-abandoned-drafts` (daily cron — see memory for abandoned-draft cleanup).
+Edge functions (SendGrid email unless noted): `send-order-confirmation`, `send-order-notification` (internal, order submitted), `send-logo-upload-notification` (internal, logos added via `upload-logos.html`), `send-proof-ready`, `send-print-sheet-ready`, `send-review-decision` (internal, client approved/rejected a proof), `send-prestige-order` (internal); `sync-event-info` (GolfStatus event-page scrape, not email); `sweep-abandoned-drafts` (daily cron — see memory for abandoned-draft cleanup).
 
 ## Permissions & roles
 
@@ -74,22 +76,20 @@ Edge functions: `send-order-confirmation`, `send-proof-ready`, `send-print-sheet
 
 **Reference implementation of an admin-only feature end to end:** the "email print-sheet link" flow — `print-sheets` storage bucket RLS requires `is_staff_or_admin()` with no ownership branch at all (`supabase/migrations/20260812030000_print_sheets_storage.sql`), `uploadPrintSheet()` relies on that RLS to reject non-staff, and `sendPrintSheetReady()` forwards the real JWT so the edge function re-derives role itself.
 
-**Dormant scaffolding already in the schema, not yet wired to any feature:**
-- `projects.status` (default `'draft'`) — currently set once at creation and never transitioned by any code path. Natural column for a submit/review/lock workflow.
-- `admin_actions` table — RLS already restricts insert/select to staff/admin (`granted` in the baseline migration), but no client code writes to it yet. Built for an admin audit trail (approvals, print-sends, etc.) that doesn't exist yet.
-- `flag_config.status` / `hole_sign_config.status` — same pattern as `projects.status`, always `'draft'`, unused.
+**Remaining dormant scaffolding:**
+- `projects.status` — no longer written to by any code path as of `20260913000000_per_design_status_workflow.sql` (superseded by the per-design columns below); left in place as unmaintained historical data rather than dropped.
 - Realtime-subscribed tables (`flag_config`, `hole_sign_config`, `variation_feedback`) need a real table-level RLS *select* policy, not an RPC-gated check — Realtime subscribes to the table directly and can't go through a function call.
 
-### Planned: submission/review workflow (not yet built)
+### Submission/review workflow
 
-Goal: once a customer submits a project, they can't edit it until staff reviews it. Design, not yet implemented:
+Once a customer submits a design, they can't edit it until staff reviews it. Flags and hole signs progress independently (a project can have flags in `proof_sent` while hole signs is still `draft`), so this is two parallel per-design state machines, not one project-level status:
 
-- States on `projects.status`: `draft` → `submitted` → `needs_changes` (staff kicks back) or `approved` (staff signs off).
-- New helper `project_is_editable(project_id)` (same shape as `is_staff_or_admin()`): true when status is `draft`/`needs_changes`.
-- Owner-scoped update policies (`flag_config`, `hole_sign_config`, `project_logos`) become `(owns_project(project_id) AND project_is_editable(project_id)) OR is_staff_or_admin()`.
-- Status transitions go through RPCs, not raw column updates — same reasoning as `grant_role()` vs. direct `profiles.role` writes: `submit_project_for_review(project_id)` (owner-only, requires current status draft/needs_changes) and `review_project(project_id, decision, note)` (staff/admin-only, sets approved/needs_changes, logs to the already-scaffolded-but-unused `admin_actions` table).
-- **Decided:** staff editing a submitted/approved project does NOT auto-flip its status — edits are silent, no forced reset to `needs_changes`. Staff uses the same designer flow as the customer, no separate "admin edit mode."
-- Admin overview: extend `project.html`/`project.js` (already loads flag/hole-sign config + intake + customer info in one place) with role-branched UI — staff sees approve/request-changes + download/send-to-print + an `admin_actions` activity log; customers see a "Submit for review" button instead. Not a new page.
+- States live on `flag_config.status` / `hole_sign_config.status`: `draft` → `submitted` → `needs_changes` (staff kicks back) or `proof_sent` (staff sends a proof) → `approved` (client signs off) → `sent_to_print`.
+- `design_is_editable(project_id, product_type)` gates the owner branch of `flag_config`/`hole_sign_config` update RLS. `project_has_unlocked_design(project_id)` (true unless *either* design is currently locked) gates `projects` update RLS and the owner branch of `project_logos` insert/delete — the anon/ownerless branch of `project_logos` insert also requires it as of `20260926000000_project_logos_ownerless_requires_unlocked.sql`, so `upload-logos.html`'s public post-order upload link (see "Page map") stops working once a design is under review.
+- A trigger (`prevent_design_status_self_update`) blocks any raw client update to `status` — only six `SECURITY DEFINER` RPCs can move it, each re-implementing its own permission + precondition checks and logging to `admin_actions` (nullable `admin_id`/`admin_email`/`product_type`, so both staff-triggered and anonymous/client-triggered rows fit the same shape): `submit_design_for_review`, `admin_request_design_changes`, `admin_send_design_proof` (mints `share_token`/`proof_shared_at` on first send; also covers resend/reshare), `client_approve_design_proof` / `client_reject_design_proof` (anon, share-token-gated — called from `review.js`), `admin_mark_design_sent_to_print`. Same reasoning as `grant_role()` vs. a direct `profiles.role` write.
+- The share link stays one per *project*, not per design type — `review.html` shows both tabs behind the same token.
+- **Decided:** staff editing a submitted/approved design does NOT auto-flip its status — edits are silent, no forced reset to `needs_changes`. Staff uses the same designer flow as the customer, no separate "admin edit mode."
+- UI lives in `project.js`'s existing tool cards, not a separate page: staff sees Request changes / Send proof / Mark sent to print (role-branched in `renderToolCardStatus`, plus a Submit-on-customer's-behalf button for `draft`-status admin-created projects that have no separate customer to submit); customers see `renderCustomerDesignBody`'s status text and a Submit/Resubmit button. `window.submitForReview` is shared by both paths. There's no rendered `admin_actions` timeline/activity log yet — it's only queried ad hoc for a single latest row (`loadLatestChangeNote` for the kickback reason, `loadLatestPrintAction` for the last-sent timestamp).
 - Admin fast-path project creation already exists: `landing.js`'s "+ New project" bypasses `order.html`'s customer intake form entirely.
 
 ## Rendering

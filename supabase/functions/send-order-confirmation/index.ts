@@ -1,5 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { esc, wrapEmailHtml, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
+import { esc, wrapEmailHtml, ctaButton, linkFallback, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
 // SENDGRID_API_KEY_2 is the current key; SENDGRID_API_KEY is kept as a fallback
 // during rotation and can be removed once SENDGRID_API_KEY_2 is confirmed live everywhere.
@@ -62,6 +62,7 @@ interface OrderPayload {
   backDesignNotes?: string;
   logoFileNames?: string[];
   projectId: string;
+  uploadLogosUrl?: string;
 }
 
 function formatDate(iso: string): string {
@@ -138,6 +139,7 @@ function buildHtml(p: OrderPayload): string {
 
   const logoFiles = (p.logoFileNames ?? []).filter(Boolean);
   const previewUrl = safeUrl(p.flagPreviewUrl);
+  const uploadLogosUrl = safeUrl(p.uploadLogosUrl);
 
   const body = `<p style="margin:0 0 24px;color:#333;font-size:15px;line-height:1.6;">
       Hi ${esc(p.contactName)}, thanks for submitting your order! We've received everything and will be in touch once your proof is ready for review.
@@ -202,6 +204,15 @@ function buildHtml(p: OrderPayload): string {
       </tr>` : ''}
     </table>
 
+    ${uploadLogosUrl ? `
+    <div style="margin-top:28px;padding-top:20px;border-top:1px solid #f0f0f0;">
+      <p style="margin:0 0 4px;color:#333;font-size:14px;line-height:1.6;">
+        Need to add or update your logos? You can upload them any time here:
+      </p>
+      ${ctaButton(esc(uploadLogosUrl), 'Upload Logos')}
+      ${linkFallback(esc(uploadLogosUrl))}
+    </div>` : ''}
+
     <p style="margin:28px 0 0;color:#999;font-size:13px;line-height:1.6;">
       You'll receive another email when your proof is ready. If you have questions, just reply to this email.
     </p>`;
@@ -254,6 +265,11 @@ function buildText(p: OrderPayload): string {
   if (p.backDesignNotes) lines.push(`Flag Design - Back: ${p.backDesignNotes}`);
   if (p.logoFileNames?.length) lines.push('', 'LOGOS', ...p.logoFileNames.map(n => `- ${n}`));
 
+  const uploadLogosUrl = safeUrl(p.uploadLogosUrl);
+  if (uploadLogosUrl) {
+    lines.push('', `Need to add or update your logos? Upload them here: ${uploadLogosUrl}`);
+  }
+
   lines.push(
     '',
     `You'll receive another email when your proof is ready. If you have questions, just reply to this email.`,
@@ -297,6 +313,7 @@ serve(async (req) => {
         personalizations: [{ to: [{ email: payload.contactEmail, name: payload.contactName }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
+        tracking_settings: { click_tracking: { enable: false } },
         subject: `Order confirmed — ${payload.eventName}`,
         content: [
           { type: 'text/plain', value: buildText(payload) },
