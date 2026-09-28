@@ -51,6 +51,23 @@ export function injectHeaderCta(label, href) {
   wrap.appendChild(cta);
 
   header.appendChild(wrap);
+  linkLogo('/login');
+}
+
+// Turns the header's static .logo div into a real link home - the projects
+// hub when signed in, sign-in when not - shared by injectHeaderActions() and
+// injectHeaderCta() below since those are the two places a page already
+// knows which state it's in. Swaps the element itself (rather than just
+// listening for clicks on the div) so it behaves like every other nav link -
+// middle-click/cmd-click to open in a new tab, hover cursor, etc.
+function linkLogo(href) {
+  const logo = document.querySelector('header .logo');
+  if (!logo || logo.tagName === 'A') return;
+  const link = document.createElement('a');
+  link.className = logo.className;
+  link.href = href;
+  link.innerHTML = logo.innerHTML;
+  logo.replaceWith(link);
 }
 
 // UI-convenience gate only - the real boundary is DB-level (RLS / this
@@ -119,4 +136,5 @@ function injectHeaderActions(session) {
   wrap.appendChild(btn);
 
   header.appendChild(wrap);
+  linkLogo('/');
 }

@@ -137,6 +137,10 @@ header {
   align-items: center;
   gap: 10px;
 }
+.rv-approved-by {
+  font-size: 13px;
+  color: var(--gray-600);
+}
 .rv-instructions-icon {
   display: inline-flex;
   align-items: center;

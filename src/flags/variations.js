@@ -739,6 +739,17 @@ function zoneColorFields() {
     sectionLabel: ZONE_LABELS[zoneId] || zoneId,
     has: fb => !!fb.requested_colors?.[zoneId],
     apply: (v, fb) => applyRequestedColorZoneTo(v, fb, zoneId),
+    // Only this zone's own prior value — v.colors itself may get created
+    // fresh (a full copy of S.colors) by applyRequestedColorZoneTo the first
+    // time ANY zone is applied, but restoring just this key back to
+    // "unset"/its prior value is enough: the other zones' copied-in defaults
+    // sitting alongside it render identically to having no override at all.
+    snapshot: v => ({ prev: v.colors ? v.colors[zoneId] : undefined }),
+    restore: (v, snap) => {
+      if (!v.colors) return;
+      if (snap.prev === undefined) delete v.colors[zoneId];
+      else v.colors[zoneId] = snap.prev;
+    },
     preview: (el, fb) => {
       const hex = fb.requested_colors?.[zoneId];
       const safe = /^#[0-9A-Fa-f]{6}$/.test(hex) ? hex : '#cccccc';
@@ -767,9 +778,26 @@ function logoFields() {
   });
   return Array.from({ length: maxCount }, (_, i) => ({
     key: 'logo-' + i,
+    // Every logo slot shares one group: they all read/write v.logos/
+    // v.backLogos, so undoing an earlier one while a later one's change
+    // sits on top of it (in the same arrays) would silently discard that
+    // later change — see edit-requests-panel.js's isUndoable.
+    group: 'logos',
     sectionLabel: maxCount > 1 ? `Logo ${i + 1}` : 'Logo',
     has: fb => !!fb.requested_logos?.[i]?.url,
     apply: (v, fb) => applyRequestedLogoTo(v, fb, i),
+    // Clone both possible lists wholesale rather than tracking the one
+    // placement this request touches — applyRequestedLogoTo may swap an
+    // existing placement OR push a brand-new one, and restoring the whole
+    // array back covers either case without needing to know which happened.
+    snapshot: v => ({
+      logos: Array.isArray(v.logos) ? v.logos.map(l => ({ ...l })) : undefined,
+      backLogos: Array.isArray(v.backLogos) ? v.backLogos.map(l => ({ ...l })) : undefined,
+    }),
+    restore: (v, snap) => {
+      if (snap.logos === undefined) delete v.logos; else v.logos = snap.logos;
+      if (snap.backLogos === undefined) delete v.backLogos; else v.backLogos = snap.backLogos;
+    },
     preview: (el, fb) => {
       const rl = fb.requested_logos?.[i];
       if (rl) el.innerHTML = `<img src="${esc(rl.url)}" alt="">`;
@@ -797,6 +825,8 @@ window.openFlagEditRequests = function (variationId) {
     fields: [
       {
         key: 'flag', sectionLabel: 'Flag', has: fb => !!fb.requested_flag_id, apply: (v, fb) => applyRequestedFlagTo(v, fb),
+        snapshot: v => v.flagId,
+        restore: (v, snap) => { v.flagId = snap; },
         preview: (el, fb) => {
           const f = FLAGS.find(x => x.id === fb.requested_flag_id);
           if (!f) return;

@@ -149,7 +149,7 @@ export async function getMyRole(userId) {
 export async function listProjects({ userId, role, cursor = null, pageSize = 30, q = '' } = {}) {
   let query = supabase
     .from('projects')
-    .select(`id, name, status, updated_at, created_by, customer_info, profiles(email, first_name, last_name), flag_config(id, flag_id, status), hole_sign_config(id, template_style, status)`)
+    .select(`id, name, status, updated_at, created_by, customer_info, profiles(email, first_name, last_name, role), order_intakes(contact_email), flag_config(id, flag_id, status), hole_sign_config(id, template_style, status)`)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(pageSize);
@@ -176,7 +176,7 @@ export async function listProjects({ userId, role, cursor = null, pageSize = 30,
 export async function loadProject(projectId) {
   const { data, error } = await supabase
     .from('projects')
-    .select('*, profiles(email, first_name, last_name)')
+    .select('*, profiles(email, first_name, last_name, role)')
     .eq('id', projectId)
     .single();
   if (error) throw error;
@@ -560,8 +560,13 @@ export async function adminSendDesignProof(projectId, productType) {
   return data;
 }
 
-export async function clientApproveDesignProof(projectId, productType, client = supabase) {
-  const { error } = await client.rpc('client_approve_design_proof', { target_project_id: projectId, target_product_type: productType });
+export async function clientApproveDesignProof(projectId, productType, reviewerName = null, reviewerEmail = null, client = supabase) {
+  const { error } = await client.rpc('client_approve_design_proof', {
+    target_project_id: projectId,
+    target_product_type: productType,
+    reviewer_name: reviewerName,
+    reviewer_email: reviewerEmail,
+  });
   if (error) throw error;
 }
 

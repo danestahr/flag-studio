@@ -50,6 +50,23 @@ async function loadApprovalStatus(projectId, productType) {
   return                { label: 'Pending client review',     color: GRAY };
 }
 
+// Design-level approver identity, stamped onto flag_config/hole_sign_config
+// by client_approve_design_proof at the moment of approval - not derived
+// from variation_feedback (per-variation, and its created_at doesn't
+// advance on a resubmit), so this is the same source of truth project.js
+// and review.js read from.
+async function loadApproverInfo(projectId, productType) {
+  const table = productType === 'flags' ? 'flag_config' : 'hole_sign_config';
+  const { data } = await supabase
+    .from(table)
+    .select('status, approved_by_name, approved_by_email')
+    .eq('project_id', projectId)
+    .maybeSingle();
+  if (!data || (data.status !== 'approved' && data.status !== 'sent_to_print')) return null;
+  if (!data.approved_by_name && !data.approved_by_email) return null;
+  return { name: data.approved_by_name, email: data.approved_by_email };
+}
+
 // ── Page chrome ───────────────────────────────────────────
 const W = 612, H = 792, M = 48;
 const HEADER_H = 60;  // header bar (56) + gold rule (4)
@@ -225,9 +242,10 @@ export async function buildOrderSummaryPdf({
   quantity,
   variationImages = [],
 }) {
-  const [{ projectName, ci }, approval] = await Promise.all([
+  const [{ projectName, ci }, approval, approver] = await Promise.all([
     loadCustomerData(projectId),
     loadApprovalStatus(projectId, productType),
+    loadApproverInfo(projectId, productType),
   ]);
 
   const doc  = await PDFDocument.create();
@@ -247,6 +265,12 @@ export async function buildOrderSummaryPdf({
       const aw = reg.widthOfTextAtSize(approval.label, 9);
       page.drawCircle({ x: W - M - aw - 14, y: y + 3, size: 4, color: approval.color });
       page.drawText(approval.label, { x: W - M - aw, y, size: 9, font: reg, color: approval.color });
+    }
+    if (approver) {
+      const approverText = `Approved by ${approver.name || ''}${approver.email ? ` (${approver.email})` : ''}`.trim();
+      const tw = reg.widthOfTextAtSize(approverText, 9);
+      y -= 14;
+      page.drawText(approverText, { x: W - M - tw, y, size: 9, font: reg, color: GRAY });
     }
     y -= 28;
     cursor.setY(y);

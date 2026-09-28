@@ -28,21 +28,30 @@ interface DecisionPayload {
   reviewerName?: string;
   reviewerEmail?: string;
   generalNote?: string;
+  productType?: 'flags' | 'hole-signs';
+}
+
+function productLabel(p: DecisionPayload): string {
+  return p.productType === 'hole-signs' ? 'Hole Signs' : p.productType === 'flags' ? 'Flags' : '';
 }
 
 function subjectFor(p: DecisionPayload): string {
+  const label = productLabel(p) ? ` (${productLabel(p)})` : '';
   return p.decision === 'approved'
-    ? `Proof approved — ready for print — ${p.projectName}`
-    : `Changes requested — ${p.projectName}`;
+    ? `Proof approved — ready for print — ${p.projectName}${label}`
+    : `Changes requested — ${p.projectName}${label}`;
 }
 
 function buildHtml(p: DecisionPayload & { safeUrl: string }): string {
+  const label = productLabel(p);
+  const designRef = label ? `the <strong>${esc(label)}</strong> design for <strong>${esc(p.projectName)}</strong>` : `<strong>${esc(p.projectName)}</strong>`;
   const intro = p.decision === 'approved'
-    ? `<strong>${esc(p.projectName)}</strong> has been approved by the client and is ready for print.`
-    : `The client has requested changes on <strong>${esc(p.projectName)}</strong>.`;
+    ? `${designRef} has been approved by the client and is ready for print.`
+    : `The client has requested changes on ${designRef}.`;
+  const reviewerLabel = p.decision === 'approved' ? 'Approved by' : 'Requested by';
   const reviewer = p.reviewerName
-    ? `<p style="margin:0 0 4px;color:#555;font-size:14px;">Reviewer: ${esc(p.reviewerName)}${p.reviewerEmail ? ` (${esc(p.reviewerEmail)})` : ''}</p>`
-    : (p.reviewerEmail ? `<p style="margin:0 0 4px;color:#555;font-size:14px;">Reviewer email: ${esc(p.reviewerEmail)}</p>` : '');
+    ? `<p style="margin:0 0 4px;color:#555;font-size:14px;">${reviewerLabel}: ${esc(p.reviewerName)}${p.reviewerEmail ? ` (${esc(p.reviewerEmail)})` : ''}</p>`
+    : (p.reviewerEmail ? `<p style="margin:0 0 4px;color:#555;font-size:14px;">${reviewerLabel} email: ${esc(p.reviewerEmail)}</p>` : '');
   const note = p.note ? `<p style="margin:16px 0 24px;color:#555;font-size:15px;line-height:1.6;background:#f8f8f8;padding:14px 16px;border-radius:8px;">${esc(p.note)}</p>` : '';
   const generalNote = p.generalNote ? `<p style="margin:8px 0 24px;color:#555;font-size:15px;line-height:1.6;background:#f8f8f8;padding:14px 16px;border-radius:8px;"><strong>General notes:</strong><br>${esc(p.generalNote)}</p>` : '';
   const body = `<p style="margin:0 0 20px;color:#333;font-size:16px;">${intro}</p>
@@ -55,13 +64,16 @@ function buildHtml(p: DecisionPayload & { safeUrl: string }): string {
 }
 
 function buildText(p: DecisionPayload & { safeUrl: string }): string {
+  const label = productLabel(p);
+  const designRef = label ? `the ${label} design for ${p.projectName}` : p.projectName;
   const intro = p.decision === 'approved'
-    ? `${p.projectName} has been approved by the client and is ready for print.`
-    : `The client has requested changes on ${p.projectName}.`;
+    ? `${designRef} has been approved by the client and is ready for print.`
+    : `The client has requested changes on ${designRef}.`;
+  const reviewerLabel = p.decision === 'approved' ? 'Approved by' : 'Requested by';
   return [
     intro,
     '',
-    ...(p.reviewerName ? [`Reviewer: ${p.reviewerName}${p.reviewerEmail ? ` (${p.reviewerEmail})` : ''}`, ''] : (p.reviewerEmail ? [`Reviewer email: ${p.reviewerEmail}`, ''] : [])),
+    ...(p.reviewerName ? [`${reviewerLabel}: ${p.reviewerName}${p.reviewerEmail ? ` (${p.reviewerEmail})` : ''}`, ''] : (p.reviewerEmail ? [`${reviewerLabel} email: ${p.reviewerEmail}`, ''] : [])),
     ...(p.note ? [p.note, ''] : []),
     ...(p.generalNote ? ['General notes:', p.generalNote, ''] : []),
     `View project: ${p.safeUrl}`,

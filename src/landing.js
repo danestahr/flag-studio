@@ -104,8 +104,21 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     const date = `${updatedAt.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}, ${updatedAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
     const hasFlags = p.flag_config?.length > 0;
     const hasHoleSigns = p.hole_sign_config?.length > 0;
+    // An order submitted anonymously (see order.js) has no `profiles` row at
+    // all until the customer later signs up and claimAccount()/
+    // claimMyProjects() attaches it — until then, fall back to the contact
+    // email on file (customer_info, staff-corrected, ahead of the original
+    // order_intakes submission) so staff can still see who placed the order.
+    //
+    // A project created via the "+ New project" admin fast-path instead has
+    // `created_by` = the staff/admin's own uid (there's no order submission
+    // at all), so profiles.email there is the staff member, not a customer —
+    // label it as such rather than implying a customer placed the order.
     const creatorName = [p.profiles?.first_name, p.profiles?.last_name].filter(Boolean).join(' ');
-    const creator = creatorName || p.profiles?.email || null;
+    const isStaffCreated = p.profiles?.role === 'staff' || p.profiles?.role === 'admin';
+    const creator = isStaffCreated
+      ? `staff (${creatorName || p.profiles?.email || 'unknown'})`
+      : creatorName || p.profiles?.email || p.customer_info?.contact_email || p.order_intakes?.[0]?.contact_email || null;
     // An Untitled project (no name yet) never made it past the "what
     // tournament is this for" step (gallery-side-panel.js's
     // renderEventInfoStep, which creates the project immediately on arrival

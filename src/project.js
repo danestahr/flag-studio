@@ -112,8 +112,17 @@ async function init() {
       updateProject(pid, { name: e.target.value || null }).catch(() => {});
     });
 
+    // Same anonymous-order fallback as landing.js's project cards: no
+    // `profiles` row exists until the order is claimed by a real account, so
+    // fall back to the contact email on file in the meantime. A project made
+    // via landing.js's "+ New project" admin fast-path instead has
+    // `created_by` = the staff/admin's own uid — label it as staff-created
+    // rather than implying that email is the customer's.
     const creatorName = [_project.profiles?.first_name, _project.profiles?.last_name].filter(Boolean).join(' ');
-    const creator = creatorName || _project.profiles?.email;
+    const isStaffCreated = _project.profiles?.role === 'staff' || _project.profiles?.role === 'admin';
+    const creator = isStaffCreated
+      ? `staff (${creatorName || _project.profiles?.email || 'unknown'})`
+      : creatorName || _project.profiles?.email || _project.customer_info?.contact_email || _intake?.contact_email;
     const creatorEl = document.getElementById('projectCreatorInfo');
     if (creatorEl && creator) {
       creatorEl.textContent = `Created by ${creator}`;
@@ -299,7 +308,7 @@ function renderDesignAdminActions(t, cfg, status) {
   // below. approved/sent_to_print: handled by the full-width print section.
 
   renderReviewLinkSection(t.productType, status);
-  renderPrintSection(t.productType, status);
+  renderPrintSection(t.productType, status, cfg);
 }
 
 // Once a proof has gone out at least once (share_token set), surface the
@@ -342,7 +351,7 @@ function renderReviewLinkSection(productType, status) {
 // caught late, a vendor-flagged issue) - see
 // 20260915000000_allow_resend_to_print.sql. Hole signs go through a
 // separate, non-automated print process, so there's nothing to resend.
-function renderPrintSection(productType, status) {
+function renderPrintSection(productType, status, cfg) {
   const el = document.getElementById(`printSection-${productType}`);
   const label = productType === 'flags'
     ? (status === 'sent_to_print' ? 'Resend to Prestige Flag' : 'Send to Prestige Flag')
@@ -353,12 +362,17 @@ function renderPrintSection(productType, status) {
     return;
   }
 
+  const approverText = cfg?.approved_by_name || cfg?.approved_by_email
+    ? `Approved by ${esc(cfg.approved_by_name || '')}${cfg.approved_by_email ? ` (${esc(cfg.approved_by_email)})` : ''}`
+    : '';
+
   // The "last sent" label only applies once there's actually a previous
   // send to show (sent_to_print) - omitted entirely for 'approved' (nothing
   // sent yet) rather than left as an empty flex child, which would still
   // eat a gap slot between the divider and the button.
   el.innerHTML = `
     <hr class="tool-card-divider">
+    ${approverText ? `<div style="font-size:12px;color:var(--gray-400)">${approverText}</div>` : ''}
     ${status === 'sent_to_print' ? `<div id="printMeta-${productType}" style="font-size:12px;color:var(--gray-400)"></div>` : ''}
     <button class="btn primary block" onclick="window.confirmMarkSentToPrint('${productType}')">${esc(label)}</button>
   `;
@@ -402,10 +416,19 @@ async function renderCustomerDesignBody(t, cfg, status) {
   } else if (status === 'proof_sent') {
     body.textContent = 'We’ve sent your proof for review. We’ll follow up once you’ve responded.';
   } else if (status === 'approved') {
-    body.textContent = 'Approved — your order is being prepared for print.';
+    body.innerHTML = `Approved — your order is being prepared for print.${approvedByLine(cfg)}`;
   } else if (status === 'sent_to_print') {
-    body.textContent = 'Sent to print.';
+    body.innerHTML = `Sent to print.${approvedByLine(cfg)}`;
   }
+}
+
+// Design-level approver identity, stamped by client_approve_design_proof at
+// the moment of approval (flag_config.approved_by_name/approved_by_email or
+// the hole-sign equivalent) - shared by the customer and admin status bodies
+// so both surfaces read from the same source.
+function approvedByLine(cfg) {
+  if (!cfg?.approved_by_name && !cfg?.approved_by_email) return '';
+  return `<br><span style="color:var(--gray-400)">Approved by ${esc(cfg.approved_by_name || '')}${cfg.approved_by_email ? ` (${esc(cfg.approved_by_email)})` : ''}</span>`;
 }
 
 // Shared by the customer status body's own button and the admin panel's
@@ -436,10 +459,20 @@ const customerModal = document.getElementById('customerModal');
 
 // Covers every field the order form collects across Steps 1-3 (event
 // details, contact/shipping, design preferences) so staff can see and correct
-// the full original submission in one place - not just name/address. The one
-// exception is flag_colors: it's a structured {zones,gsTag,gsTagMode} object
-// coming from the color pickers, not a simple scalar this generic text/date/
-// textarea form can edit; see the flag/hole-sign designer for that instead.
+// the full original submission in one place - not just name/address.
+// flag_style/flag_setup use the same option sets as the order form's picker/
+// toggle so saved values stay clean (a fixed vocabulary, not free text).
+// flag_colors is a structured {zones,gsTag,gsTagMode} object from the order
+// form's color pickers — shown read-only (a "colors-display" field, skipped
+// by the save loop below since it has no input element) rather than made
+// editable here; see the flag/hole-sign designer for that instead. It always
+// reads from customer_info/intake, never from the live flag_config, so it
+// stays a fixed snapshot of what was ordered even after the design is edited.
+const FLAG_SETUP_OPTIONS = [
+  { value: 'same', label: 'Same Front & Back' },
+  { value: 'different', label: 'Different Front & Back' },
+];
+
 const CUSTOMER_FIELDS = [
   { key: 'event_name', label: 'Event Name', type: 'text' },
   { key: 'course_name', label: 'Course Name', type: 'text' },
@@ -454,20 +487,39 @@ const CUSTOMER_FIELDS = [
   { key: 'state_province', label: 'State / Province', type: 'text', pair: true },
   { key: 'postal_code', label: 'Postal Code', type: 'text', pair: true },
   { key: 'country', label: 'Country', type: 'text', pair: true },
-  { key: 'flag_style', label: 'Flag Style', type: 'text' },
-  { key: 'flag_setup', label: 'Flag Setup', type: 'text' },
+  { key: 'flag_style', label: 'Flag Style', type: 'select', options: FLAGS.map(f => ({ value: f.id, label: f.name })) },
+  { key: 'flag_colors', label: 'Flag Colors', type: 'colors-display' },
+  { key: 'flag_setup', label: 'Flag Setup', type: 'select', options: FLAG_SETUP_OPTIONS },
   { key: 'flag_qty', label: 'Quantity', type: 'number' },
   { key: 'design_notes', label: 'Design Description', type: 'textarea' },
   { key: 'front_design_notes', label: 'Front Design Notes', type: 'textarea' },
   { key: 'back_design_notes', label: 'Back Design Notes', type: 'textarea' },
 ];
 
+function flagColorsDisplayHtml(colors) {
+  const zones = colors && Array.isArray(colors.zones) ? colors.zones : [];
+  if (!zones.length) return '<span style="color:var(--gray-400);font-size:13px">No colors on file</span>';
+  return `<div style="display:flex;flex-wrap:wrap;gap:12px;padding:.3rem 0">${zones.map(z => `
+    <span style="display:inline-flex;align-items:center;gap:6px;font-size:13px">
+      <span style="display:inline-block;width:13px;height:13px;border-radius:50%;background:${esc(z.hex || '#fff')};border:1px solid var(--gray-100);flex-shrink:0"></span>
+      ${esc(z.label || z.zone || '')}: ${esc(z.name || z.hex || '—')}
+    </span>`).join('')}</div>`;
+}
+
 function fieldHtml(f, value) {
-  const v = esc(value ?? '');
   const inputId = 'cf-' + f.key;
   if (f.type === 'textarea') {
+    const v = esc(value ?? '');
     return `<div class="form-row"><label class="form-label" for="${inputId}">${f.label}</label><textarea class="form-textarea" id="${inputId}">${v}</textarea></div>`;
   }
+  if (f.type === 'select') {
+    const opts = f.options.map(o => `<option value="${esc(o.value)}"${o.value === value ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+    return `<div class="form-row"><label class="form-label" for="${inputId}">${f.label}</label><select class="form-select" id="${inputId}"><option value=""${value ? '' : ' selected'}>—</option>${opts}</select></div>`;
+  }
+  if (f.type === 'colors-display') {
+    return `<div class="form-row"><label class="form-label">${f.label}</label>${flagColorsDisplayHtml(value)}</div>`;
+  }
+  const v = esc(value ?? '');
   return `<div class="form-row"><label class="form-label" for="${inputId}">${f.label}</label><input class="form-input" id="${inputId}" type="${f.type}" value="${v}"></div>`;
 }
 

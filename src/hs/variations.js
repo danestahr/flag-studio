@@ -540,6 +540,11 @@ function hsColorFields() {
     sectionLabel: HS_COLOR_LABELS[key] || key,
     has: fb => !!fb.requested_colors?.[key],
     apply: (v, fb) => applyRequestedHsColorKeyTo(v, fb, key),
+    // applyRequestedHsColorKeyTo always reassigns a brand-new `<key>Override`
+    // object rather than mutating the existing one in place, so the prior
+    // reference is safe to hold onto directly — no clone needed.
+    snapshot: v => v[key + 'Override'],
+    restore: (v, snap) => { v[key + 'Override'] = snap; },
     preview: (el, fb) => {
       const hex = fb.requested_colors?.[key];
       const safe = /^#[0-9A-Fa-f]{6}$/.test(hex) ? hex : '#cccccc';
@@ -565,9 +570,20 @@ function hsLogoFields() {
   });
   return Array.from({ length: maxCount }, (_, i) => ({
     key: 'logo-' + i,
+    // Every logo slot shares one group — all of them reassign the SAME
+    // v.templateLogoOverrides object (a fresh copy each time, keyed by
+    // slot), so undoing an earlier one after a later one has already
+    // applied on top of it would discard that later change — see
+    // edit-requests-panel.js's isUndoable.
+    group: 'hs-logos',
     sectionLabel: maxCount > 1 ? `Logo ${i + 1}` : 'Logo',
     has: fb => !!fb.requested_logos?.[i]?.url,
     apply: (v, fb) => applyRequestedHsLogo(v, fb, i),
+    // applyRequestedHsLogo always reassigns a brand-new templateLogoOverrides
+    // object rather than mutating the existing one in place, so the prior
+    // reference is safe to hold onto directly — no clone needed.
+    snapshot: v => v.templateLogoOverrides,
+    restore: (v, snap) => { v.templateLogoOverrides = snap; },
     preview: (el, fb) => {
       const rl = fb.requested_logos?.[i];
       if (rl) el.innerHTML = `<img src="${escXml(rl.url)}" alt="">`;
@@ -597,6 +613,11 @@ window.openHsEditRequests = function (variationId) {
     fields: [
       {
         key: 'template', sectionLabel: 'Template', has: fb => !!fb.requested_template_id, apply: (v, fb) => applyRequestedHsTemplate(v, fb),
+        // applyVarTemplateSpec reassigns template/templateId/textLayers
+        // wholesale (never mutates the old objects in place), so holding
+        // onto the prior references directly is enough to restore them.
+        snapshot: v => ({ template: v.template, templateId: v.templateId, textLayers: v.textLayers }),
+        restore: (v, snap) => { v.template = snap.template; v.templateId = snap.templateId; v.textLayers = snap.textLayers; },
         preview: (el, fb) => {
           const key = fb.requested_template_id || '';
           if (!key.startsWith('default:')) return;

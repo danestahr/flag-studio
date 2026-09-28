@@ -394,6 +394,18 @@ function renderPage(project) {
       ? ' rv-instructions-locked'
       : '';
 
+  // Design-level approver identity (stamped by client_approve_design_proof
+  // at the moment of approval) - not the same thing as previousReviewerName/
+  // Email above, which is prefilled from the latest variation_feedback row
+  // and can point at whoever most recently submitted ANY feedback, not
+  // necessarily the person who approved.
+  const approvedCfg = activeIsFlags ? project.flagConfig : project.holeSignConfig;
+  const approverName = approvedCfg?.approved_by_name;
+  const approverEmail = approvedCfg?.approved_by_email;
+  const approvedByHtml = activeApproved && (approverName || approverEmail)
+    ? `<div class="rv-approved-by">Approved by ${esc(approverName || '')}${approverEmail ? ` (${esc(approverEmail)})` : ''}</div>`
+    : '';
+
   // The name/email/general-note fields stay single, project-wide values
   // (only freeze once truly everything is locked) — unlike the instructions
   // banner, there's only ever one reviewer identity regardless of which tab
@@ -443,6 +455,7 @@ function renderPage(project) {
       ${tabsHtml}
       <div class="rv-info-section">
         <div class="rv-instructions${instructionsClass}">${activeApproved ? '<span class="rv-instructions-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>' : ''}${instructionsText}</div>
+        ${approvedByHtml}
         ${nameRow}
       </div>
 
@@ -1137,14 +1150,23 @@ async function syncProofStatus(kind, reviewerName, reviewerEmail, generalNote) {
   const projectUrl = `${window.location.origin}/project?project=${projectId}`;
   try {
     if (allApprovedNow) {
-      await clientApproveDesignProof(projectId, kind, reviewClient);
-      sendReviewDecision({ decision: 'approved', projectName, projectId, projectUrl, reviewerName: reviewerName || undefined, reviewerEmail: reviewerEmail || undefined, generalNote: generalNote || undefined })
+      await clientApproveDesignProof(projectId, kind, reviewerName, reviewerEmail, reviewClient);
+      // Stamp the approver onto the in-memory project immediately, rather
+      // than waiting on the realtime subscription's reloadDesigns() round
+      // trip - syncProofStatus's caller re-renders with `currentProject`
+      // right after this resolves, and it should already reflect who just
+      // approved it.
+      const cfgKey = kind === 'flags' ? 'flagConfig' : 'holeSignConfig';
+      if (currentProject?.[cfgKey]) {
+        currentProject[cfgKey] = { ...currentProject[cfgKey], approved_by_name: reviewerName || null, approved_by_email: reviewerEmail || null };
+      }
+      sendReviewDecision({ decision: 'approved', projectName, projectId, projectUrl, productType: kind, reviewerName: reviewerName || undefined, reviewerEmail: reviewerEmail || undefined, generalNote: generalNote || undefined })
         .catch(err => console.error('sendReviewDecision failed', err));
       return 'approved';
     }
     const note = `${reviewerName ? reviewerName + ': ' : ''}See per-variation feedback for details.`;
     await clientRejectDesignProof(projectId, kind, note, reviewClient);
-    sendReviewDecision({ decision: 'changes_requested', projectName, projectId, projectUrl, note, reviewerName: reviewerName || undefined, reviewerEmail: reviewerEmail || undefined, generalNote: generalNote || undefined })
+    sendReviewDecision({ decision: 'changes_requested', projectName, projectId, projectUrl, productType: kind, note, reviewerName: reviewerName || undefined, reviewerEmail: reviewerEmail || undefined, generalNote: generalNote || undefined })
       .catch(err => console.error('sendReviewDecision failed', err));
     return 'rejected';
   } catch (err) {
