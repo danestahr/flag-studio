@@ -17,7 +17,7 @@ import { S, mergeLibraries } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
 import { getFlag, makeSvg, showGsTagVariant, resolveColors, preloadLogoAspects, withMasterText } from '../render.js';
 import { loadProject, loadFlagConfig, loadLogosForProject, listUserLogos } from '../supabase.js';
-import { buildOrderSummaryPdf } from '../orderSummaryPdf.js';
+import { buildOrderSummaryPdf, buildFlagSheetsPdf } from '../orderSummaryPdf.js';
 import { slug, mapWithConcurrency } from '../dom-utils.js';
 
 // ── Per-variation override helpers (mirrors flags/variations.js's own
@@ -143,7 +143,7 @@ export async function rasterizeSvg(logos, face, mirrorX = false, textLayers = []
   });
 }
 
-async function rasterizeThumbnail(logos, face, mirrorX = false, textLayers = [], flagOverride = null, colorsOverride = null, gsTagOpts = null, imageLayers = []) {
+async function rasterizeThumbnail(logos, face, mirrorX = false, textLayers = [], flagOverride = null, colorsOverride = null, gsTagOpts = null, imageLayers = [], width = 800) {
   const flag = flagOverride || getFlag();
   const colors = colorsOverride || S.colors;
   const [, , vbW, vbH] = (flag?.viewBox || '0 0 7519 4669').split(' ').map(Number);
@@ -171,7 +171,7 @@ async function rasterizeThumbnail(logos, face, mirrorX = false, textLayers = [],
       img.setAttribute('href', `data:${mime};base64,${btoa(binary)}`);
     } catch { /* leave as-is */ }
   }));
-  const thumbW = 800, thumbH = Math.round(800 * vbH / vbW);
+  const thumbW = width, thumbH = Math.round(width * vbH / vbW);
   let str = new XMLSerializer().serializeToString(svg);
   if (!str.startsWith('<?xml')) str = '<?xml version="1.0" encoding="UTF-8"?>\n' + str;
   const blobUrl = URL.createObjectURL(new Blob([str], { type: 'image/svg+xml' }));
@@ -256,6 +256,33 @@ export function pngBlobToPdfBlob(pngBlob, vbW, vbH) {
 // memory, just how many renders overlap while producing it.
 const PRINT_EXPORT_CONCURRENCY = 4;
 
+// Front/back thumbnails + style/colour/qty for one variation - the shared
+// input to both the Order Summary PDF and the customer-facing Flag Sheets PDF.
+async function buildVariationSheetData(v, width = 800) {
+  const frontLogos = v.logos || v.assignment || [];
+  const mirrored = sameSidesOf(v);
+  const backLogos  = mirrored ? frontLogos : (v.backLogos || v.backAssignment || []);
+  const backTextLayers = mirrored ? (v.textLayers || []) : (v.backTextLayers || []);
+  const [frontPng, backPng] = await Promise.all([
+    rasterizeThumbnail(frontLogos, 'front', false, withMasterText(v), getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || [], width).catch(() => null),
+    rasterizeThumbnail(backLogos, 'back', mirrored, [...(S.textLayers || []), ...backTextLayers], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || [], width).catch(() => null),
+  ]);
+  return {
+    name: v.name, frontPng, backPng,
+    flagName: getVarFlag(v)?.name || v.flagId || S.flagId || '',
+    colorEntries: getVarColorEntries(v),
+    qty: v.qty ?? 1,
+  };
+}
+
+// Customer-facing PDF: one 8.5x11 sheet per variation (front on top, back
+// below). Pass a subset of S.variations for a single-variation download.
+export async function buildFlagSheetsPdfBlob(variations = S.variations) {
+  const variationImages = await mapWithConcurrency(variations, PRINT_EXPORT_CONCURRENCY, v => buildVariationSheetData(v, 1600));
+  const bytes = await buildFlagSheetsPdf({ projectName: S.projectName, variationImages });
+  return new Blob([bytes], { type: 'application/pdf' });
+}
+
 export async function buildFlagsPrintZip(setStatus = () => {}) {
   const zip = new JSZip();
   const flag = getFlag();
@@ -301,22 +328,7 @@ export async function buildFlagsPrintZip(setStatus = () => {}) {
   setStatus('Building order summary…');
   const colorEntries = getVarColorEntries(null);
   setStatus('Rendering variation thumbnails…');
-  const variationImages = await mapWithConcurrency(S.variations, PRINT_EXPORT_CONCURRENCY, async v => {
-    const frontLogos = v.logos || v.assignment || [];
-    const mirrored = sameSidesOf(v);
-    const backLogos  = mirrored ? frontLogos : (v.backLogos || v.backAssignment || []);
-    const backTextLayers = mirrored ? (v.textLayers || []) : (v.backTextLayers || []);
-    const [frontPng, backPng] = await Promise.all([
-      rasterizeThumbnail(frontLogos, 'front', false, withMasterText(v), getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || []).catch(() => null),
-      rasterizeThumbnail(backLogos, 'back', mirrored, [...(S.textLayers || []), ...backTextLayers], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || []).catch(() => null),
-    ]);
-    return {
-      name: v.name, frontPng, backPng,
-      flagName: getVarFlag(v)?.name || v.flagId || S.flagId || '',
-      colorEntries: getVarColorEntries(v),
-      qty: v.qty ?? 1,
-    };
-  });
+  const variationImages = await mapWithConcurrency(S.variations, PRINT_EXPORT_CONCURRENCY, buildVariationSheetData);
   const summaryPdf = await buildOrderSummaryPdf({
     projectId: S.projectId, productType: 'flags', colorEntries,
     templateName: flag?.name || S.flagId, variationCount: S.variations.length, variationImages,

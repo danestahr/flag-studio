@@ -73,10 +73,9 @@ const HEADER_H = 60;  // header bar (56) + gold rule (4)
 const CONTENT_TOP = H - HEADER_H - 20;   // y where content starts after header
 const CONTENT_BOT = 36;                  // bottom margin
 
-function drawHeader(page, bold, reg) {
+function drawHeader(page, bold, reg, sub = 'Order Summary') {
   page.drawRectangle({ x: 0, y: H - 56, width: W, height: 56, color: HEADER_BG });
   page.drawText('FLAG STUDIO', { x: M, y: H - 36, size: 18, font: bold, color: WHITE });
-  const sub = 'Order Summary';
   page.drawText(sub, { x: W - M - reg.widthOfTextAtSize(sub, 10), y: H - 36, size: 10, font: reg, color: rgb(1,1,1,0.65) });
   page.drawRectangle({ x: 0, y: H - HEADER_H, width: W, height: 4, color: GOLD });
 }
@@ -390,6 +389,84 @@ export async function buildOrderSummaryPdf({
       }
 
       cursor.setY(y - imgH - 14);
+    }
+  }
+
+  return doc.save();
+}
+
+// ── Flag sheets (one variation per 8.5x11 page) ───────────
+/**
+ * Simplified per-variation view: project name, variation name/qty, flag style
+ * and colours, then the front flag on the top half and the back flag on the
+ * bottom half. Same data as the variations section of buildOrderSummaryPdf,
+ * without the customer block or packing several variations per page.
+ *
+ * @param {object} opts
+ * @param {string} opts.projectName
+ * @param {Array}  opts.variationImages  same shape as buildOrderSummaryPdf's
+ */
+export async function buildFlagSheetsPdf({ projectName, variationImages = [] }) {
+  const doc  = await PDFDocument.create();
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const reg  = await doc.embedFont(StandardFonts.Helvetica);
+
+  const SM = 36; // sheet margin
+  const boxW = W - SM * 2;
+  const total = variationImages.length;
+
+  for (let i = 0; i < total; i++) {
+    const { name, frontPng, backPng, flagName, colorEntries: varColors, qty } = variationImages[i];
+    const page = doc.addPage([W, H]);
+    let y = H - SM - 12;
+
+    page.drawText(projectName || 'Untitled Project', { x: SM, y, size: 16, font: bold, color: BLACK });
+    const pageLabel = `${i + 1} of ${total}`;
+    page.drawText(pageLabel, { x: W - SM - reg.widthOfTextAtSize(pageLabel, 9), y, size: 9, font: reg, color: GRAY });
+    y -= 20;
+
+    const nameLabel = name || `Variation ${i + 1}`;
+    page.drawText(nameLabel, { x: SM, y, size: 12, font: bold, color: BLACK });
+    if (qty != null) {
+      page.drawText(`Qty: ${qty}`, { x: SM + bold.widthOfTextAtSize(nameLabel, 12) + 10, y, size: 10, font: reg, color: GRAY });
+    }
+    y -= 16;
+
+    if (flagName) {
+      page.drawText(`Style: ${flagName}`, { x: SM, y, size: 10, font: reg, color: GRAY });
+      y -= 14;
+    }
+
+    if (varColors?.length) {
+      // drawColorSwatchLine is laid out against the order summary's M margin;
+      // it only needs a page/y cursor here.
+      const cur = { ensureSpace() {}, current: () => page, getY: () => y, setY: v => { y = v; } };
+      drawColorSwatchLine(cur, varColors, { valueFont: reg, size: 9 });
+    }
+
+    // Divider between the project details and the flags
+    y -= 2;
+    page.drawLine({ start: { x: SM, y }, end: { x: W - SM, y }, thickness: 0.75, color: rgb(0.75, 0.75, 0.73) });
+    y -= 16;
+
+    // Split what's left of the page between the two flags (each with a
+    // centred label above it) and let each fill its half, keeping its ratio.
+    const labelH = 14, blockGap = 14;
+    const boxH = (y - SM - 2 * labelH - blockGap) / 2;
+
+    for (const [label, png] of [['FRONT', frontPng], ['BACK', backPng]]) {
+      page.drawText(label, { x: (W - bold.widthOfTextAtSize(label, 10)) / 2, y: y - 9, size: 10, font: bold, color: GRAY });
+      y -= labelH;
+      if (png) {
+        try {
+          const img = await doc.embedPng(png);
+          const scale = Math.min(boxW / img.width, boxH / img.height);
+          const w = img.width * scale, h = img.height * scale;
+          const x = (W - w) / 2;
+          page.drawImage(img, { x, y: y - h, width: w, height: h });
+        } catch { /* skip */ }
+      }
+      y -= boxH + blockGap;
     }
   }
 

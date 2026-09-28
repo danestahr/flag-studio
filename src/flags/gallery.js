@@ -16,7 +16,7 @@ import {
 } from '../supabase.js';
 import {
   getVarFlag, getVarColors, getVarGsTagOpts, sameSidesOf,
-  rasterizeSvg, pngBlobToPdfBlob, buildFlagsPrintZip, hydrateFlagStateForProject,
+  buildFlagSheetsPdfBlob, buildFlagsPrintZip, hydrateFlagStateForProject,
 } from './print-export.js';
 import { esc, dl, slug, sanitizeFilename } from '../dom-utils.js';
 import { STATUS_LABEL } from '../status-labels.js';
@@ -136,17 +136,14 @@ window.sendToPrestige = async function () {
   }
 };
 
-// Single-variation, front-face PDF — lives on each gallery tile.
+// Single-variation PDF (front on top, back below) — lives on each gallery tile.
 window.downloadVariationPdf = async function (idx) {
   const v = S.variations[idx];
   if (!v) return;
   const btn = document.querySelector(`#var-card-${idx} .var-card-pdf`);
   if (btn) btn.disabled = true;
   try {
-    const faceLogos = v.logos || v.assignment || [];
-    const { blob, vbW, vbH } = await rasterizeSvg(faceLogos, 'front', false, withMasterText(v), getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || []);
-    const pdfBlob = await pngBlobToPdfBlob(blob, vbW, vbH);
-    dl(URL.createObjectURL(pdfBlob), slug(v.name) + '.pdf');
+    dl(URL.createObjectURL(await buildFlagSheetsPdfBlob([v])), (slug(v.name) || 'variation-' + (idx + 1)) + '.pdf');
   } catch (err) {
     console.error('PDF export failed', err);
     alert('PDF export failed.');
@@ -155,19 +152,14 @@ window.downloadVariationPdf = async function (idx) {
   }
 };
 
-// Bulk export — every variation's front (and independent back) as separate PDFs.
+// Bulk export — one PDF with a sheet per variation.
 window.expAllPDF = async function () {
-  for (const v of S.variations) {
-    try {
-      const { blob, vbW, vbH } = await rasterizeSvg(v.logos || v.assignment || [], 'front', false, withMasterText(v), getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || []);
-      dl(URL.createObjectURL(await pngBlobToPdfBlob(blob, vbW, vbH)), slug(v.name) + '.pdf');
-      await new Promise(r => setTimeout(r, 400));
-      if (!sameSidesOf(v)) {
-        const { blob: blobB, vbW: bW, vbH: bH } = await rasterizeSvg(v.backLogos || v.backAssignment || [], 'back', false, [...(S.textLayers || []), ...(v.backTextLayers || [])], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || []);
-        dl(URL.createObjectURL(await pngBlobToPdfBlob(blobB, bW, bH)), slug(v.name) + '-back.pdf');
-        await new Promise(r => setTimeout(r, 400));
-      }
-    } catch (err) { console.error('PDF export failed for', v.name, err); }
+  if (!S.variations.length) { alert('No variations to export.'); return; }
+  try {
+    dl(URL.createObjectURL(await buildFlagSheetsPdfBlob()), `Flags_${sanitizeFilename(S.projectName || 'Export')}.pdf`);
+  } catch (err) {
+    console.error('PDF export failed', err);
+    alert('PDF export failed.');
   }
 };
 
