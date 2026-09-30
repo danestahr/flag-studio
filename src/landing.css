@@ -244,20 +244,6 @@ div.draft-card { cursor:pointer; }
 .ci-country-btn { padding:.4rem .85rem; font-size:12px; font-weight:500; background:transparent; border:1.5px solid var(--gray-100); border-radius:6px; cursor:pointer; color:var(--gray-600); transition:border-color .15s, color .15s; }
 .ci-country-btn.active { border-color:var(--accent); color:var(--accent); }
 
-.ci-logo-grid { display:flex; flex-wrap:wrap; gap:.65rem; margin-bottom:.85rem; }
-.ci-logo-empty { font-size:13px; color:var(--gray-400); margin:0 0 .85rem; }
-.ci-logo-item { position:relative; width:80px; }
-.ci-logo-item img { width:80px; height:80px; object-fit:contain; border:1.5px solid var(--gray-100); border-radius:8px; background:var(--gray-50); display:block; }
-.ci-logo-doc { width:80px; height:80px; display:flex; align-items:center; justify-content:center; border:1.5px solid var(--gray-100); border-radius:8px; background:var(--gray-50); font-size:11px; font-weight:600; color:var(--gray-400); }
-.ci-logo-name { font-size:11px; color:var(--gray-600); margin-top:.3rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:80px; }
-.ci-logo-del { position:absolute; top:4px; right:4px; width:18px; height:18px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; font-size:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1; padding:0; opacity:0; transition:opacity .15s; }
-.ci-logo-item:hover .ci-logo-del { opacity:1; }
-.ci-logo-dl { position:absolute; top:4px; left:4px; width:18px; height:18px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; font-size:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1; padding:0; opacity:0; transition:opacity .15s; }
-.ci-logo-item:hover .ci-logo-dl { opacity:1; }
-
-.ci-add-logo-btn { padding:.45rem .9rem; font-size:12px; font-weight:500; background:transparent; border:1.5px dashed var(--gray-200); border-radius:7px; color:var(--gray-600); cursor:pointer; transition:border-color .15s, color .15s; }
-.ci-add-logo-btn:hover { border-color:var(--accent); color:var(--accent); }
-
 .ci-original-toggle { font-size:12px; font-weight:500; color:var(--gray-400); cursor:pointer; margin-top:1.25rem; padding-top:1.25rem; border-top:1px solid var(--gray-100); user-select:none; }
 .ci-original-toggle:hover { color:var(--gray-600); }
 .ci-original-panel { margin-top:.75rem; background:var(--gray-50,#f9f9f9); border-radius:8px; padding:1rem; display:flex; flex-direction:column; gap:.45rem; }

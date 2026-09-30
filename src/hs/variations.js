@@ -1,5 +1,4 @@
 import { HS, UI, getEffectiveState, getEffectiveVariation, isVarCustomized, mergeBanner, findLogo } from './state.js';
-import { mergeLibraries } from '../state.js';
 import { goStep, updateSidebar } from './app.js';
 import { cloneTemplateLogos, layoutPreviewState, loadCustomTemplates, templatePreviewState } from './design.js';
 import { saveDraftInternal } from './draft.js';
@@ -11,7 +10,7 @@ import { renderLogosTileShell } from '../sidebar.js';
 import { renderEditRequestsPanel } from '../edit-requests-panel.js';
 import { renderVariationList } from '../variation-list.js';
 import { escXml, renderHoleSignInto } from '../hole-sign-render.js';
-import { deleteLogo, uploadLogo, uploadUserLogo, deleteUserLogo, saveHsOneOffs, resolveFeedback, deleteFeedbackForVariation, adoptFeedbackLogo } from '../supabase.js';
+import { deleteLogo, uploadLogo, saveHsOneOffs, resolveFeedback, deleteFeedbackForVariation, adoptFeedbackLogo } from '../supabase.js';
 import { applyHsZoom, initHsVarCanvas, renderVariationPreview } from './var-canvas.js';
 import { renderEditor } from './var-editor.js';
 import { openDefaultsPanel } from './defaults.js';
@@ -178,18 +177,12 @@ export async function deleteHsLibLogo(logo) {
   hideHsToolbar();
   if (logo.storagePath) {
     try {
-      await (logo.shared ? deleteUserLogo(logo.storagePath, logo.id) : deleteLogo(logo.storagePath, logo.id));
+      await deleteLogo(logo.storagePath, logo.id);
     }
     catch (err) { console.error('Storage delete failed', err); }
   }
 }
 
-// Every upload becomes a shared logo (user_logos), reusable across all of
-// this user's projects — one flat "Logos" section, not a project-only vs.
-// shared split. Logos already on the project from before this change
-// (project_logos rows, loaded alongside the shared ones in mergeLibraries())
-// keep showing here too and stay deletable via deleteLogo — only a newly
-// uploaded logo is tagged `shared: true`.
 async function handleHsLogoUpload(files) {
   showHsCanvasUploadSpinner();
   try {
@@ -201,8 +194,7 @@ async function handleHsLogoUpload(files) {
       HS.library.push({ id: tempId, name: file.name.replace(/\.[^.]+$/, ''), uploading: true });
       buildLibStrip();
       try {
-        const logo = await uploadUserLogo(file);
-        logo.shared = true;
+        const logo = await uploadLogo(HS.projectId, file);
         const idx = HS.library.findIndex(l => l.id === tempId);
         if (idx !== -1) HS.library.splice(idx, 1, logo);
         else HS.library.push(logo);

@@ -4,14 +4,13 @@ import { requireAuth, isStaffOrAdmin } from '../auth.js';
 
 const session = await requireAuth();
 
-import { S, setDragLogoId, addCustomColor, allSwatches, navigateTo, mergeLibraries } from '../state.js';
+import { S, setDragLogoId, addCustomColor, allSwatches, navigateTo } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
 import { getFlag, applyColors, renderInto, showGsTagVariant, makeSvg, resolveColors, preloadLogoAspects, withMasterText } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
 import {
   loadProject, saveFlagConfig, loadFlagConfig,
-  loadLogosForProject, deleteLogo,
-  uploadUserLogo, listUserLogos, deleteUserLogo, adoptFeedbackLogo,
+  loadLogosForProject, deleteLogo, uploadLogo, adoptFeedbackLogo,
   getFeedback, resolveFeedback, deleteFeedbackForVariation, supabase, loadOrderIntake,
 } from '../supabase.js';
 import { initDropZones, renderDropZones, hideZoneToolbar, triggerAdd } from './drop-zones.js';
@@ -109,12 +108,6 @@ function getVarGsTagOpts(v) {
 
 // ── Logo library (strip) ───────────────────────────────────
 
-// Every upload becomes a shared logo (user_logos), reusable across all of
-// this user's projects — one flat "Logos" section, not a project-only vs.
-// shared split. Logos already on the project from before this change
-// (project_logos rows, loaded alongside the shared ones in mergeLibraries())
-// keep showing here too and stay deletable via deleteLogo — only a newly
-// uploaded logo is tagged `shared: true`.
 async function handleFlagLogoUpload(files) {
   for (const file of files) {
     const localSrc = await new Promise(res => {
@@ -126,8 +119,7 @@ async function handleFlagLogoUpload(files) {
     S.library.push({ id: tempId, name: file.name.replace(/\.[^.]+$/, ''), src: localSrc, uploading: true });
     renderVarStrip();
     try {
-      const logo = await uploadUserLogo(file);
-      logo.shared = true;
+      const logo = await uploadLogo(S.projectId, file);
       const idx = S.library.findIndex(l => l.id === tempId);
       if (idx !== -1) S.library[idx] = logo;
     } catch (err) {
@@ -152,7 +144,7 @@ window.delLogo = async function (id) {
   markDirty();
   if (logo?.storagePath) {
     try {
-      await (logo.shared ? deleteUserLogo(logo.storagePath, logo.id) : deleteLogo(logo.storagePath, logo.id));
+      await deleteLogo(logo.storagePath, logo.id);
     } catch (err) { console.error('Storage delete failed', err); }
   }
 };
@@ -163,8 +155,7 @@ async function removeBgFromFlagLogo(logo, onProgress) {
   const blob = await removeBackground(logo.src);
   const file = new File([blob], logo.name.replace(/\.[^.]+$/, '') + ' (no bg).png', { type: 'image/png' });
   onProgress?.('uploading');
-  const newLogo = await uploadUserLogo(file);
-  newLogo.shared = true;
+  const newLogo = await uploadLogo(S.projectId, file);
   return newLogo;
 }
 
@@ -1342,9 +1333,8 @@ await loadAllFlags(FLAGS);
 
 try {
   const project = await loadProject(_urlProject);
-  const [logos, sharedLogos, flagCfg, intake] = await Promise.all([
+  const [logos, flagCfg, intake] = await Promise.all([
     loadLogosForProject(_urlProject),
-    listUserLogos(project.created_by),
     loadFlagConfig(_urlProject).catch(() => null),
     loadOrderIntake(_urlProject).catch(() => null),
   ]);
@@ -1368,7 +1358,7 @@ try {
 
   S.projectId = project.id;
   S.projectName = project.name || '';
-  S.library = mergeLibraries(logos, sharedLogos);
+  S.library = logos;
   await preloadLogoAspects(S.library);
   if (flagCfg) {
     S.flagId = flagCfg.flag_id;

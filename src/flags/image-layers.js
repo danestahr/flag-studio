@@ -11,7 +11,7 @@
 // SVG export (render.js's paintImageLayers, via the same getLogoAspect cache
 // makeSvg's own logo loop uses).
 import { createImageBox } from '../image-box.js';
-import { uploadUserLogo } from '../supabase.js';
+import { uploadLogo } from '../supabase.js';
 import { S } from '../state.js';
 
 export function renderFlagImageOverlays(wrapId, imageLayers, onChange) {
@@ -53,8 +53,8 @@ function ensureFileInput() {
 // "Images" row — straight to the OS file picker (no existing-vs-upload
 // choice modal), same simpler shortcut hs/template-logos.js's
 // uploadNewTplLogo takes over addTplImage's library picker. Also added to
-// S.library (a normal shared logo) so it stays manageable/reusable from the
-// Logo library step, same as any other upload.
+// S.library so it stays manageable/reusable from the Logo library step, same
+// as any other upload.
 export function addFlagImageLayer(imageLayers, wrapId, onChange) {
   const input = ensureFileInput();
   input.value = '';
@@ -62,8 +62,7 @@ export function addFlagImageLayer(imageLayers, wrapId, onChange) {
     const file = input.files?.[0];
     if (!file) return;
     try {
-      const logo = await uploadUserLogo(file);
-      logo.shared = true;
+      const logo = await uploadLogo(S.projectId, file);
       S.library.push(logo);
       imageLayers.push({ id: 'fil-' + Date.now(), src: logo.src, storagePath: logo.storagePath, x: 50, y: 50, w: 30 });
       renderFlagImageOverlays(wrapId, imageLayers, onChange);

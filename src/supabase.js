@@ -337,62 +337,6 @@ export async function deleteLogo(storagePath, logoId) {
   await supabase.from('project_logos').delete().eq('id', logoId);
 }
 
-// A logo library reusable across a user's own projects (unlike project_logos,
-// scoped by created_by rather than project_id — see user_logos migration).
-export async function uploadUserLogo(file) {
-  const { data: { session } } = await supabase.auth.getSession();
-  const userId = session.user.id;
-  if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
-    const { rasterizePdfToPng } = await import('./pdf-raster.js');
-    file = await rasterizePdfToPng(file);
-  }
-  file = await downscaleRasterIfNeeded(file);
-  const ext = file.name.split('.').pop();
-  const path = `user-logos/${userId}/${Date.now()}.${ext}`;
-
-  const { error: uploadError } = await supabase.storage
-    .from('flag-logos')
-    .upload(path, file, { upsert: false });
-  if (uploadError) throw uploadError;
-
-  const { data: { publicUrl } } = supabase.storage
-    .from('flag-logos')
-    .getPublicUrl(path);
-
-  const { data, error } = await supabase
-    .from('user_logos')
-    .insert({ created_by: userId, name: file.name.replace(/\.[^.]+$/, ''), storage_path: path, public_url: publicUrl })
-    .select('id, name, storage_path, public_url')
-    .single();
-  if (error) throw error;
-
-  return { id: data.id, name: data.name, src: publicUrl, storagePath: path };
-}
-
-// `ownerId` is required so staff/admin (whose RLS OR-branch has no
-// project-scoping to fall back on - user_logos isn't project_id-keyed, see
-// the migration) don't pull in every customer's personal library alongside
-// the one they're actually supposed to be looking at.
-export async function listUserLogos(ownerId, client = supabase) {
-  // Ownerless projects (order.html's public intake flow leaves created_by
-  // null) have no personal library to merge in. .eq() can't filter for null
-  // (PostgREST needs `is.null`, not `eq.null`) - it 400s instead of matching
-  // nothing, so short-circuit before that query ever fires.
-  if (!ownerId) return [];
-  const { data, error } = await client
-    .from('user_logos')
-    .select('id, name, public_url, storage_path')
-    .eq('created_by', ownerId)
-    .order('created_at', { ascending: false });
-  if (error) throw error;
-  return data.map(l => ({ id: l.id, name: l.name, src: l.public_url, storagePath: l.storage_path }));
-}
-
-export async function deleteUserLogo(storagePath, logoId) {
-  await supabase.storage.from('flag-logos').remove([storagePath]);
-  await supabase.from('user_logos').delete().eq('id', logoId);
-}
-
 // ── Flag config ────────────────────────────────────────────
 export async function saveFlagConfig(projectId, state) {
   const { error } = await supabase

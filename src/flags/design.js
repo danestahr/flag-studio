@@ -4,15 +4,14 @@ import { requireAuth, isStaffOrAdmin } from '../auth.js';
 
 const session = await requireAuth();
 
-import { S, setDragLogoId, DEFAULT_COLORS, addCustomColor, allSwatches, navigateTo, mergeLibraries } from '../state.js';
+import { S, setDragLogoId, DEFAULT_COLORS, addCustomColor, allSwatches, navigateTo } from '../state.js';
 import { FLAGS } from '../data.js';
 import { getFlag, applyColors, showGsTagVariant, resolveColors } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
 import {
   createProject, updateProject, loadProject,
   saveFlagConfig, loadFlagConfig,
-  loadLogosForProject, deleteLogo,
-  uploadUserLogo, listUserLogos, deleteUserLogo,
+  loadLogosForProject, deleteLogo, uploadLogo,
   loadOrderIntake,
 } from '../supabase.js';
 import { initDropZones, renderDropZones, hideZoneToolbar } from './drop-zones.js';
@@ -524,12 +523,6 @@ document.addEventListener('click', e => {
 
 // ── Step 3: Logo library ───────────────────────────────────
 
-// Every upload here becomes a shared logo (user_logos), reusable across all
-// of this user's projects — there's a single "Uploaded logos" section, not a
-// separate project-only vs. shared split. Logos already on the project from
-// before this change (project_logos rows, loaded alongside the shared ones
-// in mergeLibraries()) keep showing here too and stay deletable via
-// deleteLogo — only a newly uploaded logo is tagged `shared: true`.
 window.handleUpload = async function (e) {
   const files = Array.from(e.target.files);
   e.target.value = '';
@@ -544,8 +537,7 @@ window.handleUpload = async function (e) {
     renderLib();
     syncSidebar();
     try {
-      const logo = await uploadUserLogo(file);
-      logo.shared = true;
+      const logo = await uploadLogo(S.projectId, file);
       const idx = S.library.findIndex(l => l.id === tempId);
       if (idx !== -1) S.library[idx] = logo;
     } catch (err) {
@@ -590,7 +582,7 @@ window.delLogo = async function (id) {
   syncSidebar();
   if (logo?.storagePath) {
     try {
-      await (logo.shared ? deleteUserLogo(logo.storagePath, logo.id) : deleteLogo(logo.storagePath, logo.id));
+      await deleteLogo(logo.storagePath, logo.id);
     } catch (err) { console.error('Storage delete failed', err); }
   }
 };
@@ -718,9 +710,8 @@ const _urlProject = new URLSearchParams(window.location.search).get('project');
 if (_urlProject) {
   try {
     const project = await loadProject(_urlProject);
-    const [logos, sharedLogos, flagCfg, intake] = await Promise.all([
+    const [logos, flagCfg, intake] = await Promise.all([
       loadLogosForProject(_urlProject),
-      listUserLogos(project.created_by),
       loadFlagConfig(_urlProject).catch(() => null),
       loadOrderIntake(_urlProject).catch(() => null),
     ]);
@@ -741,7 +732,7 @@ if (_urlProject) {
 
     S.projectId = project.id;
     S.projectName = project.name || '';
-    S.library = mergeLibraries(logos, sharedLogos);
+    S.library = logos;
     if (flagCfg) {
       S.flagId = flagCfg.flag_id;
       S.colors = (flagCfg.colors && Object.keys(flagCfg.colors).length) ? flagCfg.colors : { ...DEFAULT_COLORS };

@@ -12,7 +12,7 @@ export const S = {
   flagId: null,
   colors: { ...DEFAULT_COLORS },
   customColors: [], // hex codes picked by hand (hex input/native picker/eyedropper) — offered as swatches alongside COLORS, see addCustomColor()
-  library: [], // project-owned logos plus this user's cross-project shared logos (user_logos), merged — see mergeLibraries(). A shared entry is tagged `shared: true`.
+  library: [], // this project's own logos (project_logos) — see loadLogosForProject()
   baseAssignment: {},
   variations: [],
   activeVarId: null,
@@ -40,14 +40,6 @@ export const setDragLogoId = (id) => { _dragLogoId = id; };
 
 export function findLogo(id) {
   return S.library.find(l => l.id === id);
-}
-
-// Combines a project's own logos with this user's cross-project shared
-// library (user_logos) into the single list the UI renders as one section —
-// shared entries are tagged so delete/export code can still tell them apart
-// from a project-owned logo without a second array.
-export function mergeLibraries(projectLogos, sharedLogos) {
-  return [...projectLogos, ...sharedLogos.map(l => ({ ...l, shared: true }))];
 }
 
 // The flags wizard's steps are separate HTML pages (see CLAUDE.md's page

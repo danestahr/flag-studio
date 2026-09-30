@@ -1,11 +1,10 @@
 import { HS, UI, defaultCaptionsEdited, mergeBanner } from './state.js';
-import { mergeLibraries } from '../state.js';
 import { renderStep1, updateStep1Preview, applyBuiltInDefaults, flushCustomTemplateForkSave } from './design.js';
 import { renderStep2, renderVarList, updateHsEditRequestsBanner } from './variations.js';
 import { cropSvgToArtwork, migrateVariationLogos } from './logo-utils.js';
 import { saveDraftInternal } from './draft.js';
 import { emptyTemplateLogos, migrateBannerCaptions, HS_TEMPLATES, HS_DEFAULT_TEMPLATES } from '../hole-sign-data.js';
-import { getFeedback, loadHoleSignConfig, loadLogosForProject, listUserLogos, loadProject, supabase } from '../supabase.js';
+import { getFeedback, loadHoleSignConfig, loadLogosForProject, loadProject, supabase } from '../supabase.js';
 import { requireAuth } from '../auth.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 
@@ -22,10 +21,9 @@ export async function init() {
 
   try {
     const project = await loadProject(projectId);
-    const [hsCfg, logos, sharedLogos] = await Promise.all([
+    const [hsCfg, logos] = await Promise.all([
       loadHoleSignConfig(projectId),
       loadLogosForProject(projectId),
-      listUserLogos(project.created_by),
     ]);
 
     HS.projectName = project.name || '';
@@ -34,7 +32,7 @@ export async function init() {
     // brand-new hsCfg (still null, nothing saved yet) is trivially editable.
     HS.projectStatus = hsCfg?.status || 'draft';
     HS.shareToken = project.share_token || null;
-    HS.library = mergeLibraries(logos, sharedLogos);
+    HS.library = logos;
 
     // Customers can only edit while draft/needs_changes - once this design
     // is submitted/under review/approved, Gallery & export stays viewable

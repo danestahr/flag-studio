@@ -13,10 +13,10 @@
 // re-hydrate on a refresh) doesn't pay to re-fetch every template SVG again.
 import JSZip from 'jszip';
 import { pngBlobToPdfBlob as pngToPdfPt } from '../pdf-utils.js';
-import { S, mergeLibraries } from '../state.js';
+import { S } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
 import { getFlag, makeSvg, showGsTagVariant, resolveColors, preloadLogoAspects, withMasterText } from '../render.js';
-import { loadProject, loadFlagConfig, loadLogosForProject, listUserLogos } from '../supabase.js';
+import { loadProject, loadFlagConfig, loadLogosForProject } from '../supabase.js';
 import { buildOrderSummaryPdf, buildFlagSheetsPdf } from '../orderSummaryPdf.js';
 import { slug, mapWithConcurrency } from '../dom-utils.js';
 
@@ -307,10 +307,9 @@ export async function buildFlagsPrintZip(setStatus = () => {}) {
   setStatus('Adding logos…');
   // Independent fetches - parallelizing is a pure latency win over the old
   // one-at-a-time loop, since each logo download doesn't depend on the last.
-  // S.library mixes project-owned logos with this user's cross-project
-  // shared library (see mergeLibraries()) — only bundle logos actually
-  // placed in one of this project's current variations, so a logo that was
-  // used and later removed doesn't linger in the export.
+  // Only bundle logos actually placed in one of this project's current
+  // variations, so a logo that was used and later removed doesn't linger in
+  // the export.
   const usedLogoIds = new Set();
   S.variations.forEach(v => {
     (v.logos || []).forEach(l => usedLogoIds.add(l.logoId));
@@ -348,16 +347,15 @@ export async function buildFlagsPrintZip(setStatus = () => {}) {
 // already called `loadAllFlags(FLAGS)` (see module comment above).
 export async function hydrateFlagStateForProject(projectId) {
   const project = await loadProject(projectId);
-  const [logos, sharedLogos, flagCfg] = await Promise.all([
+  const [logos, flagCfg] = await Promise.all([
     loadLogosForProject(projectId),
-    listUserLogos(project.created_by),
     loadFlagConfig(projectId).catch(() => null),
   ]);
   S.projectId = project.id;
   S.projectName = project.name || '';
   S.shareToken = project.share_token || null;
   S.projectStatus = flagCfg?.status || 'draft';
-  S.library = mergeLibraries(logos, sharedLogos);
+  S.library = logos;
 
   await preloadLogoAspects(S.library);
   if (flagCfg) {

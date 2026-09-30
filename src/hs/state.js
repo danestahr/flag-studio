@@ -23,7 +23,7 @@ export const HS = {
   captionsEdited: defaultCaptionsEdited(),
   templateLogos: emptyTemplateLogos(),
   textLayers: [],
-  library: [], // project-owned logos plus this user's cross-project shared logos (user_logos), merged — see mergeLibraries() in ../state.js. A shared entry is tagged `shared: true`.
+  library: [], // this project's own logos (project_logos) — see loadLogosForProject()
   variations: [],
   defaults: [],      // selected default hole signs for this project
   activeVarId: null,

@@ -3,9 +3,8 @@ import './order.css'; // .flag-tmpl-* classes, reused by template-gallery.js
 import './icons.js';
 import { getSession } from './supabase.js';
 import { initHeaderForSession, injectHeaderCta } from './auth.js';
-import { listProjects, createProject, deleteProject, getMyRole, listUserLogos, uploadUserLogo, deleteUserLogo } from './supabase.js';
+import { listProjects, createProject, deleteProject, getMyRole } from './supabase.js';
 import { esc } from './dom-utils.js';
-import { logoThumbHtml, downloadLogo } from './media-utils.js';
 import { STATUS_LABEL, STATUS_GROUPS } from './status-labels.js';
 import { renderTemplateGallery } from './template-gallery.js';
 
@@ -56,11 +55,6 @@ function onSelectType(type) {
 if (session) {
   await initHeaderForSession(session);
   initProjectHub(session.user.id, { openGalleryOnLoad: !!browseParam });
-  // Not called for now — #sharedLogosSection is hidden (see index.html):
-  // cross-project logo sharing isn't needed yet, only cross-tool (flags <->
-  // hole signs) within one project. Left wired up, not removed, in case a
-  // real cross-project library is wanted later.
-  // initSharedLogos();
 } else {
   // Anonymous visitor: the header otherwise has nothing but the logo (the
   // signed-in equivalent, injectHeaderActions() in auth.js, adds the avatar/
@@ -293,89 +287,3 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
   loadPage({ reset: true });
 }
 
-// Logos reusable across all of this user's projects (see user_logos /
-// listUserLogos in supabase.js), managed from the project hub rather than
-// any single project's designer. Deleting one here is the only place it can
-// be deleted at all — see the modal copy below for why that's a real delete,
-// not a per-project removal.
-async function initSharedLogos() {
-  let sharedLogos = [];
-
-  function renderSharedLogos() {
-    const grid = document.getElementById('sharedLogosGrid');
-    if (!sharedLogos.length) { grid.innerHTML = '<div class="ci-logo-empty">No shared logos yet</div>'; return; }
-    grid.innerHTML = sharedLogos.map(l => `
-      <div class="ci-logo-item" id="sl-${l.id}">
-        ${logoThumbHtml(l.src, l.name)}
-        <div class="ci-logo-name">${esc(l.name)}</div>
-        ${l.uploading ? '' : `<button class="ci-logo-dl" title="Download" onclick="downloadSharedLogo('${l.id}')"><i class="fa-solid fa-download" aria-hidden="true"></i></button>`}
-        ${l.uploading ? '' : `<button class="ci-logo-del" title="Delete" onclick="window.openDeleteLogoModal('${l.id}')"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>`}
-      </div>`).join('');
-  }
-
-  window.downloadSharedLogo = function (id) {
-    const logo = sharedLogos.find(l => l.id === id);
-    if (logo) downloadLogo(logo.src, logo.name);
-  };
-
-  window.handleSharedLogoUpload = async function (e) {
-    const files = Array.from(e.target.files);
-    e.target.value = '';
-    for (const file of files) {
-      const tempId = 'tmp-' + Date.now();
-      sharedLogos.push({ id: tempId, name: file.name.replace(/\.[^.]+$/, ''), uploading: true });
-      renderSharedLogos();
-      try {
-        const logo = await uploadUserLogo(file);
-        const idx = sharedLogos.findIndex(l => l.id === tempId);
-        if (idx !== -1) sharedLogos[idx] = logo;
-      } catch (err) {
-        console.error('Shared logo upload failed', err);
-        sharedLogos = sharedLogos.filter(l => l.id !== tempId);
-      }
-      renderSharedLogos();
-    }
-  };
-  document.getElementById('sharedLogoFile').addEventListener('change', window.handleSharedLogoUpload);
-
-  // ── Delete shared logo modal ───────────────────────────────
-  const deleteLogoModal = document.getElementById('deleteLogoModal');
-  const deleteLogoConfirmBtn = document.getElementById('deleteLogoConfirmBtn');
-  let deleteLogoTargetId = null;
-
-  window.openDeleteLogoModal = function (id) {
-    deleteLogoTargetId = id;
-    deleteLogoModal.style.display = 'flex';
-  };
-
-  window.closeDeleteLogoModal = function () {
-    deleteLogoModal.style.display = 'none';
-    deleteLogoTargetId = null;
-  };
-
-  window.confirmDeleteLogo = async function () {
-    if (!deleteLogoTargetId) return;
-    const logo = sharedLogos.find(l => l.id === deleteLogoTargetId);
-    deleteLogoConfirmBtn.disabled = true;
-    deleteLogoConfirmBtn.textContent = 'Deleting…';
-    try {
-      if (logo?.storagePath) await deleteUserLogo(logo.storagePath, logo.id);
-      sharedLogos = sharedLogos.filter(l => l.id !== deleteLogoTargetId);
-      renderSharedLogos();
-      window.closeDeleteLogoModal();
-    } catch (err) {
-      console.error(err);
-      alert('Could not delete logo.');
-    } finally {
-      deleteLogoConfirmBtn.disabled = false;
-      deleteLogoConfirmBtn.textContent = 'Delete';
-    }
-  };
-
-  try {
-    sharedLogos = await listUserLogos(session.user.id);
-  } catch (err) {
-    console.error('Could not load shared logos', err);
-  }
-  renderSharedLogos();
-}

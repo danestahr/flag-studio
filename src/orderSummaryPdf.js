@@ -156,17 +156,42 @@ function drawRow(cursor, label, value, { labelFont, valueFont, size = 11 }) {
 function drawRowPair(cursor, entries, { labelFont, valueFont, size = 10 }) {
   const colW = (W - M * 2) / 2;
   const labelW = 66;
-  cursor.ensureSpace(size * 1.5 + 4);
-  const page = cursor.current();
-  const y = cursor.getY();
-  entries.forEach((entry, i) => {
-    if (!entry) return;
+  const maxValW = colW - labelW - 8; // leave a gap before the next column
+
+  // word-wrap each entry's value within its own column so a long value
+  // (e.g. a long event name) can't run into the next column's label
+  const wrapped = entries.map(entry => {
+    if (!entry) return null;
     const [label, value] = entry;
-    const x = M + i * colW;
-    page.drawText(label + ':', { x, y, size, font: labelFont, color: GRAY });
-    page.drawText(String(value || '—'), { x: x + labelW, y, size, font: valueFont, color: BLACK });
+    const str = String(value || '—');
+    const words = str.split(' ');
+    const lines = [];
+    let line = '';
+    for (const word of words) {
+      const test = line ? line + ' ' + word : word;
+      if (valueFont.widthOfTextAtSize(test, size) > maxValW && line) {
+        lines.push(line); line = word;
+      } else { line = test; }
+    }
+    if (line) lines.push(line);
+    return { label, lines };
   });
-  cursor.setY(y - size * 1.5 - 2);
+
+  const maxLines = Math.max(1, ...wrapped.filter(Boolean).map(w => w.lines.length));
+  cursor.ensureSpace(maxLines * size * 1.5 + 4);
+  const page = cursor.current();
+  const y0 = cursor.getY();
+  wrapped.forEach((w, i) => {
+    if (!w) return;
+    const x = M + i * colW;
+    let y = y0;
+    page.drawText(w.label + ':', { x, y, size, font: labelFont, color: GRAY });
+    for (const l of w.lines) {
+      page.drawText(l, { x: x + labelW, y, size, font: valueFont, color: BLACK });
+      y -= size * 1.5;
+    }
+  });
+  cursor.setY(y0 - maxLines * size * 1.5 - 2);
 }
 
 // Mirrors the wrapping in drawColorSwatchLine so callers can reserve the
