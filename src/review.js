@@ -4,7 +4,7 @@ import { FLAGS } from './data.js';
 import { HS_DEFAULT_TEMPLATES } from './hole-sign-data.js';
 import { getFlag, renderInto, preloadLogoAspects, withMasterText, normaliseLogos, resolveColors } from './render.js';
 import { loadAllFlags } from './svgLoader.js';
-import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase, createReviewClient, clientApproveDesignProof, clientRejectDesignProof, sendReviewDecision, uploadFeedbackLogo, loadOrderIntake } from './supabase.js';
+import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase, createReviewClient, clientApproveDesignProof, clientRejectDesignProof, sendReviewDecision, sendApprovalConfirmation, uploadFeedbackLogo, loadOrderIntake } from './supabase.js';
 import { renderHoleSignInto } from './hole-sign-render.js';
 import { esc } from './dom-utils.js';
 
@@ -212,7 +212,7 @@ function collapseCard(card, v) {
   card.innerHTML = `
     <div class="rv-collapsed-row">
       <div class="rv-collapsed-thumb" id="rvct-${v.id}"></div>
-      <div class="rv-vname">${esc(v.name)}</div>
+      <div class="rv-vname">${esc(v.name)} <span class="rv-qty">&times; ${parseInt(v.qty, 10) || 1}</span></div>
       <span class="rv-status-badge approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approved</span>
       <button class="rv-unapprove-btn" id="rvunapprove-${v.id}">Unapprove</button>
     </div>`;
@@ -303,7 +303,7 @@ function collapseHsCard(card, v) {
   card.innerHTML = `
     <div class="rv-collapsed-row">
       <div class="hs-rv-thumb" id="hscthumb-${v.id}"></div>
-      <div class="rv-vname">${esc(v.name)}</div>
+      <div class="rv-vname">${esc(v.name)} <span class="rv-qty">&times; ${parseInt(v.qty, 10) || 1}</span></div>
       <span class="rv-status-badge approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approved</span>
       <button class="rv-unapprove-btn" id="hsunapprove-${v.id}">Unapprove</button>
     </div>`;
@@ -362,6 +362,7 @@ function renderPage(project) {
   const { hasFlags, hasHoleSigns, allFlagsLocked, allHsLocked, allLocked, allFlagsApproved, allHsApproved, allApproved } = computeApprovalState();
   const showTabs = hasFlags && hasHoleSigns;
   const n = S.variations.length;
+  const flagTotalQty = S.variations.reduce((sum, v) => sum + (parseInt(v.qty, 10) || 1), 0);
   const hsTotalQty = hsVariations.reduce((sum, v) => sum + (parseInt(v.qty, 10) || 1), 0);
 
   // Keep activeTab valid for whatever this project actually has — falls
@@ -464,6 +465,7 @@ function renderPage(project) {
           ${allFlagsApproved ? '' : `
           <div class="rv-summary" id="rvSummary">
             <div class="rv-summary-left">
+              <div class="rv-summary-total">${n} variation${n === 1 ? '' : 's'} &middot; ${flagTotalQty} flag${flagTotalQty === 1 ? '' : 's'} total</div>
               <div class="rv-summary-counts">
                 <span class="rv-count approved" id="rcApproved">0 approved</span>
                 <span class="rv-count needs-edits" id="rcEdits">0 needs edits</span>
@@ -580,7 +582,7 @@ function buildCard(v, fb) {
 
   card.innerHTML = `
     <div class="rv-card-header">
-      <div class="rv-vname">${esc(v.name)}</div>
+      <div class="rv-vname">${esc(v.name)} <span class="rv-qty">&times; ${parseInt(v.qty, 10) || 1}</span></div>
       ${statusTile}
     </div>
     ${reApprovalHint}${previewHtml}
@@ -935,7 +937,7 @@ function buildHsCard(v, fb) {
 
   card.innerHTML = `
     <div class="rv-card-header">
-      <div class="rv-vname">${esc(v.name)}</div>
+      <div class="rv-vname">${esc(v.name)} <span class="rv-qty">&times; ${parseInt(v.qty, 10) || 1}</span></div>
       ${statusTile}
     </div>
     ${reApprovalHint}
@@ -1162,6 +1164,7 @@ async function syncProofStatus(kind, reviewerName, reviewerEmail, generalNote) {
       }
       sendReviewDecision({ decision: 'approved', projectName, projectId, projectUrl, productType: kind, reviewerName: reviewerName || undefined, reviewerEmail: reviewerEmail || undefined, generalNote: generalNote || undefined })
         .catch(err => console.error('sendReviewDecision failed', err));
+      sendApproverConfirmation(kind).catch(err => console.error('sendApprovalConfirmation failed', err));
       return 'approved';
     }
     const note = `${reviewerName ? reviewerName + ': ' : ''}See per-variation feedback for details.`;
@@ -1178,6 +1181,35 @@ async function syncProofStatus(kind, reviewerName, reviewerEmail, generalNote) {
     console.error('Failed to update proof status:', err);
     throw err;
   }
+}
+
+// Confirmation email to the approver (contact, shipping, previews, qty).
+// Recipient/address/qty are resolved server-side; we only supply the rendered
+// previews, which can only be produced in the browser. Fire-and-forget: a
+// failure here must never affect the approval itself. Hole signs are sent
+// without previews.
+async function sendApproverConfirmation(kind) {
+  const previews = {};
+  if (kind === 'flags') {
+    try {
+      const { buildVariationSheetData, sameSidesOf } = await import('./flags/print-export.js');
+      const toB64 = async (u8) => {
+        let bin = '';
+        for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+        return btoa(bin);
+      };
+      for (const v of S.variations) {
+        const d = await buildVariationSheetData(v, 480);
+        const imgs = [];
+        if (d.frontPng) imgs.push({ label: 'Front', base64: await toB64(d.frontPng) });
+        if (d.backPng && !sameSidesOf(v)) imgs.push({ label: 'Back', base64: await toB64(d.backPng) });
+        previews[v.id] = imgs;
+      }
+    } catch (err) {
+      console.warn('Could not render approval email previews:', err);
+    }
+  }
+  await sendApprovalConfirmation({ projectId, productType: kind, previews });
 }
 
 function renderSuccessScreen() {

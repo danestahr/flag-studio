@@ -258,7 +258,7 @@ const PRINT_EXPORT_CONCURRENCY = 4;
 
 // Front/back thumbnails + style/colour/qty for one variation - the shared
 // input to both the Order Summary PDF and the customer-facing Flag Sheets PDF.
-async function buildVariationSheetData(v, width = 800) {
+export async function buildVariationSheetData(v, width = 800) {
   const frontLogos = v.logos || v.assignment || [];
   const mirrored = sameSidesOf(v);
   const backLogos  = mirrored ? frontLogos : (v.backLogos || v.backAssignment || []);

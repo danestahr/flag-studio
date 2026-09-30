@@ -766,6 +766,12 @@ export async function sendReviewDecision(payload) {
   return callEdgeFunction('send-review-decision', payload);
 }
 
+// Approver-facing confirmation (contact, shipping, approved previews) sent
+// after a design is approved - see send-approval-confirmation edge function.
+export async function sendApprovalConfirmation(payload) {
+  return callEdgeFunction('send-approval-confirmation', payload);
+}
+
 export async function sendPrestigeOrder(projectId, projectName, zipBlob) {
   const params = new URLSearchParams({ projectId, projectName });
   const url = `${SUPABASE_URL}/functions/v1/send-prestige-order?${params}`;

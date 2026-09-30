@@ -934,3 +934,10 @@ header {
   background: var(--gray-100);
   color: var(--gray-600);
 }
+
+.rv-qty {
+  margin-left: 6px;
+  font-weight: 500;
+  font-size: 0.85em;
+  color: var(--gray-500);
+}
