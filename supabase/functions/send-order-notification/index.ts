@@ -1,7 +1,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { esc, wrapEmailHtml, ctaButton, linkFallback, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
-// Internal notification (dane@danestahr.com) fired when a customer submits an
+// Internal notification (design@gsds.space) fired when a customer submits an
 // order via /orders — see send-review-decision for the sibling internal
 // notification fired on client proof decisions. Deliberately a separate
 // function from send-order-confirmation (which emails the customer) rather
@@ -15,7 +15,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const FROM_EMAIL = 'design@gsds.space';
 const FROM_NAME = 'Design Studio';
-const TO_EMAIL = 'dane@danestahr.com';
+const TO_EMAIL = 'design@gsds.space';
 const TO_NAME = 'Dane';
 
 const CORS = {

@@ -722,6 +722,11 @@ window.refreshProjectStatus = async function (productType) {
 // enough that a separate explain-and-confirm step would be redundant.
 window.confirmMarkSentToPrint = async function (productType) {
   const status = cfgFor(productType)?.status || 'draft';
+  const resend = status === 'sent_to_print';
+  const msg = productType === 'flags'
+    ? `${resend ? 'Resend' : 'Send'} this order to Prestige Flag for print? This emails the print files to the printer.`
+    : 'Mark this design as sent to print?';
+  if (!window.confirm(msg)) return;
   setReviewPanelStatus(productType, '');
   let prestigeSent = false;
   try {

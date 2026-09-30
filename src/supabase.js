@@ -723,13 +723,13 @@ export async function sendOrderConfirmation(payload) {
   return callEdgeFunction('send-order-confirmation', payload);
 }
 
-// Internal notification (dane@danestahr.com) fired when a customer submits an
+// Internal notification (design@gsds.space) fired when a customer submits an
 // order via /orders - see send-order-notification edge function.
 export async function sendOrderNotification(payload) {
   return callEdgeFunction('send-order-notification', payload);
 }
 
-// Internal notification (dane@danestahr.com) fired when a customer uploads
+// Internal notification (design@gsds.space) fired when a customer uploads
 // logos to their project via the public /upload-logos page — see
 // send-logo-upload-notification edge function.
 export async function sendLogoUploadNotification(payload) {
@@ -760,7 +760,7 @@ export async function sendProofReady(payload) {
   return callEdgeFunction('send-proof-ready', payload);
 }
 
-// Internal notification (dane@danestahr.com) fired when a client acts on a
+// Internal notification (design@gsds.space) fired when a client acts on a
 // proof from review.html - see send-review-decision edge function.
 export async function sendReviewDecision(payload) {
   return callEdgeFunction('send-review-decision', payload);

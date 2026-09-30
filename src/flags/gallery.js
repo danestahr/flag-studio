@@ -117,6 +117,7 @@ function setupGallery() {
 window.sendToPrestige = async function () {
   if (!S.variations.length) { alert('No variations to export.'); return; }
   if (!S.projectId) { alert('Save your project first.'); return; }
+  if (!confirm('Send this order to Prestige Flag for print? This emails the print files to the printer.')) return;
   const btn = document.querySelector('[onclick="sendToPrestige()"]');
   const origLabel = btn?.innerHTML;
   if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }

@@ -1,7 +1,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { esc, wrapEmailHtml, ctaButton, linkFallback, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
-// Internal notification (dane@danestahr.com) fired when a customer uploads
+// Internal notification (design@gsds.space) fired when a customer uploads
 // logos to their project via the public /upload-logos page after their order
 // has already been submitted — see send-order-notification for the sibling
 // internal notification fired at order-submit time. Kept as its own function
@@ -16,7 +16,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const FROM_EMAIL = 'design@gsds.space';
 const FROM_NAME = 'Design Studio';
-const TO_EMAIL = 'dane@danestahr.com';
+const TO_EMAIL = 'design@gsds.space';
 const TO_NAME = 'Dane';
 
 const CORS = {

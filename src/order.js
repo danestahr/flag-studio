@@ -1334,7 +1334,7 @@ window.orderSubmit = async function () {
       if (O.submitted) render();
     });
 
-    // Internal notification (dane@danestahr.com) - best-effort like the
+    // Internal notification (design@gsds.space) - best-effort like the
     // customer confirmation above; never blocks the order itself.
     sendOrderNotification({
       contactName: O.contactName,
