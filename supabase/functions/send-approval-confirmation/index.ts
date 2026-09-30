@@ -89,7 +89,9 @@ serve(async (req) => {
     const productLabel = productType === 'flags' ? 'Flags' : 'Hole Signs';
     const approverName = cfg.approved_by_name || contact.name || '';
 
-    const variations: any[] = Array.isArray(cfg.variations) ? cfg.variations : [];
+    // flag_config.variations is { items, layout, ... }; older rows and
+    // hole_sign_config store a bare array (same handling as review.js).
+    const variations: any[] = Array.isArray(cfg.variations) ? cfg.variations : (cfg.variations?.items ?? []);
     const rows = variations.map((v) => ({
       id: String(v.id), name: String(v.name ?? 'Untitled'), qty: parseInt(v.qty, 10) || 1,
     }));
