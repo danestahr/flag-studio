@@ -117,7 +117,7 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     const creatorName = [p.profiles?.first_name, p.profiles?.last_name].filter(Boolean).join(' ');
     const isStaffCreated = p.profiles?.role === 'staff' || p.profiles?.role === 'admin';
     const creator = isStaffCreated
-      ? `staff (${creatorName || p.profiles?.email || 'unknown'})`
+      ? (creatorName || p.profiles?.email || 'unknown')
       : creatorName || p.profiles?.email || p.customer_info?.contact_email || p.order_intakes?.[0]?.contact_email || null;
     // An Untitled project (no name yet) never made it past the "what
     // tournament is this for" step (gallery-side-panel.js's

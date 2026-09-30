@@ -47,6 +47,11 @@ const CA_PROVINCES = [
 
 // ── State ──────────────────────────────────────────────────
 const O = {
+  // Beta notice shown before everything else — see renderBetaScreen(). Cleared
+  // once acknowledged; a restored draft skips it (see loadDraft).
+  betaStep: true,
+  ackBeta: false,
+  betaError: '',
   // Sync-from-GolfStatus pre-step, shown before Step 1 — see renderSyncScreen().
   // Skipping (or a successful/failed sync) sets this false and never shows it again.
   syncStep: true,
@@ -122,7 +127,7 @@ const DRAFT_FIELDS = [
   'addressLine1', 'addressLine2', 'city', 'stateProvince', 'postalCode',
   'flagStyle', 'flagColors', 'gsTag', 'gsTagMode', 'flagSetup', 'flagQty', 'flagQtyCustom', 'designNotes',
   'frontDesignNotes', 'backDesignNotes',
-  'ackDeadline',
+  'ackDeadline', 'ackBeta',
   'syncedDominantColors', 'syncedColorApplied',
 ];
 
@@ -143,6 +148,9 @@ function loadDraft() {
     // A restored draft has already been through (or skipped) the sync
     // pre-step — never show it again once there's progress to resume.
     O.syncStep = false;
+    // Only skip the beta notice if this draft already acknowledged it (drafts
+    // saved before the notice existed don't have the flag, so they see it once).
+    O.betaStep = !O.ackBeta;
     // Border color toggle is hidden right now (see SHOW_BORDER_COLOR_TOGGLE)
     // — drop any independent border color a draft saved before it was
     // hidden, so border always resolves back to matching the secondary color.
@@ -330,8 +338,9 @@ function renderProgressDots() {
   const stepNums = [1, 2, 3, 4, 5];
   return stepNums.map((n) => {
     const label = STEP_HEADERS[n].title;
-    const done = !O.syncStep && n < O.step;
-    const active = !O.syncStep && n === O.step;
+    const done = !O.betaStep && !O.syncStep && n < O.step;
+    // The sync pre-step is part of step 1 (Event Details), so highlight it there.
+    const active = !O.betaStep && n === (O.syncStep ? 1 : O.step);
     const cls = done ? 'op-step done' : active ? 'op-step active' : 'op-step';
     const lineCls = done ? 'op-line done' : 'op-line';
     const dot = done ? '<i class="fa-solid fa-check" aria-hidden="true"></i>' : String(n);
@@ -344,6 +353,16 @@ function renderProgressDots() {
 function render() {
   const app = document.getElementById('orderApp');
   if (!app) return;
+
+  if (O.betaStep) {
+    app.innerHTML = `
+      <div class="order-wrap">
+        <div class="order-progress">${renderProgressDots()}</div>
+        ${renderStepHeader("Let's Get Started", "A quick heads-up about the GolfStatus Design Studio.")}
+        ${renderBetaScreen()}
+      </div>`;
+    return;
+  }
 
   if (O.syncStep) {
     app.innerHTML = `
@@ -404,6 +423,34 @@ function renderNav() {
     ${nextBtn}
   </div>`;
 }
+
+// ── Beta notice ──────────────────────────────────────────────
+// First screen of the flow. Uses the same .ack-item checkbox as Step 5; the
+// acknowledgement is saved with the order draft, and the draft is cleared on
+// submit, so every new order sees this screen once.
+function renderBetaScreen() {
+  const cls = 'ack-item' + (O.ackBeta ? ' checked' : '') + (O.betaError ? ' error' : '');
+  const checkCls = 'ack-check' + (O.ackBeta ? ' checked' : '');
+  return `
+    <div class="order-card">
+      <div class="${cls}" id="f-ackBeta" onclick="window.toggleAck('beta')">
+        <div class="${checkCls}"></div>
+        <div class="ack-text">I understand that this is a beta product and is being updated on an ongoing basis.</div>
+      </div>
+      ${O.betaError ? `<div class="form-error">${esc(O.betaError)}</div>` : ''}
+      <div class="order-nav">
+        <button type="button" class="btn primary" onclick="window.betaContinue()" style="flex:1;justify-content:center">Continue</button>
+      </div>
+    </div>`;
+}
+
+window.betaContinue = function () {
+  if (!O.ackBeta) { O.betaError = 'Please acknowledge to continue.'; render(); return; }
+  O.betaError = '';
+  O.betaStep = false;
+  render();
+  window.scrollTo(0, 0);
+};
 
 // ── Sync from GolfStatus ─────────────────────────────────────
 // Shown once, before Step 1. Anonymous like the rest of this flow — no
@@ -1336,6 +1383,7 @@ window.orderSubmit = async function () {
 
 window.toggleAck = function (which) {
   if (which === 'deadline') O.ackDeadline = !O.ackDeadline;
+  if (which === 'beta') { O.ackBeta = !O.ackBeta; O.betaError = ''; }
   O.errors = {};
   render();
 };

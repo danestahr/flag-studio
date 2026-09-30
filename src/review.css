@@ -599,13 +599,34 @@ header {
 }
 
 .rv-qp-styles {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
 
+/* Flag swap state — reuses the logo swap row look (.rv-qp-logo-*). */
+.rv-qp-styles.rv-qp-styles-swap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.rv-qp-styles-swap .rv-qp-logo-add-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rv-qp-flag-thumb {
+  flex: 0 1 72px;
+  min-width: 0;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 6px;
+}
+.rv-qp-flag-thumb.rv-qp-logo-new { border-color: #16a34a; }
+
 .rv-qp-style-opt {
-  width: 72px;
+  min-width: 0;
   cursor: pointer;
   border: 1.5px solid var(--gray-200);
   border-radius: 6px;

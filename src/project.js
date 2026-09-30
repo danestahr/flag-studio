@@ -121,7 +121,7 @@ async function init() {
     const creatorName = [_project.profiles?.first_name, _project.profiles?.last_name].filter(Boolean).join(' ');
     const isStaffCreated = _project.profiles?.role === 'staff' || _project.profiles?.role === 'admin';
     const creator = isStaffCreated
-      ? `staff (${creatorName || _project.profiles?.email || 'unknown'})`
+      ? (creatorName || _project.profiles?.email || 'unknown')
       : creatorName || _project.profiles?.email || _project.customer_info?.contact_email || _intake?.contact_email;
     const creatorEl = document.getElementById('projectCreatorInfo');
     if (creatorEl && creator) {

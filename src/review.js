@@ -649,15 +649,15 @@ function quickPicksHtml(prefix, id) {
   return `
     <div class="rv-quickpicks" id="${prefix}qp-${id}">
       <div class="rv-qp-row">
-        <div class="rv-qp-label">Prefer a different ${prefix === 'r' ? 'flag style' : 'template'}?</div>
+        <div class="rv-qp-label">${prefix === 'r' ? 'Flags' : 'Template'}</div>
         <div class="rv-qp-styles" id="${prefix}qpStyles-${id}"></div>
       </div>
       <div class="rv-qp-row">
-        <div class="rv-qp-label">Want different colors?</div>
+        <div class="rv-qp-label">Color</div>
         <div class="rv-qp-colors" id="${prefix}qpColors-${id}"></div>
       </div>
       <div class="rv-qp-row">
-        <div class="rv-qp-label">Need a different logo?</div>
+        <div class="rv-qp-label">Logos</div>
         <div class="rv-qp-logo-list" id="${prefix}qpLogoList-${id}"></div>
       </div>
     </div>`;
@@ -827,30 +827,67 @@ function wireFlagQuickPicks(card, v) {
   const requestedFlagId = localFeedback[v.id]?.requestedFlagId;
   const initialFlag = FLAGS.find(f => f.id === requestedFlagId) || getVarFlag(v);
 
-  FLAGS.forEach(f => {
-    const opt = document.createElement('div');
-    opt.className = 'rv-qp-style-opt' + (f.id === requestedFlagId ? ' selected' : '');
-    opt.dataset.flagId = f.id;
+  const currentFlag = getVarFlag(v);
+  const flagThumb = (f, extraCls = '') => {
     const thumb = document.createElement('div');
-    thumb.className = 'rv-qp-style-thumb';
-    opt.appendChild(thumb);
-    const label = document.createElement('div');
-    label.className = 'rv-qp-style-name';
-    label.textContent = f.name;
-    opt.appendChild(label);
+    thumb.className = 'rv-qp-style-thumb rv-qp-flag-thumb' + extraCls;
     renderInto(thumb, [], 'front', false, f, getVarColors(v));
-    opt.addEventListener('click', () => {
-      stylesEl.querySelectorAll('.rv-qp-style-opt.selected').forEach(el => el.classList.remove('selected'));
-      opt.classList.add('selected');
-      setRequested({ requestedFlagId: f.id });
-      // Different flag styles carry different color zones (e.g. Bristol's
-      // primary/secondary/border vs. Plain's primary only) — re-render for
-      // the newly picked flag's own zones rather than leaving whatever the
-      // previous style's rows happened to be.
-      renderColorZoneRows(colorsEl, f, v);
+    return thumb;
+  };
+
+  // Same shape as the logo swap rows: nothing picked yet shows the grid of
+  // alternatives; once one is picked the grid collapses to
+  // current → swap icon → new (green) plus an X to undo, and the colors
+  // section below follows whichever flag is in effect.
+  const renderStyles = () => {
+    stylesEl.innerHTML = '';
+    const pickedId = localFeedback[v.id]?.requestedFlagId;
+    const picked = FLAGS.find(f => f.id === pickedId);
+    stylesEl.classList.toggle('rv-qp-styles-swap', !!picked);
+    if (picked) {
+      stylesEl.append(
+        flagThumb(currentFlag),
+        Object.assign(document.createElement('i'), { className: 'fa-solid fa-right-left rv-qp-swap-icon' }),
+        flagThumb(picked, ' rv-qp-logo-new'),
+      );
+      const name = document.createElement('span');
+      name.className = 'rv-qp-logo-add-label';
+      name.textContent = picked.name;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'rv-qp-logo-remove-btn';
+      remove.title = 'Remove';
+      remove.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+      remove.addEventListener('click', () => {
+        setRequested({ requestedFlagId: undefined });
+        renderStyles();
+        renderColorZoneRows(colorsEl, currentFlag, v);
+      });
+      stylesEl.append(name, remove);
+      return;
+    }
+    FLAGS.filter(f => f.id !== currentFlag.id).forEach(f => {
+      const opt = document.createElement('div');
+      opt.className = 'rv-qp-style-opt';
+      opt.dataset.flagId = f.id;
+      opt.appendChild(flagThumb(f));
+      const label = document.createElement('div');
+      label.className = 'rv-qp-style-name';
+      label.textContent = f.name;
+      opt.appendChild(label);
+      opt.addEventListener('click', () => {
+        setRequested({ requestedFlagId: f.id });
+        renderStyles();
+        // Different flag styles carry different color zones (e.g. Bristol's
+        // primary/secondary/border vs. Plain's primary only) — re-render for
+        // the newly picked flag's own zones rather than leaving whatever the
+        // previous style's rows happened to be.
+        renderColorZoneRows(colorsEl, f, v);
+      });
+      stylesEl.appendChild(opt);
     });
-    stylesEl.appendChild(opt);
-  });
+  };
+  renderStyles();
 
   renderColorZoneRows(colorsEl, initialFlag, v);
 }
