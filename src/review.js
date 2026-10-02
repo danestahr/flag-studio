@@ -207,17 +207,28 @@ function updateSummary() {
 
 // ── Flag card helpers ─────────────────────────────────────────────────────────
 
+// Renders both faces of a flag variation. When "same front & back" is on
+// (the default) the back mirrors the front's logos/text, matching gallery.js.
+function renderFlagFaces(frontEl, backEl, v) {
+  const frontLogos = v.logos || v.assignment || [];
+  const mirrored = v.sameLogoOnBothSides ?? true;
+  const backLogos = mirrored ? frontLogos : (v.backLogos || v.backAssignment || []);
+  const backText = mirrored ? (v.textLayers || []) : (v.backTextLayers || []);
+  if (frontEl) renderInto(frontEl, frontLogos, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
+  if (backEl) renderInto(backEl, backLogos, 'back', mirrored, getVarFlag(v), getVarColors(v), [...(S.textLayers || []), ...backText], getVarGsTagOpts(v), S.imageLayers || []);
+}
+
 function collapseCard(card, v) {
   card.className = 'rv-card rv-approved rv-card-collapsed';
   card.innerHTML = `
     <div class="rv-collapsed-row">
       <div class="rv-collapsed-thumb" id="rvct-${v.id}"></div>
+      <div class="rv-collapsed-thumb" id="rvct-back-${v.id}"></div>
       <div class="rv-vname">${esc(v.name)} <span class="rv-qty">&times; ${parseInt(v.qty, 10) || 1}</span></div>
       <span class="rv-status-badge approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approved</span>
       <button class="rv-unapprove-btn" id="rvunapprove-${v.id}">Unapprove</button>
     </div>`;
-  const thumbEl = card.querySelector('#rvct-' + v.id);
-  if (thumbEl) renderInto(thumbEl, v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
+  renderFlagFaces(card.querySelector('#rvct-' + v.id), card.querySelector('#rvct-back-' + v.id), v);
   card.querySelector('#rvunapprove-' + v.id)?.addEventListener('click', () => unapproveVariation(localFeedback, v.id));
 }
 
@@ -448,17 +459,16 @@ function renderPage(project) {
 
   root.innerHTML = `
     <div class="rv-root">
-      <div class="rv-hero">
+      ${activeApproved ? '' : `<div class="rv-hero">
         <div class="rv-hero-tag">Design Review</div>
         <div class="rv-project">${esc(project.name) || 'Review'}</div>
         <div class="rv-meta">${meta}</div>
-      </div>
+      </div>`}
       ${tabsHtml}
-      <div class="rv-info-section">
-        <div class="rv-instructions${instructionsClass}">${activeApproved ? '<span class="rv-instructions-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>' : ''}${instructionsText}</div>
-        ${approvedByHtml}
+      ${activeApproved ? `${confirmCardHtml('Approved', 'This design will be sent to print.')}${approvedByHtml}` : `<div class="rv-info-section">
+        <div class="rv-instructions${instructionsClass}">${instructionsText}</div>
         ${nameRow}
-      </div>
+      </div>`}
 
       ${hasFlags ? `
         <div class="rv-tab-panel" data-tab="flags"${showTabs && activeTab !== 'flags' ? ' hidden' : ''}>
@@ -548,7 +558,6 @@ function buildCard(v, fb) {
   // their request until the designer resolves it.
   const isLocked = submittedFlags.has(v.id) && fb?.status === 'needs_edits' && !fb?.resolved;
 
-  const hasBack = (v.backLogos?.length > 0) || Object.keys(v.backAssignment || {}).length > 0;
   card.className = 'rv-card' + (effectiveStatus === 'needs_edits' ? ' rv-needs-edits' : '') + (isLocked ? ' rv-locked' : '');
 
   const reApprovalHint = (fb?.status === 'needs_edits' && fb?.resolved)
@@ -558,12 +567,10 @@ function buildCard(v, fb) {
     ? '<span class="rv-status-tile needs-edits">Needs edits</span>'
     : '';
 
-  const previewHtml = hasBack
-    ? `<div class="rv-dual-preview">
+  const previewHtml = `<div class="rv-dual-preview">
          <div><div class="rv-face-label">Front</div><div class="rv-preview" id="rvp-front-${v.id}"></div></div>
          <div><div class="rv-face-label">Back</div><div class="rv-preview" id="rvp-back-${v.id}"></div></div>
-       </div>`
-    : `<div class="rv-preview" id="rvp-${v.id}"></div>`;
+       </div>`;
 
   const actionsHtml = isLocked
     ? '<div class="rv-locked-msg">Edit request submitted. The designer has been notified and will update this design.</div>'
@@ -589,12 +596,7 @@ function buildCard(v, fb) {
     ${lockedNote}
     ${actionsHtml}`;
 
-  if (hasBack) {
-    renderInto(card.querySelector('#rvp-front-' + v.id), v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
-    renderInto(card.querySelector('#rvp-back-'  + v.id), v.backLogos || v.backAssignment || [], 'back', false, getVarFlag(v), getVarColors(v), [...(S.textLayers || []), ...(v.backTextLayers || [])], getVarGsTagOpts(v), S.imageLayers || []);
-  } else {
-    renderInto(card.querySelector('#rvp-' + v.id), v.logos || v.assignment, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
-  }
+  renderFlagFaces(card.querySelector('#rvp-front-' + v.id), card.querySelector('#rvp-back-' + v.id), v);
 
   if (!isLocked) {
     // wireFlagQuickPicks renders one full flag SVG per template (see below) —
@@ -1121,9 +1123,18 @@ window.submitProductReview = async function (kind) {
     return;
   }
 
-  const hasDecisions = Object.values(map).some(fb => fb.status);
-  if (!hasDecisions) {
-    alert('Please approve or request edits on at least one variation before submitting.');
+  // Every variation needs a decision - a partial review never reaches staff
+  // (no status transition, no email), so don't let it through. A variation
+  // whose earlier edit request was resolved counts as undecided until the
+  // reviewer approves it again (getEffectiveStatus).
+  const allVariations = isFlags ? S.variations : hsVariations;
+  const undecided = allVariations.filter(v => {
+    const st = getEffectiveStatus(map[v.id]);
+    return st !== 'approved' && st !== 'needs_edits';
+  });
+  if (undecided.length) {
+    const names = undecided.map(v => v.name).filter(Boolean).slice(0, 5).join(', ');
+    alert(`Please approve or request edits on every variation before submitting. Still waiting on ${undecided.length} of ${allVariations.length}${names ? `: ${names}` : ''}.`);
     return;
   }
 
@@ -1183,10 +1194,22 @@ async function syncProofStatus(kind, reviewerName, reviewerEmail, generalNote) {
   const map = kind === 'flags' ? localFeedback : localHsFeedback;
   const statuses = variations.map(v => map[v.id]?.status).filter(Boolean);
   const allDecided = variations.length > 0 && statuses.length === variations.length;
-  if (!allDecided) return 'partial';
+  const projectUrl = `${window.location.origin}/project?project=${projectId}`;
+  const notifyChangesRequested = (note) =>
+    sendReviewDecision({ decision: 'changes_requested', projectName, projectId, projectUrl, productType: kind, note, reviewerName: reviewerName || undefined, reviewerEmail: reviewerEmail || undefined, generalNote: generalNote || undefined })
+      .catch(err => console.error('sendReviewDecision failed', err));
+
+  if (!allDecided) {
+    // No status transition yet, but staff still need to hear about edit
+    // requests - otherwise they only show up in the designer's banner.
+    const editCount = statuses.filter(s => s === 'needs_edits').length;
+    if (editCount > 0) {
+      notifyChangesRequested(`Partial submission: ${statuses.length} of ${variations.length} variations decided, ${editCount} with edit requests. See per-variation feedback for details.`);
+    }
+    return 'partial';
+  }
 
   const allApprovedNow = statuses.every(s => s === 'approved');
-  const projectUrl = `${window.location.origin}/project?project=${projectId}`;
   try {
     if (allApprovedNow) {
       await clientApproveDesignProof(projectId, kind, reviewerName, reviewerEmail, reviewClient);
@@ -1206,13 +1229,15 @@ async function syncProofStatus(kind, reviewerName, reviewerEmail, generalNote) {
     }
     const note = `${reviewerName ? reviewerName + ': ' : ''}See per-variation feedback for details.`;
     await clientRejectDesignProof(projectId, kind, note, reviewClient);
-    sendReviewDecision({ decision: 'changes_requested', projectName, projectId, projectUrl, productType: kind, note, reviewerName: reviewerName || undefined, reviewerEmail: reviewerEmail || undefined, generalNote: generalNote || undefined })
-      .catch(err => console.error('sendReviewDecision failed', err));
+    notifyChangesRequested(note);
     return 'rejected';
   } catch (err) {
     const msg = err?.message || '';
     if (msg.includes('cannot approve') || msg.includes('cannot reject')) {
       console.warn('Proof status already transitioned, skipping:', msg);
+      // The feedback rows were saved even though the status didn't move
+      // (e.g. design not in proof_sent), so staff still get the email.
+      if (!allApprovedNow) notifyChangesRequested(`${reviewerName ? reviewerName + ': ' : ''}See per-variation feedback for details.`);
       return allApprovedNow ? 'approved' : 'rejected';
     }
     console.error('Failed to update proof status:', err);
@@ -1229,7 +1254,7 @@ async function sendApproverConfirmation(kind) {
   const previews = {};
   if (kind === 'flags') {
     try {
-      const { buildVariationSheetData, sameSidesOf } = await import('./flags/print-export.js');
+      const { buildVariationSheetData } = await import('./flags/print-export.js');
       const toB64 = async (u8) => {
         let bin = '';
         for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
@@ -1239,7 +1264,7 @@ async function sendApproverConfirmation(kind) {
         const d = await buildVariationSheetData(v, 480);
         const imgs = [];
         if (d.frontPng) imgs.push({ label: 'Front', base64: await toB64(d.frontPng) });
-        if (d.backPng && !sameSidesOf(v)) imgs.push({ label: 'Back', base64: await toB64(d.backPng) });
+        if (d.backPng) imgs.push({ label: 'Back', base64: await toB64(d.backPng) });
         previews[v.id] = imgs;
       }
     } catch (err) {
@@ -1249,14 +1274,33 @@ async function sendApproverConfirmation(kind) {
   await sendApprovalConfirmation({ projectId, productType: kind, previews });
 }
 
+// Same layout as order.js's "We'll take it from here!" confirmation: icon,
+// title, sub-copy, then a detail box with the project name and event date.
+function confirmCardHtml(title, sub) {
+  const eventDate = currentProject?.customer_info?.event_date;
+  return `
+    <div class="rv-confirm">
+      <div class="rv-confirm-icon"><i class="fa-solid fa-flag" aria-hidden="true"></i></div>
+      <div class="rv-confirm-title">${title}</div>
+      <div class="rv-confirm-sub">${sub}</div>
+      <div class="rv-confirm-detail">
+        <div><strong>${esc(currentProject?.name) || 'Review'}</strong></div>
+        ${eventDate ? `<div>${esc(formatEventDate(eventDate))}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function formatEventDate(iso) {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  if (!y || !m || !d) return String(iso);
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return `${months[m - 1]} ${d}, ${y}`;
+}
+
 function renderSuccessScreen() {
   root.innerHTML = `
     <div class="rv-root">
-      <div class="rv-success">
-        <span class="rv-success-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>
-        <div class="rv-success-title">Feedback submitted</div>
-        <div class="rv-success-sub">The design team will review your feedback and be in touch shortly.</div>
-      </div>
+      ${confirmCardHtml('Edits requested', 'The design team will review your feedback and be in touch shortly.')}
     </div>`;
 }
 

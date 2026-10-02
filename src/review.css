@@ -330,7 +330,6 @@ header {
 }
 
 .rv-card.rv-locked {
-  background: #fffbeb;
   border-color: #d97706;
 }
 
@@ -962,3 +961,42 @@ header {
   font-size: 0.85em;
   color: var(--gray-500);
 }
+
+/* Confirmation card — mirrors order.css .confirm-* ("We'll take it from here!") */
+.rv-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  text-align: center;
+  background: var(--white);
+  border: 1.5px solid var(--gray-100);
+  border-radius: var(--rl);
+  padding: 2.5rem 2rem;
+  margin-bottom: 1.5rem;
+}
+.rv-confirm-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  font-size: 22px;
+}
+.rv-confirm-title { font-family: 'DM Serif Display', serif; font-size: 24px; }
+.rv-confirm-sub { font-size: 14px; color: var(--gray-600); line-height: 1.6; }
+.rv-confirm-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--gray-50);
+  border: 1.5px solid var(--gray-100);
+  border-radius: var(--r);
+  padding: 1rem 1.25rem;
+  font-size: 13px;
+  color: var(--gray-600);
+}
+.rv-confirm-detail strong { color: var(--black); }
