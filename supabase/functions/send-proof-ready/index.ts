@@ -1,3 +1,4 @@
+import { logEmail } from '../_shared/email-log.ts';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { esc, wrapEmailHtml, ctaButton, linkFallback, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
@@ -63,16 +64,16 @@ function buildText(p: ProofPayload & { safeUrl: string }): string {
   ].join('\n');
 }
 
-async function tokenExists(token: string): Promise<boolean> {
+async function projectIdForToken(token: string): Promise<string | null> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/projects?share_token=eq.${encodeURIComponent(token)}&select=id&limit=1`, {
     headers: {
       apikey: SUPABASE_SERVICE_ROLE_KEY,
       Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
     },
   });
-  if (!res.ok) return false;
+  if (!res.ok) return null;
   const rows = await res.json();
-  return Array.isArray(rows) && rows.length > 0;
+  return Array.isArray(rows) && rows.length > 0 ? rows[0].id : null;
 }
 
 serve(async (req) => {
@@ -85,6 +86,7 @@ serve(async (req) => {
 
     // reviewUrl must be https and contain a valid share token
     let safeUrl: string;
+    let projectId: string | null = null;
     try {
       const u = new URL(payload.reviewUrl);
       const isLocalhost = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
@@ -92,7 +94,8 @@ serve(async (req) => {
         throw new Error('not https');
       }
       const token = u.searchParams.get('token');
-      if (!token || !(await tokenExists(token))) {
+      projectId = token ? await projectIdForToken(token) : null;
+      if (!projectId) {
         return new Response(JSON.stringify({ error: 'Invalid review link' }), { status: 403, headers: { ...CORS, 'Content-Type': 'application/json' } });
       }
       safeUrl = u.toString();
@@ -126,9 +129,11 @@ serve(async (req) => {
       }),
     });
 
+    if (res.ok) await logEmail({ kind: 'proof-ready', projectId: projectId, recipient: payload.contactEmail, ok: true, httpStatus: res.status });
     if (!res.ok) {
       const body = await res.text();
       console.error('SendGrid error', res.status, body);
+      await logEmail({ kind: 'proof-ready', projectId: projectId, recipient: payload.contactEmail, ok: false, httpStatus: res.status, error: body });
       return new Response(JSON.stringify({ error: 'SendGrid request failed', status: res.status }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
     }
 

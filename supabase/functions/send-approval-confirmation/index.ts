@@ -1,3 +1,4 @@
+import { logEmail } from '../_shared/email-log.ts';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { esc, wrapEmailHtml, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
@@ -162,8 +163,11 @@ serve(async (req) => {
         ...(attachments.length ? { attachments } : {}),
       }),
     });
+    if (res.ok) await logEmail({ kind: 'approval-confirmation', projectId: projectId, recipient: to, ok: true, httpStatus: res.status });
     if (!res.ok) {
-      console.error('SendGrid error', res.status, await res.text());
+      const body = await res.text();
+      console.error('SendGrid error', res.status, body);
+      await logEmail({ kind: 'approval-confirmation', projectId: projectId, recipient: to, ok: false, httpStatus: res.status, error: body });
       return json({ error: 'SendGrid request failed', status: res.status }, 500);
     }
     return json({ ok: true });

@@ -25,12 +25,13 @@ export function wrapEmailHtml(opts: { title: string; bodyHtml: string }): string
   <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);">
     <div style="background:#1a1a2e;padding:28px 32px;">
       <h1 style="color:#fff;margin:0;font-size:22px;font-weight:600;">${opts.title}</h1>
-      <p style="color:#aaa;margin:6px 0 0;font-size:14px;">GolfStatus Design Studio</p>
+      <p style="color:#aaa;margin:6px 0 0;font-size:14px;">GolfStatus Design Studio <span style="display:inline-block;vertical-align:middle;margin-left:8px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#fff;background:#06b6d4;border-radius:4px;padding:3px 7px;line-height:1.4;">Beta</span></p>
     </div>
     <div style="padding:32px;">
       ${opts.bodyHtml}
     </div>
     <div style="padding:20px 32px;background:#fafafa;border-top:1px solid #f0f0f0;">
+      <p style="margin:0 0 10px;color:#999;font-size:12px;line-height:1.5;">GolfStatus Design Studio is a beta product and is being updated on an ongoing basis.</p>
       <p style="margin:0;color:#bbb;font-size:12px;">GolfStatus Design Studio &middot; design@gsds.space<br>8545 S 78th St, Lincoln, NE 68516</p>
     </div>
   </div>
@@ -52,6 +53,8 @@ export function linkFallback(url: string): string {
 }
 
 export const PLAIN_TEXT_FOOTER = [
+  'GolfStatus Design Studio is a beta product and is being updated on an ongoing basis.',
+  '',
   'GolfStatus Design Studio',
   'design@gsds.space',
   '8545 S 78th St, Lincoln, NE 68516',
