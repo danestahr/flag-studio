@@ -22,14 +22,37 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 }
 
+// Outreach emails (e.g. Pipedrive) wrap the event link in a click-tracker like
+// https://<id>.pipedrive.email/c/...?redirectUrl=https%3A%2F%2Fevents.golfstatus.com%2Fevent%2F<slug>&hash=...
+// so customers paste the wrapper, not the event URL. Look through the query
+// params of a non-GolfStatus URL for one whose value is itself an allowlisted
+// event URL. Safe because we never fetch the pasted URL — only the extracted slug.
+function unwrapTrackedUrl(parsed: URL, depth = 0): URL | null {
+  if (GOLFSTATUS_EVENT_HOSTS.has(parsed.hostname)) return parsed;
+  if (depth >= 2) return null;
+  for (const value of parsed.searchParams.values()) {
+    let inner: URL;
+    try {
+      inner = new URL(value);
+    } catch {
+      continue;
+    }
+    if (inner.protocol !== 'https:' && inner.protocol !== 'http:') continue;
+    const found = unwrapTrackedUrl(inner, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
 function extractSlug(rawUrl: string): { slug: string; apiBase: string } | null {
-  let parsed: URL;
+  let outer: URL;
   try {
-    parsed = new URL(rawUrl);
+    outer = new URL(rawUrl.trim());
   } catch {
     return null;
   }
-  if (!GOLFSTATUS_EVENT_HOSTS.has(parsed.hostname)) return null;
+  const parsed = unwrapTrackedUrl(outer);
+  if (!parsed) return null;
   const segments = parsed.pathname.split('/').filter(Boolean);
   // pathname segments stay percent-encoded (e.g. a space in the event name
   // survives as "%20") — decode before treating it as the raw slug, or the
