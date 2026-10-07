@@ -192,7 +192,33 @@ function renderVarStrip() {
 // the "Same Front & Back Design" toggle (shown while viewing Back) decides
 // whether the back is a derived read-only mirror of the front or independently
 // editable, matching how it's exported (see makeSvg's `mirrorX`).
+// Customer's order-intake design notes, shown on the matching face: with
+// different front/back designs ordered, front notes on Front and back notes
+// on Back; otherwise the single design description on both.
+let intakeDesignNotes = null;
+
+function updateDesignNote() {
+  const el = document.getElementById('varDesignNote');
+  const textEl = document.getElementById('varDesignNoteText');
+  if (!el || !textEl) return;
+  const n = intakeDesignNotes;
+  let text = '', label = 'Design notes:';
+  if (n) {
+    if (n.flag_setup === 'different') {
+      text = activeFace === 'back' ? n.back_design_notes : n.front_design_notes;
+      label = activeFace === 'back' ? 'Back design notes:' : 'Front design notes:';
+    } else {
+      text = n.design_notes;
+    }
+  }
+  el.style.display = text ? '' : 'none';
+  document.getElementById('varDesignNoteLabel').textContent = label;
+  textEl.textContent = text || '';
+  textEl.style.whiteSpace = 'pre-wrap';
+}
+
 function updateFaceUI() {
+  updateDesignNote();
   const frontBtn = document.getElementById('faceTabFront');
   const backBtn  = document.getElementById('faceTabBack');
   if (frontBtn) frontBtn.classList.toggle('active', activeFace === 'front');
@@ -271,6 +297,12 @@ const flagCanvas = renderCanvasPanel(document.getElementById('flagCanvasPanel'),
   // now (its "View edits" link, see variation-list.js), so this banner is
   // just the project-wide entry point into that same sub-view.
   noteHtml: `
+    <div id="varDesignNote" class="var-edit-note var-design-note" style="display:none">
+      <div class="var-edit-note-body">
+        <span class="var-edit-note-label" id="varDesignNoteLabel">Design notes:</span>
+        <span id="varDesignNoteText"></span>
+      </div>
+    </div>
     <div id="varEditNote" class="var-edit-note" style="display:none">
       <div class="var-edit-note-row">
         <div class="var-edit-note-body">
@@ -313,8 +345,11 @@ const paintVarBackThumb = (el, v) => renderInto(el, v.backLogos || [], 'back', f
 // a lightweight preview/select, not the full per-variation editor (that's
 // what the card's own pencil icon, onEdit below, is for). Mirrors hs/
 // variations.js's own selectVariation.
-function selectVariation(varId) {
+function selectVariation(varId, face) {
   S.activeVarId = varId;
+  // Tapping a front/back thumbnail opens that face's canvas; the back face is
+  // only meaningful (editable) when this variation has an independent back.
+  if (face) activeFace = face;
   renderVarList();
   renderVarCanvas();
 }
@@ -341,7 +376,7 @@ function renderVarList() {
     backThumbId: varBackThumbId,
     renderBackThumb: paintVarBackThumb,
     feedbackFor: v => S.feedback?.find(f => f.variation_id === v.id),
-    onSelect: v => selectVariation(v.id),
+    onSelect: (v, face) => selectVariation(v.id, face),
     onRename: (v, name) => renameVar(v.id, name),
     onEdit: v => openVarEdit(v.id),
     onDuplicate: v => dupVar(v.id),
@@ -1377,6 +1412,7 @@ try {
     loadOrderIntake(_urlProject).catch(() => null),
   ]);
   orderFlagQty = intake?.flag_qty || null;
+  intakeDesignNotes = intake || null;
   // Applies only to a variation created from here on (setupVariations'
   // initial variation, addVariation) — never overrides one that already has
   // its own sameLogoOnBothSides. Derived unconditionally (not just for a

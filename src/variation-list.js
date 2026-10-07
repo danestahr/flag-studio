@@ -126,7 +126,15 @@ function renderVariationListNow(container, items, {
   items.forEach(item => {
     const card = container.querySelector(`.var-card[data-varid="${item.id}"]`);
     if (!card) return;
-    card.addEventListener('click', () => onSelect?.(item));
+    // Tapping a thumbnail also reports which face it showed ('front'/'back'),
+    // so the flag editor can open the matching canvas; undefined elsewhere.
+    card.addEventListener('click', e => {
+      const t = e.target.closest?.('.vthumb-group > *');
+      const face = !t ? undefined
+        : t.id === backThumbId?.(item) ? 'back'
+        : t.id === thumbId(item) ? 'front' : undefined;
+      onSelect?.(item, face);
+    });
 
     const nameInput = card.querySelector('.vname');
     nameInput.addEventListener('click', e => e.stopPropagation());
