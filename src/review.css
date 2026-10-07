@@ -261,6 +261,8 @@ header {
 .rv-count.approved::before { background: #16a34a; }
 .rv-count.needs-edits { color: #d97706; }
 .rv-count.needs-edits::before { background: #d97706; }
+.rv-count.rejected { color: #dc2626; }
+.rv-count.rejected::before { background: #dc2626; }
 .rv-count.pending { color: var(--gray-400); }
 .rv-count.pending::before { background: var(--gray-200); }
 
@@ -518,9 +520,13 @@ header {
 /* Action buttons */
 .rv-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
   margin-bottom: 1rem;
+}
+
+@media (max-width: 520px) {
+  .rv-actions { grid-template-columns: 1fr; }
 }
 
 .rv-btn {
@@ -544,6 +550,11 @@ header {
   background: #16a34a;
   border-color: #16a34a;
   color: white;
+}
+
+.rv-btn.reject:hover {
+  border-color: #dc2626;
+  color: #dc2626;
 }
 
 .rv-btn.edits.active {
@@ -943,6 +954,15 @@ header {
 .rv-status-badge.approved {
   background: #dcfce7;
   color: #16a34a;
+}
+
+.rv-status-badge.rejected {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.rv-card.rv-rejected {
+  opacity: .75;
 }
 
 .rv-status-badge.needs-edits {

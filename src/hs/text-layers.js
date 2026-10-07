@@ -27,6 +27,7 @@ function doRefresh() {
         const sc = pr?.height ? pr.height / HS_H : 1;
         const fontFamily = HS_FONTS.find(f => f.id === layer.font)?.family || "'DM Serif Display', serif";
         editor.style.fontFamily = fontFamily;
+        editor.style.fontWeight = layer.bold ? 'bold' : 'normal';
         editor.style.fontSize = Math.max(8, Math.round(layer.size * sc)) + 'px';
         editor.dataset.baseSize = layer.size;
         editor.style.color = layer.color;
@@ -96,6 +97,9 @@ window.openTextLayerToolbar = function (id, anchorEl) {
 
   tb.innerHTML = `
     <select class="hs-tl-tb-select" id="hsTlFont">${fontOpts}</select>
+    <button class="hs-tl-tb-btn${layer.bold ? ' active' : ''}" id="hsTlBold" title="Bold">
+      <i class="fa-solid fa-bold" aria-hidden="true"></i>
+    </button>
     <div class="hs-tl-tb-sep"></div>
     <div class="hs-tl-tb-size-row">
       <input type="range" class="hs-tl-tb-slider" id="hsTlSizeSlider" min="60" max="2000" step="10" value="${layer.size}">
@@ -137,6 +141,13 @@ window.openTextLayerToolbar = function (id, anchorEl) {
   tb.querySelector('#hsTlFont').addEventListener('change', e => {
     const l = textLayerSource().find(x => x.id === id); if (!l) return;
     l.font = e.target.value; doRefresh();
+  });
+  const boldBtn = tb.querySelector('#hsTlBold');
+  boldBtn.addEventListener('click', () => {
+    const l = textLayerSource().find(x => x.id === id); if (!l) return;
+    l.bold = !l.bold;
+    boldBtn.classList.toggle('active', !!l.bold);
+    doRefresh();
   });
   const sizeSlider = tb.querySelector('#hsTlSizeSlider');
   const sizeVal = tb.querySelector('#hsTlSizeVal');
@@ -284,6 +295,7 @@ window.enterTextLayerEditMode = function (id, overlay, { onCommit } = {}) {
   editor.style.cssText = [
     'outline:none;border:none;width:100%;',
     `font-family:${fontFamily};`,
+    `font-weight:${layer.bold ? 'bold' : 'normal'};`,
     `font-size:${fsPx}px;`,
     `color:${layer.color};`,
     `text-align:${layer.align || 'center'};`,

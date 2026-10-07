@@ -6,6 +6,7 @@ import { initHeaderForSession, injectHeaderCta } from './auth.js';
 import { listProjects, createProject, deleteProject, getMyRole } from './supabase.js';
 import { esc } from './dom-utils.js';
 import { STATUS_LABEL, STATUS_GROUPS } from './status-labels.js';
+import { calcApprovalDeadline, formatDate } from './intake-shared.js';
 import { renderTemplateGallery } from './template-gallery.js';
 
 const PAGE_SIZE = 30;
@@ -73,6 +74,8 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
 
   let query = '';
   let status = '';
+  let due = '';
+  let product = '';
   let cursor = null;
   let loading = false;
 
@@ -81,23 +84,41 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     statusFilter.insertAdjacentHTML('beforeend', `<option value="${esc(value)}">${esc(group.label)}</option>`);
   }
 
+  // Not a status group: it's the absence of both design configs, which is
+  // what the "Not started" pill on the card means.
+  const NOT_STARTED = 'not_started';
+  statusFilter.options[0].insertAdjacentHTML('afterend', `<option value="${NOT_STARTED}">Not started</option>`);
+  const statusLabelFor = (v) => (v === NOT_STARTED ? 'Not started' : STATUS_GROUPS[v]?.label || v);
+
   // Flags and hole signs progress through review independently (see
   // status-labels.js) - a project can have Flags: Draft and Hole Signs: In
   // Review at once, so the card shows one pill per design type it actually
   // has, instead of a single whole-project pill.
+  // flag_config/hole_sign_config have UNIQUE(project_id), so PostgREST embeds
+  // them as a single object (or null), not an array - normalize either shape.
+  const cfgOf = (cfg) => (Array.isArray(cfg) ? cfg[0] : cfg) || null;
+
   function designStatusPill(cfg, label) {
-    const status = cfg?.[0]?.status;
+    const status = cfgOf(cfg)?.status;
     if (!status) return '';
     const statusLabel = STATUS_LABEL[status] || status;
     return `<span class="status-pill status-${esc(status)}" style="flex-shrink:0">${esc(label)}: ${esc(statusLabel)}</span>`;
+  }
+
+  // "Approval due Sep 1, 2026 for Sep 18, 2026 event"
+  function deadlineLine(p) {
+    const eventIso = p.customer_info?.event_date || p.order_intakes?.[0]?.event_date;
+    const dl = calcApprovalDeadline(eventIso);
+    if (!dl) return '';
+    return `<div class="draft-card-meta">Approval due ${esc(dl.display)} for ${esc(formatDate(eventIso))} event</div>`;
   }
 
   function projectCardHtml(p) {
     const name = p.name || 'Untitled';
     const updatedAt = new Date(p.updated_at);
     const date = `${updatedAt.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}, ${updatedAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
-    const hasFlags = p.flag_config?.length > 0;
-    const hasHoleSigns = p.hole_sign_config?.length > 0;
+    const hasFlags = !!cfgOf(p.flag_config);
+    const hasHoleSigns = !!cfgOf(p.hole_sign_config);
     // An order submitted anonymously (see order.js) has no `profiles` row at
     // all until the customer later signs up and claimAccount()/
     // claimMyProjects() attaches it — until then, fall back to the contact
@@ -126,66 +147,112 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     const clickHref = (!p.name && intendedType && intendedTemplate)
       ? `/login?${new URLSearchParams({ type: intendedType, template: intendedTemplate, project: p.id })}`
       : `/project?project=${p.id}`;
-    const statusPills = [designStatusPill(p.flag_config, 'Flags'), designStatusPill(p.hole_sign_config, 'Hole Signs')].filter(Boolean).join('');
+    const statusPills = [designStatusPill(p.flag_config, 'Flags'), designStatusPill(p.hole_sign_config, 'Hole Signs')].filter(Boolean).join('') || '<span class="status-pill" style="flex-shrink:0">Not started</span>';
     return `<div class="draft-card" onclick="window.location.href='${clickHref}'">
       <div class="draft-card-main">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <div class="draft-card-name">${esc(name)}</div>
-          ${statusPills}
-        </div>
-        <div class="draft-card-meta">Edited ${date}</div>
+        <div class="draft-card-name">${esc(name)}</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0 2px">${statusPills}</div>
+        ${deadlineLine(p)}
         ${creator ? `<div class="draft-card-meta">Created by ${esc(creator)}</div>` : ''}
+        <div class="draft-card-meta" style="opacity:.5">Edited ${date}</div>
       </div>
       <div class="draft-card-tools">
-        <a class="draft-card-tool${hasFlags ? ' configured' : ''}" href="/flags?project=${p.id}" onclick="event.stopPropagation()"><i class="fa-solid fa-flag" aria-hidden="true"></i> Flags</a>
-        <a class="draft-card-tool${hasHoleSigns ? ' configured' : ''}" href="/hole-signs?project=${p.id}" onclick="event.stopPropagation()"><i class="fa-solid fa-signs-post" aria-hidden="true"></i> Hole Signs</a>
+        ${hasFlags ? `<a class="draft-card-tool configured" href="/flags?project=${p.id}" onclick="event.stopPropagation()"><i class="fa-solid fa-flag" aria-hidden="true"></i> Flags</a>` : ''}
+        ${hasHoleSigns ? `<a class="draft-card-tool configured" href="/hole-signs?project=${p.id}" onclick="event.stopPropagation()"><i class="fa-solid fa-signs-post" aria-hidden="true"></i> Hole Signs</a>` : ''}
         <button type="button" class="draft-card-delete" title="Delete project" onclick="event.stopPropagation();window.openDeleteProjectModal('${p.id}')"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>
       </div>
     </div>`;
   }
 
-  function renderLoadMore(nextCursor) {
-    const wrap = document.getElementById('loadMoreWrap');
-    if (!nextCursor) {
-      wrap.innerHTML = '';
-      return;
+  // Artwork approval deadline (calcApprovalDeadline: 17 days before the
+  // event, nudged back off the weekend) - the same date customers are shown
+  // in order.js/submitted.js, not the event date itself. customer_info holds
+  // the staff-corrected event date; the original intake is the fallback.
+  const approvalIso = (p) => calcApprovalDeadline(p.customer_info?.event_date || p.order_intakes?.[0]?.event_date)?.iso || null;
+  const localIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const DONE = ['approved', 'sent_to_print'];
+
+  function matchesDue(p) {
+    if (!due) return true;
+    const iso = approvalIso(p);
+    if (!iso) return false;
+    // Already signed off on every design it has - nothing left to be due.
+    const statuses = [cfgOf(p.flag_config)?.status, cfgOf(p.hole_sign_config)?.status].filter(Boolean);
+    if (statuses.length && statuses.every(s => DONE.includes(s))) return false;
+    const now = new Date();
+    const today = localIso(now);
+    if (due === 'overdue') return iso < today;
+    if (due === 'today') return iso === today;
+    if (due === 'tomorrow') return iso === localIso(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+    if (due === 'week') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7)); // Monday
+      const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+      return iso >= localIso(start) && iso <= localIso(end);
     }
-    wrap.innerHTML = '<button class="btn load-more-wrap" id="loadMoreBtn">Load more</button>';
-    document.getElementById('loadMoreBtn').addEventListener('click', () => loadPage({ reset: false }));
+    return iso.slice(0, 7) === today.slice(0, 7); // month
   }
 
+  const matchesStatus = (p) => {
+    if (!matchesDue(p)) return false;
+    const flagCfg = cfgOf(p.flag_config);
+    const hsCfg = cfgOf(p.hole_sign_config);
+    // Product filter narrows both the project set and which design's status
+    // the status filter looks at.
+    const cfgs = product === 'flags' ? [flagCfg] : product === 'hole_signs' ? [hsCfg] : [flagCfg, hsCfg];
+    if (status === NOT_STARTED) return !cfgs.some(Boolean);
+    if (product && !cfgs[0]) return false;
+    const group = STATUS_GROUPS[status];
+    if (!group) return true;
+    return cfgs.some(c => group.statuses.includes(c?.status));
+  };
+
+  // Infinite scroll: a sentinel below the list triggers the next page when it
+  // scrolls into view. Re-observed after every load so a sentinel that's
+  // still visible (short page / tall screen) keeps fetching.
+  const sentinel = document.getElementById('loadMoreWrap');
+  const observer = new IntersectionObserver((entries) => {
+    if (entries.some(e => e.isIntersecting) && cursor && !loading) loadPage({ reset: false });
+  }, { rootMargin: '400px' });
+  observer.observe(sentinel);
+
+  // Bumped on every reset so an in-flight request from a previous
+  // search/filter can't append stale rows into the new result set.
+  let generation = 0;
+
   async function loadPage({ reset }) {
-    if (loading) return;
+    if (loading && !reset) return;
+    const myGen = reset ? ++generation : generation;
     loading = true;
 
     const container = document.getElementById('projectsList');
     if (reset) {
       cursor = null;
       container.innerHTML = '<div class="drafts-empty">Loading…</div>';
+      sentinel.innerHTML = '';
+    } else {
+      sentinel.innerHTML = '<div class="drafts-empty">Loading more…</div>';
     }
 
     try {
-      const { projects: fetched, nextCursor } = await listProjects({ userId, role, cursor, pageSize: PAGE_SIZE, q: query });
-      // Filtered client-side, not in the query: PostgREST can't express an
-      // OR across flag_config.status and hole_sign_config.status (two
-      // different embedded tables) in one request. A project matches if
-      // EITHER design type is currently in the selected group - each design
-      // progresses independently, so "In Review" should surface a project
-      // even when only one side has reached it.
-      const group = STATUS_GROUPS[status];
-      const projects = group
-        ? fetched.filter(p => group.statuses.includes(p.flag_config?.[0]?.status) || group.statuses.includes(p.hole_sign_config?.[0]?.status))
-        : fetched;
+      // The status filter is applied client-side (PostgREST can't OR across
+      // flag_config.status and hole_sign_config.status), so one server page
+      // may yield few or zero matches. Keep pulling pages until we have a
+      // full page of matches or the table is exhausted - otherwise matches
+      // sitting beyond the first non-matching pages would never show up.
+      let projects = [];
+      let next = cursor;
+      do {
+        const res = await listProjects({ userId, role, cursor: next, pageSize: PAGE_SIZE, q: query });
+        if (myGen !== generation) return;
+        projects = projects.concat(res.projects.filter(matchesStatus));
+        next = res.nextCursor;
+      } while (next && projects.length < PAGE_SIZE);
 
       if (reset && !projects.length) {
-        container.innerHTML = (query || status)
-          ? `<div class="drafts-empty">No projects match${query ? ` “${esc(query)}”` : ''}${status ? ` with status “${esc(STATUS_GROUPS[status]?.label || status)}”` : ''}.</div>`
+        container.innerHTML = (query || status || due || product)
+          ? `<div class="drafts-empty">No projects match${query ? ` “${esc(query)}”` : ''}${status ? ` with status “${esc(statusLabelFor(status))}”` : ''}${due ? ' and that deadline' : ''}.</div>`
           : '<div class="drafts-empty">No projects yet.</div>';
-        renderLoadMore(nextCursor);
-        return;
-      }
-
-      if (reset) {
+      } else if (reset) {
         container.innerHTML = `<div class="drafts-grid">${projects.map(projectCardHtml).join('')}</div>`;
       } else {
         const grid = container.querySelector('.drafts-grid');
@@ -193,14 +260,20 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
         else container.innerHTML = `<div class="drafts-grid">${projects.map(projectCardHtml).join('')}</div>`;
       }
 
-      cursor = nextCursor;
-      renderLoadMore(nextCursor);
+      cursor = next;
+      sentinel.innerHTML = '';
     } catch (err) {
+      if (myGen !== generation) return;
       console.error(err);
-      container.innerHTML = '<div class="drafts-empty">Could not load projects.</div>';
-      renderLoadMore(null);
+      if (reset) container.innerHTML = '<div class="drafts-empty">Could not load projects.</div>';
+      sentinel.innerHTML = '';
+      cursor = null;
     } finally {
-      loading = false;
+      if (myGen === generation) {
+        loading = false;
+        // Sentinel may still be on screen after a short page; re-check.
+        if (cursor) { observer.unobserve(sentinel); observer.observe(sentinel); }
+      }
     }
   }
 
@@ -211,6 +284,16 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
       query = e.target.value.trim();
       loadPage({ reset: true });
     }, 250);
+  });
+
+  document.getElementById('projectDueFilter').addEventListener('change', (e) => {
+    due = e.target.value;
+    loadPage({ reset: true });
+  });
+
+  document.getElementById('projectProductFilter').addEventListener('change', (e) => {
+    product = e.target.value;
+    loadPage({ reset: true });
   });
 
   statusFilter.addEventListener('change', (e) => {

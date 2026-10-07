@@ -6,7 +6,7 @@
   <title>GolfStatus Design Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://use.typekit.net/ouu2gxk.css">
   <link rel="stylesheet" href="/src/landing.css">
 </head>
@@ -23,9 +23,22 @@
   <div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem">
       <div style="display:flex;align-items:center;gap:.6rem">
-        <input type="search" id="projectSearch" class="project-search" placeholder="Search projects…">
+        <input type="search" id="projectSearch" class="project-search" placeholder="Search name or email…">
+        <select id="projectProductFilter" class="project-search" style="width:150px">
+          <option value="">All products</option>
+          <option value="flags">Flags</option>
+          <option value="hole_signs">Hole Signs</option>
+        </select>
         <select id="projectStatusFilter" class="project-search" style="width:170px">
           <option value="">All statuses</option>
+        </select>
+        <select id="projectDueFilter" class="project-search" style="width:170px">
+          <option value="">Any deadline</option>
+          <option value="overdue">Past due</option>
+          <option value="today">Due today</option>
+          <option value="tomorrow">Due tomorrow</option>
+          <option value="week">Due this week</option>
+          <option value="month">Due this month</option>
         </select>
       </div>
       <div style="display:flex;align-items:center;gap:.6rem">

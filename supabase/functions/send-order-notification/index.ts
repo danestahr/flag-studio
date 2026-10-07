@@ -54,6 +54,9 @@ interface Shipping {
 }
 
 interface OrderPayload {
+  // 'started' = customer finished Steps 1-2 (flag fields absent); default is a
+  // fully submitted order.
+  stage?: 'started' | 'submitted';
   contactName: string;
   contactEmail: string;
   courseName?: string;
@@ -61,10 +64,10 @@ interface OrderPayload {
   eventDate: string;
   eventUrl?: string;
   shipping?: Shipping;
-  flagStyle: string;
+  flagStyle?: string;
   flagStyleName?: string;
   flagPreviewUrl?: string;
-  flagColors: Array<{ name: string; hex: string; label?: string; zone?: string }>;
+  flagColors?: Array<{ name: string; hex: string; label?: string; zone?: string }>;
   flagSetup?: string;
   flagQty?: number;
   designNotes?: string;
@@ -115,7 +118,9 @@ function buildHtml(p: OrderPayload & { safeProjectUrl: string }): string {
   const previewUrl = safeUrl(p.flagPreviewUrl);
 
   const body = `<p style="margin:0 0 24px;color:#333;font-size:15px;line-height:1.6;">
-      A new order was just submitted by <strong>${esc(p.contactName)}</strong> for <strong>${esc(p.eventName)}</strong>.
+      ${p.stage === 'started'
+        ? `<strong>${esc(p.contactName)}</strong> just started an order for <strong>${esc(p.eventName)}</strong>. They've completed the event and shipping steps and are still working through the flag design, so this is a partial order. You'll get another email when they submit it.`
+        : `A new order was just submitted by <strong>${esc(p.contactName)}</strong> for <strong>${esc(p.eventName)}</strong>.`}
     </p>
 
     ${ctaButton(esc(p.safeProjectUrl), 'View Project')}
@@ -140,7 +145,7 @@ function buildHtml(p: OrderPayload & { safeProjectUrl: string }): string {
       ${row('Email', esc(p.contactEmail))}
       ${row('Address', formatShipping(p.shipping), { vtop: true })}
 
-      <tr><td colspan="2" style="padding:14px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Flag &amp; Colors</td></tr>
+      ${p.stage === 'started' ? '' : `<tr><td colspan="2" style="padding:14px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Flag &amp; Colors</td></tr>`}
       ${previewUrl ? `
       <tr>
         <td colspan="2" style="padding:10px 0 0;border-top:1px solid #f0f0f0;">
@@ -148,7 +153,7 @@ function buildHtml(p: OrderPayload & { safeProjectUrl: string }): string {
         </td>
       </tr>` : ''}
       ${colorRows}
-      ${row('Flag', esc(p.flagStyleName || p.flagStyle))}
+      ${p.flagStyle ? row('Flag', esc(p.flagStyleName || p.flagStyle)) : ''}
       ${p.flagQty ? row('Quantity', `${esc(String(p.flagQty))} Flag${p.flagQty === 1 ? '' : 's'}`) : ''}
       ${row('Flag Setup', formatSetup(p.flagSetup))}
       ${p.designNotes ? row('Flag Design', esc(p.designNotes), { vtop: true }) : ''}
@@ -166,12 +171,14 @@ function buildHtml(p: OrderPayload & { safeProjectUrl: string }): string {
       </tr>` : ''}
     </table>`;
 
-  return wrapEmailHtml({ title: 'New Order Submitted', bodyHtml: body });
+  return wrapEmailHtml({ title: p.stage === 'started' ? 'Order Started' : 'New Order Submitted', bodyHtml: body });
 }
 
 function buildText(p: OrderPayload & { safeProjectUrl: string }): string {
   const lines = [
-    `A new order was just submitted by ${p.contactName} for ${p.eventName}.`,
+    p.stage === 'started'
+      ? `${p.contactName} just started an order for ${p.eventName} (event and shipping steps done; flag design still in progress). You'll get another email when they submit it.`
+      : `A new order was just submitted by ${p.contactName} for ${p.eventName}.`,
     '',
     `View project: ${p.safeProjectUrl}`,
     '',
@@ -195,10 +202,10 @@ function buildText(p: OrderPayload & { safeProjectUrl: string }): string {
   }
   lines.push('');
 
-  lines.push('FLAG & COLORS');
+  if (p.stage !== 'started') lines.push('FLAG & COLORS');
   const textColors = (p.flagColors ?? []).filter(c => c.zone !== 'zone-border');
   if (textColors.length) lines.push(`Colors: ${textColors.map(c => c.label ? `${c.label}: ${c.name}` : c.name).join(', ')}`);
-  lines.push(`Flag: ${p.flagStyleName || p.flagStyle}`);
+  if (p.flagStyle) lines.push(`Flag: ${p.flagStyleName || p.flagStyle}`);
   if (p.flagQty) lines.push(`Quantity: ${p.flagQty} Flag${p.flagQty === 1 ? '' : 's'}`);
   if (p.flagSetup) lines.push(`Flag Setup: ${p.flagSetup === 'different' ? 'Different Front & Back' : 'Same Front & Back'}`);
   if (p.designNotes) lines.push(`Flag Design: ${p.designNotes}`);
@@ -253,7 +260,7 @@ serve(async (req) => {
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         tracking_settings: { click_tracking: { enable: false } },
-        subject: `New order submitted — ${payload.eventName}`,
+        subject: payload.stage === 'started' ? `Order started — ${payload.eventName}` : `New order submitted — ${payload.eventName}`,
         content: [
           { type: 'text/plain', value: buildText({ ...payload, safeProjectUrl }) },
           { type: 'text/html', value: buildHtml({ ...payload, safeProjectUrl }) },
@@ -261,11 +268,11 @@ serve(async (req) => {
       }),
     });
 
-    if (res.ok) await logEmail({ kind: 'order-notification', projectId: payload.projectId, recipient: TO_EMAIL, ok: true, httpStatus: res.status });
+    if (res.ok) await logEmail({ kind: payload.stage === 'started' ? 'order-started-notification' : 'order-notification', projectId: payload.projectId, recipient: TO_EMAIL, ok: true, httpStatus: res.status });
     if (!res.ok) {
       const body = await res.text();
       console.error('SendGrid error', res.status, body);
-      await logEmail({ kind: 'order-notification', projectId: payload.projectId, recipient: TO_EMAIL, ok: false, httpStatus: res.status, error: body });
+      await logEmail({ kind: payload.stage === 'started' ? 'order-started-notification' : 'order-notification', projectId: payload.projectId, recipient: TO_EMAIL, ok: false, httpStatus: res.status, error: body });
       return new Response(JSON.stringify({ error: 'SendGrid failed', status: res.status }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
     }
 

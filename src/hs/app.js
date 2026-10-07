@@ -6,7 +6,7 @@ import { saveDraftInternal } from './draft.js';
 import { emptyTemplateLogos, migrateBannerCaptions, HS_TEMPLATES, HS_DEFAULT_TEMPLATES } from '../hole-sign-data.js';
 import { getFeedback, loadHoleSignConfig, loadLogosForProject, loadProject, supabase } from '../supabase.js';
 import { requireAuth } from '../auth.js';
-import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
+import { renderSidebar, setSidebarProjectName, setSidebarCollapsible } from '../sidebar.js';
 
 function escHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -258,6 +258,8 @@ export function goStep(n) {
     if (i === n - 1) s.classList.add('active');
     if (i < n - 1 || (s.id === 'navGallery' && HS.projectStatus === 'sent_to_print')) s.classList.add('done');
   });
+  const sb = document.getElementById('sidebar');
+  if (sb) setSidebarCollapsible(sb, n !== 3);
   if (n === 1) { UI.hsMenu = null; UI.hsMenuAnimate = false; renderStep1(); }
   if (n === 2) renderStep2();
   // Dynamically imported: export.js pulls in pdf-lib + jszip (~200KB gzip),

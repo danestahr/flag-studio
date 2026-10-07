@@ -1,7 +1,7 @@
 import './order.css';
 import './icons.js';
 import { COLORS, FLAGS } from './data.js';
-import { createProject, uploadLogo, uploadFlagPreview, supabase, sendOrderConfirmation, sendOrderNotification, syncEventInfo, getSession, getMyProfile } from './supabase.js';
+import { createProject, saveOrderIntake, sendOrderStarted, loadOrderIntakeForResume, uploadLogo, uploadFlagPreview, sendOrderConfirmation, sendOrderNotification, syncEventInfo, getSession, getMyProfile } from './supabase.js';
 import { loadAllFlags } from './svgLoader.js';
 import { applyColors, showGsTagVariant, resolveColors } from './render.js';
 import { isDisplayableImage, fileTypeLabel } from './media-utils.js';
@@ -59,6 +59,7 @@ const O = {
   syncedDominantColors: [],    // up to 4 hex candidates extracted from the synced logo, most-frequent first
   syncedColorApplied: false,   // guards against re-applying once the customer has picked a style
   step: 1,
+  resumeNotice: '',
   // Step 1
   eventName: '',courseName: '', eventDate: '',
   // Step 2
@@ -67,6 +68,12 @@ const O = {
   country: 'US',
   addressLine1: '', addressLine2: '',
   city: '', stateProvince: '', postalCode: '',
+  // 'course' = ship to the round 1 facility address from the event sync
+  // (courseAddress); 'other' = customer-entered. Falls to 'other' when there
+  // is no synced address. The address fields above always hold the effective
+  // shipping address, so validation/submit don't care which mode is active.
+  shipMode: 'other',
+  courseAddress: null,
   // Step 3
   flagStyle: '',
   flagStyleOpen: false,
@@ -111,13 +118,14 @@ const O = {
 };
 
 // ── Draft persistence ────────────────────────────────────────
-// This form is anonymous (no project exists until submit) and can run long —
+// This form is anonymous (the project is created when Step 2 is completed, see
+// persistIntake) and can run long —
 // autosave the plain-data fields to localStorage on every render so a refresh
 // or accidental tab close doesn't lose progress. Deliberately excludes
 // O.logoFiles (File objects aren't JSON-serializable and are too large for
 // localStorage anyway) — those are persisted separately via IndexedDB, see
 // "Logo file persistence" below. Also excludes transient/submission state
-// (syncing, submitting, projectId, errors) so a resumed draft always starts
+// (syncing, submitting, errors) so a resumed draft always starts
 // from a clean Step render rather than replaying an in-flight sync or submit
 // attempt.
 const DRAFT_KEY = 'flagstudio.orderDraft.v1';
@@ -125,9 +133,13 @@ const DRAFT_FIELDS = [
   'step', 'syncUrl', 'eventName', 'courseName', 'eventDate',
   'contactName', 'contactEmail', 'attn', 'country',
   'addressLine1', 'addressLine2', 'city', 'stateProvince', 'postalCode',
+  'shipMode', 'courseAddress',
   'flagStyle', 'flagColors', 'gsTag', 'gsTagMode', 'flagSetup', 'flagQty', 'flagQtyCustom', 'designNotes',
   'frontDesignNotes', 'backDesignNotes',
   'ackDeadline', 'ackBeta',
+  // Persisted so a refresh after Step 2 keeps updating the same project
+  // instead of creating a duplicate (and re-sending the "order started" email).
+  'projectId', 'startedNotified',
   'syncedDominantColors', 'syncedColorApplied',
 ];
 
@@ -351,6 +363,16 @@ function renderProgressDots() {
 }
 
 function render() {
+  renderInner();
+  // Shown above whichever screen is up when a ?resume= link didn't resolve
+  // (see resumeOrder) — cleared once the customer is past Step 1.
+  const app = document.getElementById('orderApp');
+  if (app && O.resumeNotice && !O.submitted) {
+    app.insertAdjacentHTML('afterbegin', `<div class="order-wrap"><div class="submit-error-banner">${esc(O.resumeNotice)}</div></div>`);
+  }
+}
+
+function renderInner() {
   const app = document.getElementById('orderApp');
   if (!app) return;
 
@@ -416,7 +438,7 @@ function renderNav() {
   } else if (O.returnToReview) {
     nextBtn = `<button class="btn primary" onclick="window.orderNext()" style="flex:1;justify-content:center">Save</button>`;
   } else {
-    nextBtn = `<button class="btn primary" onclick="window.orderNext()">Next <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>`;
+    nextBtn = `<button class="btn primary" onclick="window.orderNext()">Continue <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>`;
   }
   return `<div class="order-nav">
     ${O.step > 1 ? `<button class="btn" onclick="window.orderBack()"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back</button>` : ''}
@@ -433,9 +455,19 @@ function renderBetaScreen() {
   const checkCls = 'ack-check' + (O.ackBeta ? ' checked' : '');
   return `
     <div class="order-card">
+      <div class="beta-info">
+        <p><strong>Design Studio is in beta.</strong> That means the tool is live and fully usable, but we're still actively building and improving it. While you use it, you may run into:</p>
+        <ul>
+          <li><strong>Bugs or visual glitches:</strong> something may not look or behave quite right, such as a preview that doesn't match what you picked.</li>
+          <li><strong>Slowness:</strong> previews, uploads, and exports can lag, especially with many logos or large files.</li>
+          <li><strong>Error messages:</strong> occasionally an action may fail. Refreshing the page and trying again usually fixes it.</li>
+          <li><strong>Changes along the way:</strong> features and layouts may shift as we make updates.</li>
+        </ul>
+        <p>Our team reviews every design before it goes to print. If anything looks off, or you get stuck, email us at <a href="mailto:design@gsds.space">design@gsds.space</a> and we'll sort it out.</p>
+      </div>
       <div class="${cls}" id="f-ackBeta" onclick="window.toggleAck('beta')">
         <div class="${checkCls}"></div>
-        <div class="ack-text">I understand that this is a beta product and is being updated on an ongoing basis.</div>
+        <div class="ack-text">I understand that Design Studio is a beta product. I may encounter bugs, slowness, or errors, and it is being updated on an ongoing basis.</div>
       </div>
       ${O.betaError ? `<div class="form-error">${esc(O.betaError)}</div>` : ''}
       <div class="order-nav">
@@ -522,14 +554,30 @@ async function handleSync() {
   }
 }
 
-// Populates Step 1 fields directly from the sync result. Deliberately does
-// NOT prefill the shipping address from the course's address — sales team
-// feedback was that the course address is frequently not where the flags
-// should actually ship, so the customer must always enter shipping by hand.
+// Populates Step 1 fields from the sync result. The round 1 facility address
+// is offered on Step 2 as the default "Ship to golf course" option; since the
+// course address isn't always where flags should go, the customer can switch
+// to "Ship to a different address" and enter one by hand.
 async function applySyncedInfo(result) {
   O.eventName = result.eventName || '';
   O.courseName = result.courseName || '';
   O.eventDate = result.eventDate || '';
+
+  if (result.courseAddressLine1 && result.courseCity) {
+    O.courseAddress = {
+      addressLine1: result.courseAddressLine1,
+      addressLine2: result.courseAddressLine2 || '',
+      city: result.courseCity,
+      stateProvince: result.courseState || '',
+      postalCode: result.coursePostalCode || '',
+      country: result.courseCountry === 'CA' ? 'CA' : 'US',
+    };
+    O.shipMode = 'course';
+    applyCourseAddress();
+  } else {
+    O.courseAddress = null;
+    O.shipMode = 'other';
+  }
 
   // Never throws — a failed color step shouldn't block the rest of the
   // synced info the customer already got.
@@ -557,6 +605,17 @@ async function applySyncedInfo(result) {
       console.error('Failed to attach synced logo', err);
     }
   }
+}
+
+function applyCourseAddress() {
+  const a = O.courseAddress;
+  if (!a) return;
+  O.country = a.country;
+  O.addressLine1 = a.addressLine1;
+  O.addressLine2 = a.addressLine2;
+  O.city = a.city;
+  O.stateProvince = a.stateProvince;
+  O.postalCode = a.postalCode;
 }
 
 function renderStep1() {
@@ -596,16 +655,34 @@ function renderStep2() {
       <input class="form-input" id="f-contactEmail" type="email" value="${esc(O.contactEmail)}" autocomplete="email">
       ${e.contactEmail ? `<div class="form-error">${esc(e.contactEmail)}</div>` : ''}
     </div>
+    ${O.courseAddress ? `
+    <div class="form-field">
+      <label class="form-label">Shipping</label>
+      <div class="country-toggle">
+        <button class="country-btn${O.shipMode === 'course' ? ' active' : ''}" onclick="window.selectShipMode('course')">Ship to golf course</button>
+        <button class="country-btn${O.shipMode === 'other' ? ' active' : ''}" onclick="window.selectShipMode('other')">Ship to a different address</button>
+      </div>
+    </div>` : ''}
+    <div class="form-field">
+      <label class="form-label" for="f-attn">ATTN <span style="font-weight:400;color:var(--gray-400)">(Optional)</span></label>
+      <input class="form-input" id="f-attn" type="text" value="${esc(O.attn !== null ? O.attn : O.eventName)}" placeholder="Recipient name" autocomplete="off">
+    </div>
+    ${O.courseAddress && O.shipMode === 'course' ? `
+    <div class="form-field">
+      <label class="form-label">Shipping Address</label>
+      <div style="line-height:1.5">
+        ${esc(O.courseName)}<br>
+        ${esc(O.addressLine1)}${O.addressLine2 ? '<br>' + esc(O.addressLine2) : ''}<br>
+        ${esc([O.city, O.stateProvince, O.postalCode].filter(Boolean).join(', '))}
+      </div>
+    </div>
+    ` : `
     <div class="form-field">
       <label class="form-label">Shipping Address</label>
       <div class="country-toggle">
         <button class="country-btn${O.country === 'US' ? ' active' : ''}" onclick="window.selectCountry('US')">🇺🇸 United States</button>
         <button class="country-btn${O.country === 'CA' ? ' active' : ''}" onclick="window.selectCountry('CA')">🇨🇦 Canada</button>
       </div>
-    </div>
-    <div class="form-field">
-      <label class="form-label" for="f-attn">ATTN <span style="font-weight:400;color:var(--gray-400)">(Optional)</span></label>
-      <input class="form-input" id="f-attn" type="text" value="${esc(O.attn !== null ? O.attn : O.eventName)}" placeholder="Recipient name" autocomplete="off">
     </div>
     <div class="form-field">
       <label class="form-label" for="f-addr1">Address Line 1${req()}</label>
@@ -635,7 +712,8 @@ function renderStep2() {
         <input class="form-input" id="f-postal" type="text" value="${esc(O.postalCode)}" placeholder="${postalPlaceholder}" autocomplete="postal-code">
         ${e.postalCode ? `<div class="form-error">${esc(e.postalCode)}</div>` : ''}
       </div>
-    </div>`;
+    </div>
+    `}`;
 }
 
 function renderStep3() {
@@ -1187,7 +1265,95 @@ async function resolvePdfPreview(entry) {
 }
 
 // ── Window-level event handlers ────────────────────────────
-window.orderNext = function () {
+// ── Incremental save ───────────────────────────────────────
+function buildIntakePayload() {
+  return {
+    course_name: O.courseName || null,
+    event_source_url: O.syncUrl.trim() || null,
+    event_name: O.eventName,
+    event_date: O.eventDate,
+    contact_name: O.contactName,
+    contact_email: O.contactEmail,
+    attn: O.attn !== null ? O.attn : O.eventName,
+    address_line1: O.addressLine1,
+    address_line2: O.addressLine2 || null,
+    city: O.city,
+    state_province: O.stateProvince,
+    postal_code: O.postalCode,
+    country: O.country,
+    flag_style: O.flagStyle || null,
+    // { zones: [{zone,label,hex,name}], gsTag, gsTagMode } — zone-tagged so
+    // the design page can map colors back to the right zone (not just
+    // positional primary/secondary), and carries the GS tag choice through.
+    flag_colors: { zones: buildFlagColorEntries(FLAGS.find(f => f.id === O.flagStyle)), gsTag: O.gsTag, gsTagMode: O.gsTagMode },
+    flag_setup: O.flagSetup,
+    flag_qty: O.flagQty,
+    design_notes: O.designNotes || null,
+    front_design_notes: O.flagSetup === 'different' ? (O.frontDesignNotes || null) : null,
+    back_design_notes: O.flagSetup === 'different' ? (O.backDesignNotes || null) : null,
+    ack_deadline: O.ackDeadline,
+  };
+}
+
+function buildShipping() {
+  return {
+    attn: O.attn !== null ? O.attn : O.eventName,
+    addressLine1: O.addressLine1,
+    addressLine2: O.addressLine2 || '',
+    city: O.city,
+    stateProvince: O.stateProvince,
+    postalCode: O.postalCode,
+    country: O.country,
+  };
+}
+
+// Creates the project on first call, then upserts the intake row on every
+// call. finalize=true (real submit only) stamps submitted_at. If a persisted
+// projectId no longer exists (staff deleted it), starts over with a new one.
+async function persistIntake({ finalize = false } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    if (!O.projectId) {
+      O.projectId = await createProject(O.eventName);
+      O.startedNotified = false;
+    }
+    try {
+      await saveOrderIntake(O.projectId, buildIntakePayload(), finalize);
+      return O.projectId;
+    } catch (err) {
+      if (err?.code === 'P0002' && attempt === 0) { O.projectId = null; continue; }
+      throw err;
+    }
+  }
+}
+
+// Best-effort: a failure here must never block the customer from moving on —
+// the final submit creates/updates the project regardless.
+async function saveStartedOrder() {
+  try {
+    const projectId = await persistIntake();
+    if (!O.startedNotified) {
+      O.startedNotified = true;
+      sendOrderNotification({
+        stage: 'started',
+        contactName: O.contactName,
+        contactEmail: O.contactEmail,
+        courseName: O.courseName || '',
+        eventName: O.eventName,
+        eventDate: O.eventDate,
+        eventUrl: O.syncUrl.trim() || '',
+        shipping: buildShipping(),
+        projectId,
+        projectUrl: `${window.location.origin}/project?project=${projectId}`,
+      }).catch(err => console.warn('Order started notification failed', err));
+      // Customer-facing copy with the "continue your order" link.
+      sendOrderStarted(projectId).catch(err => console.warn('Order started email failed', err));
+    }
+  } catch (err) {
+    console.warn('Could not save started order', err);
+  }
+}
+
+window.orderNext = async function () {
   const errors = validate(O.step);
   if (Object.keys(errors).length) {
     O.errors = errors;
@@ -1196,6 +1362,9 @@ window.orderNext = function () {
     return;
   }
   O.errors = {};
+  // Completing Step 2 creates the project so staff sees the order right away;
+  // later passes through Steps 1-2 just update it.
+  if (O.step === 2 || (O.step === 1 && O.projectId)) await saveStartedOrder();
   if (O.returnToReview) {
     O.returnToReview = false;
     O.step = 5;
@@ -1237,13 +1406,9 @@ window.orderSubmit = async function () {
   render();
 
   try {
-    // Reuse the project from a previous attempt in this session instead of
-    // creating a duplicate `projects` row every time "Submit Order" is retried.
-    let projectId = O.projectId;
-    if (!projectId) {
-      projectId = await createProject(O.eventName);
-      O.projectId = projectId;
-    }
+    // Reuses the project created after Step 2 (or by a previous attempt)
+    // instead of creating a duplicate `projects` row.
+    const projectId = await persistIntake();
 
     // Only upload logos that haven't already succeeded in a previous attempt.
     for (const lf of O.logoFiles) {
@@ -1267,34 +1432,9 @@ window.orderSubmit = async function () {
       console.warn('Flag preview image generation failed', err);
     }
 
-    const { error: intakeError } = await supabase.from('order_intakes').insert({
-      project_id: projectId,
-      course_name: O.courseName || null,
-      event_source_url: O.syncUrl.trim() || null,
-      event_name: O.eventName,
-      event_date: O.eventDate,
-      contact_name: O.contactName,
-      contact_email: O.contactEmail,
-      attn: O.attn !== null ? O.attn : O.eventName,
-      address_line1: O.addressLine1,
-      address_line2: O.addressLine2 || null,
-      city: O.city,
-      state_province: O.stateProvince,
-      postal_code: O.postalCode,
-      country: O.country,
-      flag_style: O.flagStyle,
-      // { zones: [{zone,label,hex,name}], gsTag, gsTagMode } — zone-tagged so
-      // the design page can map colors back to the right zone (not just
-      // positional primary/secondary), and carries the GS tag choice through.
-      flag_colors: { zones: flagColorEntries, gsTag: O.gsTag, gsTagMode: O.gsTagMode },
-      flag_setup: O.flagSetup,
-      flag_qty: O.flagQty,
-      design_notes: O.designNotes || null,
-      front_design_notes: O.flagSetup === 'different' ? (O.frontDesignNotes || null) : null,
-      back_design_notes: O.flagSetup === 'different' ? (O.backDesignNotes || null) : null,
-      ack_deadline: O.ackDeadline,
-    });
-    if (intakeError) throw intakeError;
+    // Final write: stamps submitted_at, which also locks the row against
+    // further anonymous edits (see save_order_intake).
+    await persistIntake({ finalize: true });
 
     sendOrderConfirmation({
       contactName: O.contactName,
@@ -1303,15 +1443,7 @@ window.orderSubmit = async function () {
       eventName: O.eventName,
       eventDate: O.eventDate,
       eventUrl: O.syncUrl.trim() || '',
-      shipping: {
-        attn: O.attn !== null ? O.attn : O.eventName,
-        addressLine1: O.addressLine1,
-        addressLine2: O.addressLine2 || '',
-        city: O.city,
-        stateProvince: O.stateProvince,
-        postalCode: O.postalCode,
-        country: O.country,
-      },
+      shipping: buildShipping(),
       flagStyle: O.flagStyle,
       flagStyleName: selectedFlagForEmail ? selectedFlagForEmail.name : O.flagStyle,
       flagPreviewUrl,
@@ -1343,15 +1475,7 @@ window.orderSubmit = async function () {
       eventName: O.eventName,
       eventDate: O.eventDate,
       eventUrl: O.syncUrl.trim() || '',
-      shipping: {
-        attn: O.attn !== null ? O.attn : O.eventName,
-        addressLine1: O.addressLine1,
-        addressLine2: O.addressLine2 || '',
-        city: O.city,
-        stateProvince: O.stateProvince,
-        postalCode: O.postalCode,
-        country: O.country,
-      },
+      shipping: buildShipping(),
       flagStyle: O.flagStyle,
       flagStyleName: selectedFlagForEmail ? selectedFlagForEmail.name : O.flagStyle,
       flagPreviewUrl,
@@ -1489,6 +1613,19 @@ window.selectSetup = function (setup) {
   render();
 };
 
+window.selectShipMode = function (mode) {
+  if (mode === O.shipMode) return;
+  O.shipMode = mode;
+  O.errors = {};
+  if (mode === 'course') {
+    applyCourseAddress();
+  } else {
+    O.addressLine1 = ''; O.addressLine2 = '';
+    O.city = ''; O.stateProvince = ''; O.postalCode = '';
+  }
+  render();
+};
+
 window.selectCountry = function (country) {
   O.country = country;
   O.stateProvince = '';
@@ -1521,10 +1658,64 @@ async function prefillContactFromSession() {
   if (O.step === 2 && !O.syncStep) render();
 }
 
+// Opens an in-progress order from the link in the "order started" email
+// (?resume=<project id>). A draft already in this browser for the same project
+// wins — it's newer and may hold logo files the server never saw. Otherwise the
+// form is rebuilt from the saved intake and dropped on Step 3. Logos are only
+// uploaded at final submit, so they have to be re-added on a different device.
+async function resumeOrder(projectId) {
+  if (O.projectId === projectId) return;
+  let row = null;
+  try { row = await loadOrderIntakeForResume(projectId); }
+  catch (err) { console.warn('Could not load order to resume', err); }
+  if (!row) {
+    O.resumeNotice = 'We couldn’t find an order in progress for that link. It may have already been submitted. Start a new order below, or email design@gsds.space and we’ll help.';
+    return;
+  }
+  O.projectId = projectId;
+  O.startedNotified = true;   // already got both "started" emails
+  O.eventName = row.event_name || '';
+  O.courseName = row.course_name || '';
+  O.eventDate = row.event_date || '';
+  O.syncUrl = row.event_source_url || '';
+  O.contactName = row.contact_name || '';
+  O.contactEmail = row.contact_email || '';
+  O.attn = row.attn ?? null;
+  O.country = row.country || 'US';
+  O.addressLine1 = row.address_line1 || '';
+  O.addressLine2 = row.address_line2 || '';
+  O.city = row.city || '';
+  O.stateProvince = row.state_province || '';
+  O.postalCode = row.postal_code || '';
+  O.flagStyle = row.flag_style || '';
+  const fc = row.flag_colors || {};
+  const colors = {};
+  (fc.zones || []).forEach(z => { if (z.zone && z.zone !== 'zone-border') colors[z.zone] = { hex: z.hex, name: z.name }; });
+  if (Object.keys(colors).length) O.flagColors = colors;
+  if (typeof fc.gsTag === 'boolean') O.gsTag = fc.gsTag;
+  if (fc.gsTagMode) O.gsTagMode = fc.gsTagMode;
+  O.flagSetup = row.flag_setup || 'same';
+  if (row.flag_qty) {
+    O.flagQty = row.flag_qty;
+    O.flagQtyCustom = ![9, 18, 27, 36].includes(row.flag_qty);
+  }
+  O.designNotes = row.design_notes || '';
+  O.frontDesignNotes = row.front_design_notes || '';
+  O.backDesignNotes = row.back_design_notes || '';
+  O.ackDeadline = !!row.ack_deadline;
+  O.syncedColorApplied = true;   // colors are the customer's own now
+  O.syncStep = false;
+  O.betaStep = false;
+  O.ackBeta = true;
+  O.step = 3;
+}
+
 // ── Init ───────────────────────────────────────────────────
 async function init() {
   loadDraft();
   await loadLogoFilesFromDb();
+  const resumeId = new URLSearchParams(window.location.search).get('resume');
+  if (resumeId && /^[0-9a-f-]{36}$/i.test(resumeId)) await resumeOrder(resumeId);
   render();
   prefillContactFromSession();
 

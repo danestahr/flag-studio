@@ -186,6 +186,7 @@ function showError(msg) {
 function getEffectiveStatus(fb) {
   if (!fb || !fb.status) return 'pending';
   if (fb.status === 'approved') return 'approved';
+  if (fb.status === 'rejected') return 'rejected';
   if (fb.status === 'needs_edits' && !fb.resolved) return 'needs_edits';
   return 'pending';
 }
@@ -195,10 +196,12 @@ function updateSummary() {
   if (!total) return;
   const approved = S.variations.filter(v => getEffectiveStatus(localFeedback[v.id]) === 'approved').length;
   const edits    = S.variations.filter(v => getEffectiveStatus(localFeedback[v.id]) === 'needs_edits').length;
-  const pending  = total - approved - edits;
+  const rejected = S.variations.filter(v => getEffectiveStatus(localFeedback[v.id]) === 'rejected').length;
+  const pending  = total - approved - edits - rejected;
   const el = document.getElementById('rcApproved');
   if (!el) return;
   document.getElementById('rcApproved').textContent = `${approved} approved`;
+  document.getElementById('rcRejected').textContent = `${rejected} not wanted`;
   document.getElementById('rcEdits').textContent    = `${edits} needs edits`;
   document.getElementById('rcPending').textContent  = `${pending} pending`;
   document.getElementById('rvBarApproved').style.width = `${(approved / total) * 100}%`;
@@ -218,6 +221,19 @@ function renderFlagFaces(frontEl, backEl, v) {
   if (backEl) renderInto(backEl, backLogos, 'back', mirrored, getVarFlag(v), getVarColors(v), [...(S.textLayers || []), ...backText], getVarGsTagOpts(v), S.imageLayers || []);
 }
 
+function collapseRejectedCard(card, v, map, thumbHtml, renderThumbs) {
+  card.className = 'rv-card rv-rejected rv-card-collapsed';
+  card.innerHTML = `
+    <div class="rv-collapsed-row">
+      ${thumbHtml}
+      <div class="rv-vname">${esc(v.name)} <span class="rv-qty">&times; ${parseInt(v.qty, 10) || 1}</span></div>
+      <span class="rv-status-badge rejected"><i class="fa-solid fa-ban" aria-hidden="true"></i> Not wanted</span>
+      <button class="rv-unapprove-btn" id="rvundo-${v.id}">Undo</button>
+    </div>`;
+  renderThumbs(card);
+  card.querySelector('#rvundo-' + v.id)?.addEventListener('click', () => unapproveVariation(map, v.id));
+}
+
 function collapseCard(card, v) {
   card.className = 'rv-card rv-approved rv-card-collapsed';
   card.innerHTML = `
@@ -230,6 +246,22 @@ function collapseCard(card, v) {
     </div>`;
   renderFlagFaces(card.querySelector('#rvct-' + v.id), card.querySelector('#rvct-back-' + v.id), v);
   card.querySelector('#rvunapprove-' + v.id)?.addEventListener('click', () => unapproveVariation(localFeedback, v.id));
+}
+
+function collapseFlagRejected(card, v) {
+  collapseRejectedCard(card, v, localFeedback,
+    `<div class="rv-collapsed-thumb" id="rvct-${v.id}"></div><div class="rv-collapsed-thumb" id="rvct-back-${v.id}"></div>`,
+    c => renderFlagFaces(c.querySelector('#rvct-' + v.id), c.querySelector('#rvct-back-' + v.id), v));
+}
+
+function collapseHsRejected(card, v) {
+  collapseRejectedCard(card, v, localHsFeedback,
+    `<div class="hs-rv-thumb" id="hscthumb-${v.id}"></div>`,
+    c => {
+      const el = c.querySelector('#hscthumb-' + v.id);
+      const state = effectiveHsState(v);
+      if (el && state) renderHoleSignInto(el, state, v);
+    });
 }
 
 // Reverts a locally/previously approved variation back to pending so the
@@ -245,7 +277,7 @@ function unapproveVariation(map, variationId) {
 
 window.approveAll = function () {
   S.variations.forEach(v => {
-    if (getEffectiveStatus(localFeedback[v.id]) === 'approved') return;
+    if (['approved', 'rejected'].includes(getEffectiveStatus(localFeedback[v.id]))) return;
     localFeedback[v.id] = { ...(localFeedback[v.id] || {}), status: 'approved' };
     const card = document.getElementById('rvc-' + v.id);
     if (card) collapseCard(card, v);
@@ -258,10 +290,12 @@ function updateHsSummary() {
   if (!total) return;
   const approved = hsVariations.filter(v => getEffectiveStatus(localHsFeedback[v.id]) === 'approved').length;
   const edits    = hsVariations.filter(v => getEffectiveStatus(localHsFeedback[v.id]) === 'needs_edits').length;
-  const pending  = total - approved - edits;
+  const rejected = hsVariations.filter(v => getEffectiveStatus(localHsFeedback[v.id]) === 'rejected').length;
+  const pending  = total - approved - edits - rejected;
   const el = document.getElementById('hsrcApproved');
   if (!el) return;
   document.getElementById('hsrcApproved').textContent = `${approved} approved`;
+  document.getElementById('hsrcRejected').textContent = `${rejected} not wanted`;
   document.getElementById('hsrcEdits').textContent    = `${edits} needs edits`;
   document.getElementById('hsrcPending').textContent  = `${pending} pending`;
   document.getElementById('hsrvBarApproved').style.width = `${(approved / total) * 100}%`;
@@ -270,7 +304,7 @@ function updateHsSummary() {
 
 window.approveAllHs = function () {
   hsVariations.forEach(v => {
-    if (getEffectiveStatus(localHsFeedback[v.id]) === 'approved') return;
+    if (['approved', 'rejected'].includes(getEffectiveStatus(localHsFeedback[v.id]))) return;
     localHsFeedback[v.id] = { ...(localHsFeedback[v.id] || {}), status: 'approved' };
     const card = document.getElementById('hsc-' + v.id);
     if (card) collapseHsCard(card, v);
@@ -350,19 +384,22 @@ function computeApprovalState() {
   const allFlagsLocked = !hasFlags || S.variations.every(v => {
     const fb = localFeedback[v.id];
     if (!submittedFlags.has(v.id)) return false;
-    return fb?.status === 'approved' || (fb?.status === 'needs_edits' && !fb?.resolved);
+    return fb?.status === 'approved' || fb?.status === 'rejected' || (fb?.status === 'needs_edits' && !fb?.resolved);
   });
   const allHsLocked = !hasHoleSigns || hsVariations.every(v => {
     const fb = localHsFeedback[v.id];
     if (!submittedHs.has(v.id)) return false;
-    return fb?.status === 'approved' || (fb?.status === 'needs_edits' && !fb?.resolved);
+    return fb?.status === 'approved' || fb?.status === 'rejected' || (fb?.status === 'needs_edits' && !fb?.resolved);
   });
   const allLocked = (hasFlags || hasHoleSigns) && allFlagsLocked && allHsLocked
     && (submittedFlags.size > 0 || submittedHs.size > 0);
 
   // All approved is a strict subset of locked — every variation has status='approved'.
-  const allFlagsApproved = !hasFlags || S.variations.every(v => localFeedback[v.id]?.status === 'approved');
-  const allHsApproved    = !hasHoleSigns || hsVariations.every(v => localHsFeedback[v.id]?.status === 'approved');
+  // "Not wanted" variations don't block approval, but at least one must be kept.
+  const isApprovedSet = (vars, map) => vars.every(v => ['approved', 'rejected'].includes(map[v.id]?.status))
+    && vars.some(v => map[v.id]?.status === 'approved');
+  const allFlagsApproved = !hasFlags || isApprovedSet(S.variations, localFeedback);
+  const allHsApproved    = !hasHoleSigns || isApprovedSet(hsVariations, localHsFeedback);
   const allApproved = allLocked && allFlagsApproved && allHsApproved;
 
   return { hasFlags, hasHoleSigns, allFlagsLocked, allHsLocked, allLocked, allFlagsApproved, allHsApproved, allApproved };
@@ -479,6 +516,7 @@ function renderPage(project) {
               <div class="rv-summary-counts">
                 <span class="rv-count approved" id="rcApproved">0 approved</span>
                 <span class="rv-count needs-edits" id="rcEdits">0 needs edits</span>
+                <span class="rv-count rejected" id="rcRejected">0 not wanted</span>
                 <span class="rv-count pending" id="rcPending">${n} pending</span>
               </div>
               <div class="rv-progress-bar">
@@ -505,6 +543,7 @@ function renderPage(project) {
               <div class="rv-summary-counts">
                 <span class="rv-count approved" id="hsrcApproved">0 approved</span>
                 <span class="rv-count needs-edits" id="hsrcEdits">0 needs edits</span>
+                <span class="rv-count rejected" id="hsrcRejected">0 not wanted</span>
                 <span class="rv-count pending" id="hsrcPending">${hsVariations.length} pending</span>
               </div>
               <div class="rv-progress-bar">
@@ -552,6 +591,7 @@ function buildCard(v, fb) {
   card.id = 'rvc-' + v.id;
 
   if (effectiveStatus === 'approved') { collapseCard(card, v); return card; }
+  if (effectiveStatus === 'rejected') { collapseFlagRejected(card, v); return card; }
 
   // Lock the card once feedback was previously submitted and is still active
   // (needs_edits, not yet resolved by designer). The customer can't change
@@ -577,6 +617,7 @@ function buildCard(v, fb) {
     : `<div class="rv-actions">
         <button class="rv-btn approve" id="rapprove-${v.id}"><i class="fa-solid fa-check" aria-hidden="true"></i> Approve</button>
         <button class="rv-btn edits${effectiveStatus === 'needs_edits' ? ' active' : ''}" id="redits-${v.id}"><i class="fa-solid fa-xmark" aria-hidden="true"></i> Request edits</button>
+        <button class="rv-btn reject" id="rreject-${v.id}"><i class="fa-solid fa-ban" aria-hidden="true"></i> Don't want this</button>
       </div>
       <div class="rv-note-wrap${effectiveStatus === 'needs_edits' ? ' visible' : ''}" id="rnw-${v.id}">
         <textarea class="rv-note" id="rnote-${v.id}" placeholder="What needs to change?">${effectiveStatus === 'needs_edits' ? (fb.note || '') : ''}</textarea>
@@ -616,6 +657,10 @@ function buildCard(v, fb) {
     card.querySelector('#rapprove-' + v.id).addEventListener('click', () => {
       localFeedback[v.id] = { ...(localFeedback[v.id] || {}), status: 'approved' };
       collapseCard(card, v); updateSummary();
+    });
+    card.querySelector('#rreject-' + v.id).addEventListener('click', () => {
+      localFeedback[v.id] = { ...(localFeedback[v.id] || {}), status: 'rejected', resolved: false };
+      collapseFlagRejected(card, v); updateSummary();
     });
     card.querySelector('#redits-' + v.id).addEventListener('click', () => {
       localFeedback[v.id] = { ...(localFeedback[v.id] || {}), status: 'needs_edits', resolved: false };
@@ -947,6 +992,7 @@ function buildHsCard(v, fb) {
   card.id = 'hsc-' + v.id;
 
   if (effectiveStatus === 'approved') { collapseHsCard(card, v); return card; }
+  if (effectiveStatus === 'rejected') { collapseHsRejected(card, v); return card; }
 
   const isLocked = submittedHs.has(v.id) && fb?.status === 'needs_edits' && !fb?.resolved;
 
@@ -964,6 +1010,7 @@ function buildHsCard(v, fb) {
     : `<div class="rv-actions">
         <button class="rv-btn approve" id="hsapprove-${v.id}"><i class="fa-solid fa-check" aria-hidden="true"></i> Approve</button>
         <button class="rv-btn edits${effectiveStatus === 'needs_edits' ? ' active' : ''}" id="hsedits-${v.id}"><i class="fa-solid fa-xmark" aria-hidden="true"></i> Request edits</button>
+        <button class="rv-btn reject" id="hsreject-${v.id}"><i class="fa-solid fa-ban" aria-hidden="true"></i> Don't want this</button>
       </div>
       <div class="rv-note-wrap${effectiveStatus === 'needs_edits' ? ' visible' : ''}" id="hsnw-${v.id}">
         <textarea class="rv-note" id="hsnote-${v.id}" placeholder="What needs to change?">${effectiveStatus === 'needs_edits' ? (fb.note || '') : ''}</textarea>
@@ -992,6 +1039,10 @@ function buildHsCard(v, fb) {
       localHsFeedback[v.id] = { ...(localHsFeedback[v.id] || {}), status: 'approved' };
       collapseHsCard(card, v);
       updateHsSummary();
+    });
+    card.querySelector('#hsreject-' + v.id).addEventListener('click', () => {
+      localHsFeedback[v.id] = { ...(localHsFeedback[v.id] || {}), status: 'rejected', resolved: false };
+      collapseHsRejected(card, v); updateHsSummary();
     });
     card.querySelector('#hsedits-' + v.id).addEventListener('click', () => {
       localHsFeedback[v.id] = { ...(localHsFeedback[v.id] || {}), status: 'needs_edits', resolved: false };
@@ -1130,11 +1181,11 @@ window.submitProductReview = async function (kind) {
   const allVariations = isFlags ? S.variations : hsVariations;
   const undecided = allVariations.filter(v => {
     const st = getEffectiveStatus(map[v.id]);
-    return st !== 'approved' && st !== 'needs_edits';
+    return !['approved', 'needs_edits', 'rejected'].includes(st);
   });
   if (undecided.length) {
     const names = undecided.map(v => v.name).filter(Boolean).slice(0, 5).join(', ');
-    alert(`Please approve or request edits on every variation before submitting. Still waiting on ${undecided.length} of ${allVariations.length}${names ? `: ${names}` : ''}.`);
+    alert(`Please approve or request edits on every variation before submitting (approve, request edits, or mark it as not wanted). Still waiting on ${undecided.length} of ${allVariations.length}${names ? `: ${names}` : ''}.`);
     return;
   }
 
@@ -1209,7 +1260,10 @@ async function syncProofStatus(kind, reviewerName, reviewerEmail, generalNote) {
     return 'partial';
   }
 
-  const allApprovedNow = statuses.every(s => s === 'approved');
+  // Rejected ("don't want this") variations don't block approval, but a
+  // design where everything was rejected has nothing to print — that goes
+  // back to staff as a changes request instead.
+  const allApprovedNow = statuses.every(s => s === 'approved' || s === 'rejected') && statuses.some(s => s === 'approved');
   try {
     if (allApprovedNow) {
       await clientApproveDesignProof(projectId, kind, reviewerName, reviewerEmail, reviewClient);
@@ -1227,7 +1281,8 @@ async function syncProofStatus(kind, reviewerName, reviewerEmail, generalNote) {
       sendApproverConfirmation(kind).catch(err => console.error('sendApprovalConfirmation failed', err));
       return 'approved';
     }
-    const note = `${reviewerName ? reviewerName + ': ' : ''}See per-variation feedback for details.`;
+    const allRejected = statuses.every(s => s === 'rejected');
+    const note = `${reviewerName ? reviewerName + ': ' : ''}${allRejected ? 'None of these options are wanted.' : 'See per-variation feedback for details.'}`;
     await clientRejectDesignProof(projectId, kind, note, reviewClient);
     notifyChangesRequested(note);
     return 'rejected';

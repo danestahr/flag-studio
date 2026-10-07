@@ -43,6 +43,9 @@ function openFlagTlToolbar(id, anchorEl, textLayers, onChange) {
 
   tb.innerHTML = `
     <select class="hs-tl-tb-select" id="flagTlFont">${fontOpts}</select>
+    <button class="hs-tl-tb-btn${layer.bold ? ' active' : ''}" id="flagTlBold" title="Bold">
+      <i class="fa-solid fa-bold" aria-hidden="true"></i>
+    </button>
     <div class="hs-tl-tb-sep"></div>
     <div class="hs-tl-tb-size-row">
       <input type="range" class="hs-tl-tb-slider" id="flagTlSizeSlider" min="1" max="30" step="0.5" value="${layer.fontSize}">
@@ -84,6 +87,18 @@ function openFlagTlToolbar(id, anchorEl, textLayers, onChange) {
     const family = HS_FONTS.find(f => f.id === l.font)?.family || "'DM Serif Display', serif";
     const div = getTextDiv();
     if (div) div.style.fontFamily = family;
+    onChange();
+  });
+
+  const boldBtn = tb.querySelector('#flagTlBold');
+  boldBtn.addEventListener('click', () => {
+    const l = textLayers.find(x => x.id === id); if (!l) return;
+    l.bold = !l.bold;
+    boldBtn.classList.toggle('active', !!l.bold);
+    const div = getTextDiv();
+    if (div) div.style.fontWeight = l.bold ? 'bold' : 'normal';
+    const editor = getOverlay()?.querySelector('.hs-tl-editor');
+    if (editor) editor.style.fontWeight = l.bold ? 'bold' : 'normal';
     onChange();
   });
 
@@ -177,6 +192,7 @@ function enterFlagTlEditMode(id, overlay, textLayers) {
   editor.style.cssText = [
     'outline:none;border:none;width:100%;',
     `font-family:${fontFamily};`,
+    `font-weight:${layer.bold ? 'bold' : 'normal'};`,
     `font-size:${fsPx}px;`,
     `color:${layer.color};`,
     `text-align:${layer.align || 'center'};`,
@@ -304,7 +320,7 @@ export function renderFlagTextOverlaysStatic(wrapId, textLayers, mirror = false)
     textDiv.className = 'hs-tl-content';
     textDiv.style.cssText = [
       'width:100%;pointer-events:none;overflow:visible;',
-      `font-family:${fontFamily};`,
+      `font-family:${fontFamily};font-weight:${layer.bold ? 'bold' : 'normal'};`,
       `color:${layer.color};text-align:${align || 'center'};`,
       'line-height:1.1;white-space:pre-wrap;word-break:break-word;',
     ].join('');
@@ -351,7 +367,7 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
     textDiv.className = 'hs-tl-content';
     textDiv.style.cssText = [
       'width:100%;pointer-events:none;overflow:visible;',
-      `font-family:${fontFamily};font-size:${fsPx}px;`,
+      `font-family:${fontFamily};font-size:${fsPx}px;font-weight:${layer.bold ? 'bold' : 'normal'};`,
       `color:${layer.color};text-align:${layer.align || 'center'};`,
       'line-height:1.1;white-space:pre-wrap;word-break:break-word;',
     ].join('');

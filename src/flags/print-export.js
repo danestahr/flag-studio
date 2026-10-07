@@ -19,6 +19,7 @@ import { getFlag, makeSvg, showGsTagVariant, resolveColors, preloadLogoAspects, 
 import { loadProject, loadFlagConfig, loadLogosForProject } from '../supabase.js';
 import { buildOrderSummaryPdf, buildFlagSheetsPdf } from '../orderSummaryPdf.js';
 import { slug, mapWithConcurrency } from '../dom-utils.js';
+import { expandHoleNumbers } from './hole-numbers.js';
 
 // ── Per-variation override helpers (mirrors flags/variations.js's own
 // per-variation flag/colors/gsTag override logic) ───────────────────────
@@ -286,23 +287,27 @@ export async function buildFlagSheetsPdfBlob(variations = S.variations) {
 export async function buildFlagsPrintZip(setStatus = () => {}) {
   const zip = new JSZip();
   const flag = getFlag();
-  const total = S.variations.length;
+  const total = S.variations.reduce((n, v) => n + expandHoleNumbers(v).length, 0);
   let rendered = 0;
-  await mapWithConcurrency(S.variations, PRINT_EXPORT_CONCURRENCY, async (v, i) => {
-    const frontLogos = v.logos || v.assignment || [];
-    const mirrored = sameSidesOf(v);
-    const backLogos  = mirrored ? frontLogos : (v.backLogos || v.backAssignment || []);
-    const backTextLayers = mirrored ? (v.textLayers || []) : (v.backTextLayers || []);
-    const { blob: frontPng, vbW: fW, vbH: fH } = await rasterizeForPrint(frontLogos, 'front', false, withMasterText(v), getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || []);
-    const { blob: backPng,  vbW: bW, vbH: bH } = await rasterizeForPrint(backLogos,  'back', mirrored, [...(S.textLayers || []), ...backTextLayers], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || []);
-    const safe = slug(v.name) || 'variation-' + (i + 1);
-    const [frontPdf, backPdf] = await Promise.all([
-      pngBlobToPdfBlob(frontPng, fW, fH),
-      pngBlobToPdfBlob(backPng, bW, bH),
-    ]);
-    zip.file(`${safe}/${safe}-front.pdf`, frontPdf);
-    zip.file(`${safe}/${safe}-back.pdf`,  backPdf);
-    setStatus(`Rendering ${++rendered} of ${total}: ${v.name}…`);
+  await mapWithConcurrency(S.variations, PRINT_EXPORT_CONCURRENCY, async (v0, i) => {
+    const safe = slug(v0.name) || 'variation-' + (i + 1);
+    // Numbered variations render one flag per hole; the rest yield a single entry.
+    for (const { v, num } of expandHoleNumbers(v0)) {
+      const frontLogos = v.logos || v.assignment || [];
+      const mirrored = sameSidesOf(v);
+      const backLogos  = mirrored ? frontLogos : (v.backLogos || v.backAssignment || []);
+      const backTextLayers = mirrored ? (v.textLayers || []) : (v.backTextLayers || []);
+      const { blob: frontPng, vbW: fW, vbH: fH } = await rasterizeForPrint(frontLogos, 'front', false, withMasterText(v), getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || []);
+      const { blob: backPng,  vbW: bW, vbH: bH } = await rasterizeForPrint(backLogos,  'back', mirrored, [...(S.textLayers || []), ...backTextLayers], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || []);
+      const file = num == null ? safe : `${safe}-hole-${String(num).padStart(2, '0')}`;
+      const [frontPdf, backPdf] = await Promise.all([
+        pngBlobToPdfBlob(frontPng, fW, fH),
+        pngBlobToPdfBlob(backPng, bW, bH),
+      ]);
+      zip.file(`${safe}/${file}-front.pdf`, frontPdf);
+      zip.file(`${safe}/${file}-back.pdf`,  backPdf);
+      setStatus(`Rendering ${++rendered} of ${total}: ${v0.name}${num == null ? '' : ' #' + num}…`);
+    }
   });
   setStatus('Adding logos…');
   // Independent fetches - parallelizing is a pure latency win over the old

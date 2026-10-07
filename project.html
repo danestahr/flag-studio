@@ -6,7 +6,7 @@
   <title>GolfStatus Design Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://use.typekit.net/ouu2gxk.css">
   <link rel="stylesheet" href="/src/landing.css">
 </head>
@@ -68,6 +68,20 @@
     <div class="modal-actions">
       <button class="btn-secondary" onclick="window.closeCustomerModal()">Cancel</button>
       <button id="customerSaveBtn" class="btn primary" onclick="window.saveCustomerInfo()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Proof recipient email modal (shown when Send proof is clicked with no email on file) -->
+<div id="proofEmailModal" class="modal-backdrop" style="display:none" onclick="if(event.target===this)window.closeProofEmailModal()">
+  <div class="modal-box" style="max-width:420px">
+    <div class="modal-title">Email address required</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:12px">There's no contact email on file for this project. Add one so the proof link can be emailed to the client.</div>
+    <input class="form-input" id="proofEmailInput" type="email" placeholder="name@example.com" onkeydown="if(event.key==='Enter')window.confirmProofEmail()">
+    <div id="proofEmailStatus" style="font-size:12px;color:var(--danger, #c0392b);min-height:16px;margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="window.closeProofEmailModal()">Cancel</button>
+      <button id="proofEmailSaveBtn" class="btn primary" onclick="window.confirmProofEmail()">Save &amp; send proof</button>
     </div>
   </div>
 </div>

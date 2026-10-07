@@ -23,6 +23,7 @@ import { STATUS_LABEL } from '../status-labels.js';
 function reviewStatusOf(v) {
   const fb = HS.feedback?.find(f => f.variation_id === v.id);
   if (fb?.status === 'approved') return { cls: 'approved', label: 'Approved' };
+  if (fb?.status === 'rejected') return { cls: 'rejected', label: 'Not wanted' };
   if (fb?.status === 'needs_edits' && !fb?.resolved) return { cls: 'needs-edits', label: 'Needs edits' };
   return { cls: 'not-reviewed', label: 'Not reviewed' };
 }

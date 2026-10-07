@@ -1324,11 +1324,11 @@ export function rescaleTextOverlayFonts(previewEl) {
 // alone is close but not reliably exact (word-break compounding, sub-pixel
 // font-metric rounding that isn't linear across sizes), and wrapText has zero
 // tolerance for landing even a fraction of a pixel short.
-function measureNaturalWidthHS(text, fontFamily, fsPx, sx) {
+function measureNaturalWidthHS(text, fontFamily, fsPx, sx, bold) {
   const t = text || 'Text';
   const probe = document.createElement('div');
   probe.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:-9999px;` +
-    `word-break:break-word;line-height:1.1;font-family:${fontFamily};font-size:${fsPx}px;`;
+    `word-break:break-word;line-height:1.1;font-family:${fontFamily};font-size:${fsPx}px;font-weight:${bold ? 'bold' : 'normal'};`;
   probe.textContent = t;
   document.body.appendChild(probe);
 
@@ -1362,7 +1362,7 @@ export function applyAutoWidth(layer, parentEl) {
   const sc = parentEl.offsetHeight / HS_H;
   const fsPx = Math.max(8, Math.round(layer.size * sc));
   const sx = parentEl.offsetWidth / HS_W;
-  const newW = Math.max(layer.size, measureNaturalWidthHS(layer.text, fontFamily, fsPx, sx));
+  const newW = Math.max(layer.size, measureNaturalWidthHS(layer.text, fontFamily, fsPx, sx, layer.bold));
   const center = layer.x + layer.w / 2;
   layer.w = newW;
   layer.x = Math.round(center - newW / 2);
@@ -1413,7 +1413,7 @@ export function paintTextLayerOverlays(parentEl, state, { locked = false, variat
     textDiv.className = 'hs-tl-content';
     textDiv.style.cssText = [
       'width:100%;pointer-events:none;overflow:visible;',
-      `font-family:${fontFamily};font-size:${fsPx}px;`,
+      `font-family:${fontFamily};font-size:${fsPx}px;font-weight:${layer.bold ? 'bold' : 'normal'};`,
       `color:${layer.color};text-align:${layer.align || 'center'};`,
       'line-height:1.1;white-space:pre-wrap;word-break:break-word;',
     ].join('');
@@ -1592,7 +1592,7 @@ export function paintTextLayerOverlays(parentEl, state, { locked = false, variat
         // tracking content exactly instead of drifting from repeated ratio math.
         const ratioW = Math.round(chStartW * (newSize / chStartSize));
         const sx = parentEl.offsetWidth / HS_W;
-        const naturalW = measureNaturalWidthHS(layer.text, fontFamily, fsPxNow, sx);
+        const naturalW = measureNaturalWidthHS(layer.text, fontFamily, fsPxNow, sx, layer.bold);
         const newW = layer.autoWidth && !layer.dock
           ? Math.max(newSize, naturalW)
           : Math.max(newSize, ratioW, naturalW);

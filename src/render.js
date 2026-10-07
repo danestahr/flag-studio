@@ -215,13 +215,14 @@ export function paintTextLayers(textLayers, vbW, vbH, isBack, append) {
     }
 
     const boxWsvg = (layer.w / 100) * vbW;
-    const lines = wrapText(layer.text, boxWsvg, fsSvg);
+    const lines = wrapText(layer.text, boxWsvg, fsSvg, layer.bold);
     const lineH = fsSvg * 1.1;
 
     const t = document.createElementNS(ns, 'text');
     t.setAttribute('y', cy);
     t.setAttribute('font-family', fontFamily);
     t.setAttribute('font-size', fsSvg);
+    if (layer.bold) t.setAttribute('font-weight', 'bold');
     t.setAttribute('fill', layer.color || '#000000');
     t.setAttribute('text-anchor', textAnchor);
     lines.forEach((line, i) => {

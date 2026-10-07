@@ -42,6 +42,7 @@ let isAdmin = false;
 function reviewStatusOf(v) {
   const fb = S.feedback?.find(f => f.variation_id === v.id);
   if (fb?.status === 'approved') return { cls: 'approved', label: 'Approved' };
+  if (fb?.status === 'rejected') return { cls: 'rejected', label: 'Not wanted' };
   if (fb?.status === 'needs_edits' && !fb?.resolved) return { cls: 'needs-edits', label: 'Needs edits' };
   return { cls: 'not-reviewed', label: 'Not reviewed' };
 }
@@ -310,6 +311,7 @@ function renderGallerySidebar() {
   renderSidebar(document.getElementById('sidebar'), {
     projectType: 'Tournament Flags',
     activeStep: 3,
+    collapsible: false,
     customerSection: true,
     logosTile: true,
     projectId: p,

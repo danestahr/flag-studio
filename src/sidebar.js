@@ -78,9 +78,18 @@ function applyCollapsed(container, collapsed) {
 // flags-gallery.html) and the hole sign designer (hole-signs.html).
 // Collapsible to an icon-only rail (see .sidebar.collapsed in style.css) —
 // state persists across the wizard's pages.
-export function renderSidebar(container, { activeStep, steps, customerSection = false, logosTile = false, completedSteps = [] }) {
+export function renderSidebar(container, { activeStep, steps, customerSection = false, logosTile = false, completedSteps = [], collapsible = true }) {
+  const projectId = new URLSearchParams(window.location.search).get('project');
   container.innerHTML = `
     <div class="sidebar-tile">
+      <div class="sidebar-bar">
+        <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Collapse menu" aria-label="Collapse menu">
+          <i class="fa-solid fa-angles-left" aria-hidden="true"></i>
+        </button>
+        ${projectId ? `<a class="sidebar-overview-link" href="/project.html?project=${encodeURIComponent(projectId)}" title="View project overview">
+          <i class="fa-solid fa-table-columns" aria-hidden="true"></i><span>Project overview</span>
+        </a>` : ''}
+      </div>
       <div class="sidebar-top">
         <div class="steps-nav">
           ${steps.map((s, i) => {
@@ -103,9 +112,6 @@ export function renderSidebar(container, { activeStep, steps, customerSection = 
       ${customerSection ? '<div id="customerSection" style="display:none"></div>' : ''}
     </div>
     ${logosTile ? '<div class="sidebar-tile" id="sidebarLogosTile"></div>' : ''}
-    <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Collapse menu" aria-label="Collapse menu">
-      <i class="fa-solid fa-angles-left" aria-hidden="true"></i>
-    </button>
   `;
   steps.forEach(s => {
     if (s.onClick) container.querySelector('#' + s.id)?.addEventListener('click', s.onClick);
@@ -124,7 +130,16 @@ export function renderSidebar(container, { activeStep, steps, customerSection = 
     try { localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0'); } catch {}
     applyCollapsed(container, next);
   });
-  applyCollapsed(container, readCollapsed());
+  setSidebarCollapsible(container, collapsible);
+}
+
+// The review (Gallery & export) step keeps the menu pinned open: the
+// collapse button is hidden and the stored preference is ignored there (not
+// overwritten, so other steps still restore it).
+export function setSidebarCollapsible(container, collapsible) {
+  const btn = container.querySelector('#sidebarCollapseBtn');
+  if (btn) btn.style.display = collapsible ? '' : 'none';
+  applyCollapsed(container, collapsible ? readCollapsed() : false);
 }
 
 // Fills #sidebarLogosTile (see the logosTile option above — a standalone

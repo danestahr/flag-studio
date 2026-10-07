@@ -3,8 +3,8 @@ import './icons.js';
 import { requireAuth, isStaffOrAdmin } from './auth.js';
 import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake,
          updateProject, deleteProject, upsertCustomerInfo,
-         submitDesignForReview, adminRequestDesignChanges, adminSendDesignProof, adminMarkDesignSentToPrint,
-         sendProofReady, loadLatestChangeNote, loadLatestPrintAction, sendPrestigeOrder } from './supabase.js';
+         submitDesignForReview, adminRequestDesignChanges, adminReopenDesignReview, adminSendDesignProof, adminMarkDesignSentToPrint,
+         sendProofReady, loadLatestEmailFailure, loadLatestChangeNote, loadLatestPrintAction, sendPrestigeOrder } from './supabase.js';
 import { FLAGS } from './data.js';
 import { loadAllFlags } from './svgLoader.js';
 import { hydrateFlagStateForProject, buildFlagsPrintZip } from './flags/print-export.js';
@@ -212,6 +212,7 @@ function renderToolCardStatus(t) {
         <div class="status-block-label">Status</div>
         <div id="statusValue-${t.productType}" class="status-block-value"></div>
       </div>
+      ${isAdmin ? `<div id="reopenRow-${t.productType}"></div>` : ''}
       <div class="tool-steps-nav">${stepLinks}</div>
     </div>
     ${isAdmin ? `
@@ -286,6 +287,16 @@ function renderDesignAdminActions(t, cfg, status) {
   };
 
   actionsEl.innerHTML = '';
+  // Sits directly under the status tile, full width (not with the other
+  // actions below the review link) since it undoes the tile's own state.
+  const reopenEl = document.getElementById(`reopenRow-${t.productType}`);
+  reopenEl.innerHTML = '';
+  if (status === 'approved') {
+    const b = btn('Cancel Approval', () => window.reopenForReview(t.productType));
+    b.classList.add('block');
+    b.style.marginRight = '0';
+    reopenEl.appendChild(b);
+  }
   if (status === 'submitted') {
     actionsEl.appendChild(btn('Request changes', () => {
       document.getElementById(`requestChangesForm-${t.productType}`).style.display = '';
@@ -630,6 +641,23 @@ window.confirmRequestChanges = async function (productType) {
   }
 };
 
+window.reopenForReview = async function (productType) {
+  if (!confirm('Cancel this approval? The design goes back to "Proof sent", the review link stays live, and every variation must be re-approved by the client.')) return;
+  setReviewPanelStatus(productType, '');
+  try {
+    await adminReopenDesignReview(pid, productType);
+    const cfg = cfgFor(productType);
+    if (cfg) {
+      cfg.status = 'proof_sent';
+      cfg.approved_by_name = cfg.approved_by_email = cfg.approved_at = null;
+    }
+    renderToolCardStatus(DESIGN_TYPES.find(t => t.productType === productType));
+  } catch (err) {
+    console.error('Failed to reopen for review', err);
+    setReviewPanelStatus(productType, 'Could not reopen for review — please try again.');
+  }
+};
+
 // Same "best known contact" precedence as the Customer details modal's `get`
 // (line ~246): customer_info overrides only exist because staff corrected or
 // filled in a value there, so they take priority; the order-submitted intake
@@ -644,7 +672,48 @@ function contactInfo() {
   };
 }
 
+let _proofEmailProductType = null;
+
+window.closeProofEmailModal = function () {
+  document.getElementById('proofEmailModal').style.display = 'none';
+  _proofEmailProductType = null;
+};
+
+window.confirmProofEmail = async function () {
+  const input = document.getElementById('proofEmailInput');
+  const status = document.getElementById('proofEmailStatus');
+  const btn = document.getElementById('proofEmailSaveBtn');
+  const email = input.value.trim();
+  if (!input.checkValidity() || !email) {
+    status.textContent = 'Please enter a valid email address.';
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const info = { ..._project?.customer_info, contact_email: email };
+    await upsertCustomerInfo(pid, info);
+    _project = { ..._project, customer_info: info };
+    const productType = _proofEmailProductType;
+    window.closeProofEmailModal();
+    await window.sendProofToClient(productType);
+  } catch (err) {
+    console.error('Failed to save contact email', err);
+    status.textContent = 'Could not save — please try again.';
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 window.sendProofToClient = async function (productType) {
+  if (!contactInfo().email) {
+    _proofEmailProductType = productType;
+    const input = document.getElementById('proofEmailInput');
+    input.value = '';
+    document.getElementById('proofEmailStatus').textContent = '';
+    document.getElementById('proofEmailModal').style.display = 'flex';
+    input.focus();
+    return;
+  }
   // Any send that isn't the client's very first proof - a resend after
   // needs_changes, or a reshare of an updated design while still proof_sent -
   // gets the "revised proof" copy instead of the original "ready for review".
@@ -655,7 +724,10 @@ window.sendProofToClient = async function (productType) {
     const token = await adminSendDesignProof(pid, productType);
     const reviewUrl = `${window.location.origin}/review?token=${token}`;
     const contact = contactInfo();
-    if (contact.email) {
+    let emailProblem = '';
+    if (!contact.email) {
+      emailProblem = 'no customer email on file';
+    } else {
       await sendProofReady({
         contactName: contact.name,
         contactEmail: contact.email,
@@ -663,7 +735,13 @@ window.sendProofToClient = async function (productType) {
         reviewUrl,
         isRevision,
         productType,
-      }).catch(err => console.error('sendProofReady failed', err));
+      }).catch(async err => {
+        console.error('sendProofReady failed', err);
+        const row = await loadLatestEmailFailure(pid, 'proof-ready').catch(() => null);
+        emailProblem = row
+          ? `the email to ${row.recipient} failed (${row.http_status ?? 'no response'}: ${extractSendGridMessage(row.error)})`
+          : 'the email failed to send';
+      });
     }
     const [project, flagCfg, holeCfg] = await Promise.all([
       loadProject(pid),
@@ -674,13 +752,20 @@ window.sendProofToClient = async function (productType) {
     _flagCfg = flagCfg;
     _holeCfg = holeCfg;
     renderToolCardStatus(DESIGN_TYPES.find(t => t.productType === productType));
-    setReviewPanelStatus(productType, 'Proof sent.');
+    setReviewPanelStatus(productType, emailProblem
+      ? `Proof is ready, but ${emailProblem} — use Copy review link to send it manually.`
+      : 'Proof sent.');
   } catch (err) {
     console.error('Failed to send proof', err);
     setStatusValue(productType, status);
     setReviewPanelStatus(productType, 'Could not send the proof — please try again.');
   }
 };
+
+// SendGrid error bodies are JSON like {"errors":[{"message":"..."}]}.
+function extractSendGridMessage(raw) {
+  try { return JSON.parse(raw).errors?.[0]?.message || raw; } catch { return raw || 'unknown error'; }
+}
 
 window.copyReviewLink = function (productType) {
   if (!_project?.share_token) return;

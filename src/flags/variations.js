@@ -14,6 +14,7 @@ import {
   getFeedback, resolveFeedback, deleteFeedbackForVariation, supabase, loadOrderIntake,
 } from '../supabase.js';
 import { initDropZones, renderDropZones, hideZoneToolbar, triggerAdd } from './drop-zones.js';
+import { syncHoleNumberText, hasHoleNumbers, enableHoleNumbers, disableHoleNumbers } from './hole-numbers.js';
 import { renderFlagTextOverlays, addFlagTextLayer, clearFlagTextOverlays, renderFlagTextOverlaysStatic } from './text-layers.js';
 import { eyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
 import { esc } from '../dom-utils.js';
@@ -454,6 +455,17 @@ function renderVarFlagRow(v) {
         </div>
       </div>
 
+      <div class="ve-section">
+        <div class="ve-section-title"><span>Hole numbers</span></div>
+        <label class="ve-check"><input type="checkbox" ${hasHoleNumbers(v) ? 'checked' : ''} onchange="veHoleNumbersToggle(this.checked)"> Number each flag (one per qty)</label>
+        ${hasHoleNumbers(v) ? `
+        <div class="qty-stepper" style="margin-top:8px">
+          <span style="margin-right:8px">Starting hole</span>
+          <input class="var-qty-input" type="number" min="0" step="1" value="${v.holeStart}" onchange="veHoleStartSet(this.value)">
+        </div>
+        <div class="ve-hint">Shows the starting hole in the editor and review. Export makes holes ${v.holeStart}&ndash;${v.holeStart + Math.max(1, parseInt(v.qty, 10) || 1) - 1}. Drag or restyle the # on the canvas.</div>` : ''}
+      </div>
+
       ${colorZones.length ? `
       <div class="ve-section">
         <div class="ve-section-title">
@@ -885,6 +897,7 @@ function commitVeQty(next) {
   v.qty = Math.max(1, next);
   const input = document.getElementById('veQtyInput');
   if (input) input.value = v.qty;
+  if (v.holeStart != null) refreshEditPanel();
   renderVarList();
   markDirty();
 }
@@ -896,6 +909,27 @@ window.veQtyChange = function (delta) {
 
 window.veQtySet = function (val) {
   commitVeQty(parseInt(val, 10) || 1);
+};
+
+window.veHoleNumbersToggle = function (on) {
+  const v = S.variations.find(v => v.id === editingVarId);
+  if (!v) return;
+  if (on) enableHoleNumbers(v, v.holeStart ?? 1); else disableHoleNumbers(v);
+  renderVarCanvas();
+  refreshVarThumbs();
+  refreshEditPanel();
+  markDirty();
+};
+
+window.veHoleStartSet = function (val) {
+  const v = S.variations.find(v => v.id === editingVarId);
+  if (!v) return;
+  v.holeStart = Math.max(0, parseInt(val, 10) || 0);
+  syncHoleNumberText(v);
+  renderVarCanvas();
+  refreshVarThumbs();
+  refreshEditPanel();
+  markDirty();
 };
 
 window.veClearAllColors = function () {
@@ -1209,6 +1243,10 @@ function dupVar(id) {
   if (src.flagId) nv.flagId = src.flagId;
   if (src.colors) nv.colors = { ...src.colors };
   nv.sameLogoOnBothSides = sameSidesOf(src);
+  if (src.holeStart != null) {
+    nv.holeStart = src.holeStart;
+    nv.textLayers.forEach((l, i) => { if (src.textLayers[i]?.holeNumber) l.holeNumber = true; });
+  }
   S.variations.push(nv);
   S.activeVarId = nv.id;
   redistributeQty();

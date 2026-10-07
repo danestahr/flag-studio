@@ -2,8 +2,8 @@
 // font size — close enough for layout intent, the SVG renderer handles the
 // actual glyph metrics. Shared by the flags and hole-sign static SVG
 // renderers so wrapping matches what the live editor overlay shows.
-export function wrapText(text, maxW, fontSize) {
-  const charW = fontSize * 0.5;
+export function wrapText(text, maxW, fontSize, bold = false) {
+  const charW = fontSize * (bold ? 0.55 : 0.5);
   const maxChars = Math.max(1, Math.floor(maxW / charW));
   const results = [];
   // Split on explicit newlines first so Shift+Enter hard-breaks are honoured,

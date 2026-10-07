@@ -10,12 +10,14 @@ import { esc } from './dom-utils.js';
 
 function statusTileHtml(fb) {
   if (fb?.status === 'approved') return '<span class="var-status-tile approved"><i class="fa-solid fa-check" aria-hidden="true"></i> Approved</span>';
+  if (fb?.status === 'rejected') return '<span class="var-status-tile rejected"><i class="fa-solid fa-ban" aria-hidden="true"></i> Not wanted</span>';
   if (fb?.status === 'needs_edits' && !fb?.resolved) return '<span class="var-status-tile needs-edits">Needs edits</span>';
   return '<span class="var-status-tile not-reviewed">Not reviewed</span>';
 }
 
 function feedbackClass(fb) {
   if (fb?.status === 'needs_edits' && !fb?.resolved) return ' needs-edits';
+  if (fb?.status === 'rejected') return ' rejected';
   if (fb?.status === 'approved') return ' approved';
   return '';
 }

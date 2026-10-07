@@ -149,7 +149,7 @@ export async function getMyRole(userId) {
 export async function listProjects({ userId, role, cursor = null, pageSize = 30, q = '' } = {}) {
   let query = supabase
     .from('projects')
-    .select(`id, name, status, updated_at, created_by, customer_info, profiles(email, first_name, last_name, role), order_intakes(contact_email), flag_config(id, flag_id, status), hole_sign_config(id, template_style, status)`)
+    .select(`id, name, status, updated_at, created_by, customer_info, profiles(email, first_name, last_name, role), order_intakes(contact_email, event_date), flag_config(id, flag_id, status), hole_sign_config(id, template_style, status)`)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(pageSize);
@@ -158,8 +158,25 @@ export async function listProjects({ userId, role, cursor = null, pageSize = 30,
     query = query.eq('created_by', userId);
   }
   if (q) {
-    const escaped = q.replace(/[%_\\]/g, (m) => `\\${m}`);
-    query = query.ilike('name', `%${escaped}%`);
+    // Matches project name OR the customer behind it. The creator's profile
+    // (email/name) and the order-intake email live in other tables, which
+    // PostgREST can't OR against projects.name in one request, so resolve
+    // those to ids first and fold them into a single OR filter.
+    const like = `%${q.replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
+    const quoted = `"${like.replace(/[\\"]/g, (m) => `\\${m}`)}"`;
+    const [profs, intakes] = await Promise.all([
+      supabase.from('profiles').select('id')
+        .or(`email.ilike.${quoted},first_name.ilike.${quoted},last_name.ilike.${quoted}`).limit(500),
+      supabase.from('order_intakes').select('project_id').ilike('contact_email', like).limit(500),
+    ]);
+    if (profs.error) throw profs.error;
+    if (intakes.error) throw intakes.error;
+    const conds = [`name.ilike.${quoted}`, `customer_info->>contact_email.ilike.${quoted}`];
+    const userIds = profs.data.map(r => r.id);
+    const projectIds = intakes.data.map(r => r.project_id).filter(Boolean);
+    if (userIds.length) conds.push(`created_by.in.(${userIds.join(',')})`);
+    if (projectIds.length) conds.push(`id.in.(${projectIds.join(',')})`);
+    query = query.or(conds.join(','));
   }
   if (cursor) {
     query = query.or(`updated_at.lt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.lt.${cursor.id})`);
@@ -495,6 +512,11 @@ export async function adminRequestDesignChanges(projectId, productType, note = n
   if (error) throw error;
 }
 
+export async function adminReopenDesignReview(projectId, productType, note = null) {
+  const { error } = await supabase.rpc('admin_reopen_design_review', { target_project_id: projectId, target_product_type: productType, note });
+  if (error) throw error;
+}
+
 // Returns the project's share_token (minted server-side if it didn't
 // already have one) so the caller can build the review URL without a
 // second round trip.
@@ -661,6 +683,50 @@ async function callEdgeFunction(name, body) {
     throw new Error(`Edge function ${name} failed: ${text}`);
   }
   return res.json();
+}
+
+// Latest failed send for a project (staff/admin only via RLS; null for anyone
+// else). Rows are written by the send-* edge functions.
+export async function loadLatestEmailFailure(projectId, kind) {
+  const { data, error } = await supabase
+    .from('email_log')
+    .select('recipient, http_status, error, created_at')
+    .eq('project_id', projectId)
+    .eq('kind', kind)
+    .eq('status', 'failed')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// Upserts the order_intakes row for a project (SECURITY DEFINER RPC - anon
+// customers can't select/update the table directly). Pass finalize=true on the
+// real "Submit Order" to stamp submitted_at; earlier calls leave it null so
+// staff can tell a started order from a placed one.
+export async function saveOrderIntake(projectId, data, finalize = false) {
+  const { error } = await supabase.rpc('save_order_intake', {
+    p_project_id: projectId,
+    p_data: data,
+    p_finalize: finalize,
+  });
+  if (error) throw error;
+}
+
+// Customer-facing "order started" email with the resume link - see
+// send-order-started edge function. Only the project id is sent; the function
+// looks up the recipient itself.
+export async function sendOrderStarted(projectId) {
+  return callEdgeFunction('send-order-started', { projectId });
+}
+
+// Intake row for the order form's ?resume=<project id> link, or null if the
+// order was already submitted / doesn't exist. See get_order_intake_for_resume.
+export async function loadOrderIntakeForResume(projectId) {
+  const { data, error } = await supabase.rpc('get_order_intake_for_resume', { p_project_id: projectId });
+  if (error) throw error;
+  return data;
 }
 
 export async function sendOrderConfirmation(payload) {

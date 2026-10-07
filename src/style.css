@@ -148,8 +148,13 @@ header { background:var(--chrome-bg); padding:0 1.5rem; height:80px; display:fle
    on how tall the logos tile happens to be. Same position and look whether
    the card is expanded or collapsed — collapsing only changes .sidebar's
    width and which children are visible, not this button's treatment. */
-.sidebar-collapse-btn { position:absolute; top:32px; left:100%; margin-left:10px; width:30px; height:30px; border-radius:50%; border:1.5px solid var(--gray-200); background:var(--white); color:var(--gray-400); display:flex; align-items:center; justify-content:center; font-size:12px; cursor:pointer; transition:all .15s; z-index:2; }
+.sidebar-bar { display:flex; align-items:center; gap:10px; padding:1rem 1.5rem 0; }
+.sidebar-collapse-btn { width:30px; height:30px; flex:0 0 auto; border-radius:50%; border:1.5px solid var(--gray-200); background:var(--white); color:var(--gray-400); display:flex; align-items:center; justify-content:center; font-size:12px; cursor:pointer; transition:all .15s; }
 .sidebar-collapse-btn:hover { background:var(--gray-50); color:var(--gray-600); }
+.sidebar-overview-link { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:var(--r); font-size:12px; font-weight:500; color:rgba(255,255,255,.7); text-decoration:none; transition:background .15s,color .15s; }
+.sidebar-overview-link:hover { background:rgba(255,255,255,.08); color:var(--chrome-text); }
+.sidebar.collapsed .sidebar-bar { flex-direction:column; padding:1rem 1rem 0; }
+.sidebar.collapsed .sidebar-overview-link span { display:none; }
 /* Collapsed: same floating, borderless-background, hugging card as
    expanded — just narrower (icon-only step column, everything else
    hidden), not a separate flush full-height rail design. */
@@ -768,6 +773,8 @@ input[type=file] { display:none; }
 .var-status-tile { display:inline-block; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; padding:2px 7px; border-radius:3px; align-self:flex-start; }
 .var-status-tile.approved { color:#16a34a; background:#dcfce7; }
 .var-status-tile.needs-edits { color:#b45309; background:#fef3c7; }
+.var-status-tile.rejected { color:#dc2626; background:#fee2e2; }
+.var-list .var-card.rejected { border-color:#dc2626; opacity:.8; }
 .var-status-tile.not-reviewed { color:var(--gray-600); background:var(--gray-100); }
 .var-qty-row { display:flex; align-items:center; gap:6px; margin-top:2px; }
 .var-qty-label { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--gray-400); font-weight:500; }
@@ -917,6 +924,7 @@ input[type=file] { display:none; }
 .rv-badge { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:500; padding:2px 8px; border-radius:20px; }
 .rv-badge.approved { background:#dcfce7; color:#16a34a; }
 .rv-badge.needs-edits { background:#fef3c7; color:#d97706; }
+.rv-badge.rejected { background:#fee2e2; color:#dc2626; }
 .rv-badge.pending { background:var(--gray-100); color:var(--gray-600); }
 
 /* Drafts list */
@@ -1868,3 +1876,13 @@ input[type=file] { display:none; }
 .hs-default-del:hover { color:var(--red,#dc2626); background:var(--gray-50); }
 .hs-defaults-footer { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:14px 20px; border-top:1px solid var(--gray-100); flex-shrink:0; }
 .hs-default-img-wrap .file-type-badge { width:100%; height:100%; font-size:16px; }
+
+/* iOS Safari auto-zooms the page on focus when a field's font-size is under
+   16px. Keep fields at 16px on touch devices so focusing never zooms. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}

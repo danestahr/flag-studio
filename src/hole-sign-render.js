@@ -702,7 +702,7 @@ export function makeHoleSignSvg(state, variation) {
     const effX = dockPos ? dockPos.x : layer.x;
     const effY = dockPos ? dockPos.y : layer.y;
     const effW = dockPos ? dockPos.w : layer.w;
-    const lines = wrapText(layer.text, effW, layer.size);
+    const lines = wrapText(layer.text, effW, layer.size, layer.bold);
     const lineH = layer.size * 1.1;
     const anchor = layer.align === 'left' ? 'start' : layer.align === 'right' ? 'end' : 'middle';
     const tx = layer.align === 'left' ? effX : layer.align === 'right' ? effX + effW : effX + effW / 2;
@@ -710,7 +710,7 @@ export function makeHoleSignSvg(state, variation) {
     const tspans = lines.map((line, i) =>
       `<tspan x="${tx}"${i === 0 ? '' : ` dy="${lineH}"`}>${escXml(line)}</tspan>`
     ).join('');
-    const markup = `<text data-tl-id="${layer.id}" x="${tx}" y="${Math.round(firstBaseY)}" text-anchor="${anchor}" font-family="${escXml(getFamily(layer.font))}" font-size="${layer.size}" fill="${escXml(layer.color || '#111110')}">${tspans}</text>`;
+    const markup = `<text data-tl-id="${layer.id}" x="${tx}" y="${Math.round(firstBaseY)}" text-anchor="${anchor}" font-family="${escXml(getFamily(layer.font))}" font-size="${layer.size}"${layer.bold ? ' font-weight="bold"' : ''} fill="${escXml(layer.color || '#111110')}">${tspans}</text>`;
     // A docked layer must paint above the frame group (which contains the
     // banner's own background rect) or it renders invisibly behind it — see
     // frameParts/aboveParts flush order below.
