@@ -28,6 +28,36 @@ async function projectExists(projectId: string): Promise<boolean> {
   return Array.isArray(rows) && rows.length > 0;
 }
 
+// Vendor requires the in-hand date to be 2 business days (Mon-Fri) before the
+// event. Mirrors subtractBusinessDays() in src/orderSummaryPdf.js.
+function subtractBusinessDays(y: number, m: number, d: number, n: number): Date {
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  while (n > 0) {
+    dt.setUTCDate(dt.getUTCDate() - 1);
+    const dow = dt.getUTCDay();
+    if (dow !== 0 && dow !== 6) n--;
+  }
+  return dt;
+}
+
+// In-hand date (event date - 2 business days) as MM/DD/YY for the subject line,
+// or '' when the project has no event date.
+async function inHandDateLabel(projectId: string): Promise<string> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}&select=customer_info,order_intakes(event_date)&limit=1`,
+    { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } },
+  );
+  if (!res.ok) return '';
+  const [row] = await res.json();
+  const iso = (row?.customer_info?.event_date || row?.order_intakes?.[0]?.event_date || '').slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return '';
+  const dt = subtractBusinessDays(+m[1], +m[2], +m[3], 2);
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${mm}/${dd}/${String(dt.getUTCFullYear()).slice(2)}`;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
@@ -56,7 +86,8 @@ serve(async (req) => {
     const zipBase64 = btoa(binary);
 
     const name = projectName;
-    const subject = `${name} - Flag Order`;
+    const dateLabel = await inHandDateLabel(projectId);
+    const subject = `${dateLabel ? dateLabel + ' ' : ''}-Golf Status Order- ${name}`;
     const filename = `${name.replace(/[^a-zA-Z0-9_\- ]/g, '_')}-flags.zip`;
     const html = wrapEmailHtml({
       title: name,

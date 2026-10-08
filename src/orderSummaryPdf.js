@@ -22,11 +22,19 @@ function formatDate(iso) {
   return `${months[m-1]} ${d}, ${y}`;
 }
 
-// ISO date string shifted by `days` (UTC math, so no DST/timezone drift).
-function shiftIsoDate(iso, days) {
+// ISO date moved back `n` business days (Mon-Fri; holidays not considered).
+// Vendor (Prestige) requires the in-hand date to be 2 business days before the
+// event, always a weekday. UTC math, so no DST/timezone drift.
+function subtractBusinessDays(iso, n) {
   if (!iso) return '';
   const [y, m, d] = iso.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  while (n > 0) {
+    dt.setUTCDate(dt.getUTCDate() - 1);
+    const dow = dt.getUTCDay();
+    if (dow !== 0 && dow !== 6) n--;
+  }
+  return dt.toISOString().slice(0, 10);
 }
 
 function today() { return formatDate(new Date().toISOString().slice(0, 10)); }
@@ -322,7 +330,7 @@ export async function buildOrderSummaryPdf({
     ['Event',      ci.event_name],
     ['Course',     ci.course_name],
     ['Event Date', formatDate(ci.event_date)],
-    ['In-Hand',    formatDate(shiftIsoDate(ci.event_date?.slice(0, 10), -2))],
+    ['In-Hand',    formatDate(subtractBusinessDays(ci.event_date?.slice(0, 10), 2))],
     ['Contact',    ci.contact_name],
     ['Email',      ci.contact_email],
     effectiveAttn ? ['ATTN', effectiveAttn] : null,
