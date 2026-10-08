@@ -22,6 +22,13 @@ function formatDate(iso) {
   return `${months[m-1]} ${d}, ${y}`;
 }
 
+// ISO date string shifted by `days` (UTC math, so no DST/timezone drift).
+function shiftIsoDate(iso, days) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
 function today() { return formatDate(new Date().toISOString().slice(0, 10)); }
 
 // ── Data loaders ──────────────────────────────────────────
@@ -315,6 +322,7 @@ export async function buildOrderSummaryPdf({
     ['Event',      ci.event_name],
     ['Course',     ci.course_name],
     ['Event Date', formatDate(ci.event_date)],
+    ['In-Hand',    formatDate(shiftIsoDate(ci.event_date?.slice(0, 10), -2))],
     ['Contact',    ci.contact_name],
     ['Email',      ci.contact_email],
     effectiveAttn ? ['ATTN', effectiveAttn] : null,

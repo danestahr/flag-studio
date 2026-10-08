@@ -332,7 +332,7 @@ export async function buildFlagsPrintZip(setStatus = () => {}) {
   setStatus('Building order summary…');
   const colorEntries = getVarColorEntries(null);
   setStatus('Rendering variation thumbnails…');
-  const variationImages = await mapWithConcurrency(S.variations, PRINT_EXPORT_CONCURRENCY, buildVariationSheetData);
+  const variationImages = await mapWithConcurrency(S.variations, PRINT_EXPORT_CONCURRENCY, v => buildVariationSheetData(v));
   const summaryPdf = await buildOrderSummaryPdf({
     projectId: S.projectId, productType: 'flags', colorEntries,
     templateName: flag?.name || S.flagId, variationCount: S.variations.length, variationImages,
