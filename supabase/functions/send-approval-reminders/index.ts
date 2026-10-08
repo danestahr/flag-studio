@@ -27,22 +27,18 @@ interface Candidate {
   proof_sent: boolean;
 }
 
-// One primary call to action per email. Unfinished order trumps missing logos,
-// which trumps an unaccepted proof; otherwise just open the project.
-function callToAction(c: Candidate): { url: string; label: string; message: string } {
+// One primary call to action per email, always a link the customer can open
+// without an account. Unfinished order trumps a waiting proof, which trumps
+// missing logos. Returns null when there's nothing actionable (the SQL
+// candidate filter should already exclude those; this is a safety net so we
+// never fall back to a project.html link customers can't access).
+function callToAction(c: Candidate): { url: string; label: string; message: string } | null {
   const base = APP_URL.replace(/\/$/, '');
   if (!c.order_complete) {
     return {
       url: `${base}/order?resume=${c.project_id}`,
       label: 'Complete Your Order',
       message: "We don't have your completed order yet. Please finish your order so we can start on your artwork.",
-    };
-  }
-  if (!c.has_logos) {
-    return {
-      url: `${base}/upload-logos?project=${c.project_id}`,
-      label: 'Upload Your Logos',
-      message: "We haven't received any logos for your order yet. Please upload them so we can get your design ready.",
     };
   }
   if (c.proof_sent && c.share_token) {
@@ -52,11 +48,14 @@ function callToAction(c: Candidate): { url: string; label: string; message: stri
       message: 'Your design proof is ready and waiting for your approval. Please review it and approve or request changes.',
     };
   }
-  return {
-    url: `${base}/project.html?project=${c.project_id}`,
-    label: 'Review Your Design',
-    message: 'Your design still needs your attention. Click below to continue.',
-  };
+  if (!c.has_logos) {
+    return {
+      url: `${base}/upload-logos?project=${c.project_id}`,
+      label: 'Upload Your Logos',
+      message: "We haven't received any logos for your order yet. Please upload them so we can get your design ready.",
+    };
+  }
+  return null;
 }
 
 async function rpc<T>(fn: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -114,8 +113,9 @@ function buildText(c: Candidate, cta: { url: string; label: string; message: str
   ].join('\n');
 }
 
-async function sendReminder(c: Candidate) {
+async function sendReminder(c: Candidate): Promise<boolean> {
   const cta = callToAction(c);
+  if (!cta) return false;
   const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
     headers: { Authorization: `Bearer ${SENDGRID_API_KEY}`, 'Content-Type': 'application/json' },
@@ -141,6 +141,7 @@ async function sendReminder(c: Candidate) {
     error: err,
   });
   if (!res.ok) throw new Error(`SendGrid failed: ${res.status} ${err}`);
+  return true;
 }
 
 serve(async () => {
@@ -150,7 +151,7 @@ serve(async () => {
     const errors: string[] = [];
     for (const c of candidates) {
       try {
-        await sendReminder(c);
+        if (!(await sendReminder(c))) continue;
         await rpc('mark_approval_reminder_sent', { p_project_id: c.project_id, p_threshold: c.threshold });
         sent++;
       } catch (err) {
