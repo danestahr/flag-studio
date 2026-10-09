@@ -9,6 +9,7 @@ import { FLAGS } from './data.js';
 import { loadAllFlags } from './svgLoader.js';
 import { hydrateFlagStateForProject, buildFlagsPrintZip } from './flags/print-export.js';
 import { esc } from './dom-utils.js';
+import { confirmPrestigeSend } from './prestige-send-modal.js';
 import { STATUS_LABEL } from './status-labels.js';
 
 const session = await requireAuth();
@@ -808,10 +809,10 @@ window.refreshProjectStatus = async function (productType) {
 window.confirmMarkSentToPrint = async function (productType) {
   const status = cfgFor(productType)?.status || 'draft';
   const resend = status === 'sent_to_print';
-  const msg = productType === 'flags'
-    ? `${resend ? 'Resend' : 'Send'} this order to Prestige Flag for print? This emails the print files to the printer.`
-    : 'Mark this design as sent to print?';
-  if (!window.confirm(msg)) return;
+  const ok = productType === 'flags'
+    ? await confirmPrestigeSend()
+    : window.confirm('Mark this design as sent to print?');
+  if (!ok) return;
   setReviewPanelStatus(productType, '');
   let prestigeSent = false;
   try {

@@ -7,8 +7,10 @@ import { wrapEmailHtml } from '../_shared/email-layout.ts';
 const SENDGRID_API_KEY = Deno.env.get('SENDGRID_API_KEY_2') ?? Deno.env.get('SENDGRID_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const FROM_EMAIL = 'design@gsds.space';
-const FROM_NAME = 'Design Studio';
+// Prestige's vendor requires these to come from Alex; the address must stay
+// verified in SendGrid (Single Sender Verification) or the send is rejected.
+const FROM_EMAIL = 'alex@golfstatus.com';
+const FROM_NAME = 'Alex';
 const TO_EMAIL = 'tom@prestigeflag.com';
 const TO_NAME = 'Tom';
 
@@ -92,7 +94,7 @@ serve(async (req) => {
     const html = wrapEmailHtml({
       title: name,
       bodyHtml: `<p style="margin:0 0 20px;color:#333;font-size:15px;line-height:1.6;">
-      Hey Tom,<br><br>
+      Hey ${TO_NAME},<br><br>
       Here's the flag order for <strong>${name}</strong>. The zip file is attached and includes everything you should need to know about the order.
     </p>
     <p style="margin:24px 0 0;color:#999;font-size:13px;line-height:1.6;">
@@ -100,7 +102,7 @@ serve(async (req) => {
     </p>`,
     });
 
-    const text = `Hey Tom,\n\nHere's the flag order for ${name}. The zip file is attached and includes everything you should need to know about the order.\n\nLet me know if you have any questions!`;
+    const text = `Hey ${TO_NAME},\n\nHere's the flag order for ${name}. The zip file is attached and includes everything you should need to know about the order.\n\nLet me know if you have any questions!`;
 
     const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',

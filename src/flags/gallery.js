@@ -18,6 +18,7 @@ import {
   getVarFlag, getVarColors, getVarGsTagOpts, sameSidesOf,
   buildFlagSheetsPdfBlob, buildFlagsPrintZip, hydrateFlagStateForProject,
 } from './print-export.js';
+import { confirmPrestigeSend } from '../prestige-send-modal.js';
 import { esc, dl, slug, sanitizeFilename } from '../dom-utils.js';
 import { STATUS_LABEL } from '../status-labels.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
@@ -118,7 +119,7 @@ function setupGallery() {
 window.sendToPrestige = async function () {
   if (!S.variations.length) { alert('No variations to export.'); return; }
   if (!S.projectId) { alert('Save your project first.'); return; }
-  if (!confirm('Send this order to Prestige Flag for print? This emails the print files to the printer.')) return;
+  if (!(await confirmPrestigeSend())) return;
   const btn = document.querySelector('[onclick="sendToPrestige()"]');
   const origLabel = btn?.innerHTML;
   if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
