@@ -86,10 +86,15 @@ serve(async (req) => {
     }
 
     // Base64 encode the zip for SendGrid attachment
+    // Encode in 3-byte-aligned chunks: a per-byte string concat on a multi-MB zip
+    // blows the worker memory limit (546 WORKER_RESOURCE_LIMIT).
     const bytes = new Uint8Array(zipBuffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    const zipBase64 = btoa(binary);
+    const CHUNK = 0x7800; // 30720, divisible by 3 so chunk base64 joins cleanly
+    const parts: string[] = [];
+    for (let i = 0; i < bytes.byteLength; i += CHUNK) {
+      parts.push(btoa(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK) as unknown as number[])));
+    }
+    const zipBase64 = parts.join('');
 
     const name = projectName;
     const dateLabel = await inHandDateLabel(projectId);
