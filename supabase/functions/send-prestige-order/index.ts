@@ -12,6 +12,9 @@ const FROM_EMAIL = 'design@gsds.space';
 const FROM_NAME = 'Design Studio';
 const TO_EMAIL = 'tom@prestigeflag.com';
 const TO_NAME = 'Tom';
+// ?testTo= redirects the send for testing; only this address is honored so the
+// (unauthenticated) endpoint can't be used to mail arbitrary recipients.
+const TEST_TO_EMAIL = 'dane@danestahr.com';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -66,6 +69,8 @@ serve(async (req) => {
     const url = new URL(req.url);
     const projectId = url.searchParams.get('projectId');
     const projectName = url.searchParams.get('projectName') || 'Flag Order';
+    const isTest = url.searchParams.get('testTo')?.toLowerCase() === TEST_TO_EMAIL;
+    const toEmail = isTest ? TEST_TO_EMAIL : TO_EMAIL;
     const zipBuffer = await req.arrayBuffer();
 
     if (!projectId || !zipBuffer.byteLength) {
@@ -88,7 +93,7 @@ serve(async (req) => {
 
     const name = projectName;
     const dateLabel = await inHandDateLabel(projectId);
-    const subject = `${dateLabel ? dateLabel + ' ' : ''}-Golf Status Order- ${name}`;
+    const subject = `${isTest ? '[TEST] ' : ''}${dateLabel ? dateLabel + ' ' : ''}-Golf Status Order- ${name}`;
     const filename = `${name.replace(/[^a-zA-Z0-9_\- ]/g, '_')}-flags.zip`;
     const html = wrapEmailHtml({
       title: name,
@@ -110,7 +115,7 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        personalizations: [{ to: [{ email: TO_EMAIL, name: TO_NAME }] }],
+        personalizations: [{ to: [{ email: toEmail, name: TO_NAME }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         tracking_settings: { click_tracking: { enable: false } },
@@ -128,11 +133,11 @@ serve(async (req) => {
       }),
     });
 
-    if (res.ok) await logEmail({ kind: 'prestige-order', projectId: projectId, recipient: TO_EMAIL, ok: true, httpStatus: res.status });
+    if (res.ok) await logEmail({ kind: 'prestige-order', projectId: projectId, recipient: toEmail, ok: true, httpStatus: res.status });
     if (!res.ok) {
       const body = await res.text();
       console.error('SendGrid error', res.status, body);
-      await logEmail({ kind: 'prestige-order', projectId: projectId, recipient: TO_EMAIL, ok: false, httpStatus: res.status, error: body });
+      await logEmail({ kind: 'prestige-order', projectId: projectId, recipient: toEmail, ok: false, httpStatus: res.status, error: body });
       return new Response(JSON.stringify({ error: 'SendGrid failed', status: res.status, detail: body }), {
         status: 500, headers: { ...CORS, 'Content-Type': 'application/json' },
       });
