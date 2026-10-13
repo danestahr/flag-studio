@@ -95,6 +95,11 @@ serve(async (req) => {
       parts.push(btoa(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK) as unknown as number[])));
     }
     const zipBase64 = parts.join('');
+    // SendGrid caps the whole email at 30 MB; base64 inflates the zip by ~4/3.
+    const zipMb = bytes.byteLength / 1048576;
+    const emailMb = zipBase64.length / 1048576;
+    const msg = `prestige zip ${zipMb.toFixed(2)} MB (~${emailMb.toFixed(2)} MB base64, limit 30) project=${projectId}`;
+    if (emailMb > 20) console.warn('WARNING large', msg); else console.log(msg);
 
     const name = projectName;
     const dateLabel = await inHandDateLabel(projectId);
