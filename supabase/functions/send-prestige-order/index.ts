@@ -7,10 +7,9 @@ import { wrapEmailHtml } from '../_shared/email-layout.ts';
 const SENDGRID_API_KEY = Deno.env.get('SENDGRID_API_KEY_2') ?? Deno.env.get('SENDGRID_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-// Prestige's vendor requires these to come from Alex; the address must stay
-// verified in SendGrid (Single Sender Verification) or the send is rejected.
-const FROM_EMAIL = 'alex@golfstatus.com';
-const FROM_NAME = 'Alex';
+// Sent from the shared design inbox (not an individual's address).
+const FROM_EMAIL = 'design@gsds.space';
+const FROM_NAME = 'Design Studio';
 const TO_EMAIL = 'tom@prestigeflag.com';
 const TO_NAME = 'Tom';
 
