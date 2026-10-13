@@ -91,7 +91,7 @@ const O = {
   gsTag: true,
   gsTagMode: 'auto',      // 'auto' | 'dark' | 'light' — same as the design page
   flagSetup: 'same',
-  flagQty: 9,
+  flagQty: 0,             // no default — customer must pick a quantity on purpose
   flagQtyCustom: false,
   designNotes: '',
   // Only shown/required when flagSetup === 'different' — a single shared
@@ -1287,7 +1287,7 @@ function buildIntakePayload() {
     // positional primary/secondary), and carries the GS tag choice through.
     flag_colors: { zones: buildFlagColorEntries(FLAGS.find(f => f.id === O.flagStyle)), gsTag: O.gsTag, gsTagMode: O.gsTagMode },
     flag_setup: O.flagSetup,
-    flag_qty: O.flagQty,
+    flag_qty: O.flagQty || null,
     design_notes: O.designNotes || null,
     front_design_notes: O.flagSetup === 'different' ? (O.frontDesignNotes || null) : null,
     back_design_notes: O.flagSetup === 'different' ? (O.backDesignNotes || null) : null,
