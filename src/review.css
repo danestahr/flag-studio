@@ -1020,3 +1020,9 @@ header {
   color: var(--gray-600);
 }
 .rv-confirm-detail strong { color: var(--black); }
+
+.rv-qty-stepper { display: inline-flex; align-items: center; margin-left: auto; vertical-align: middle; border: 1px solid var(--gray-200); border-radius: 6px; overflow: hidden; background: var(--white); }
+.rv-qty-stepper .qty-btn { appearance: none; width: 28px; height: 26px; padding: 0; border: none; background: var(--white); color: var(--black); font-size: 10px; cursor: pointer; }
+.rv-qty-stepper .qty-btn:hover { background: var(--gray-50); }
+.rv-qty-stepper .var-qty-input { width: 44px; height: 26px; padding: 0; border: none; border-left: 1px solid var(--gray-200); border-right: 1px solid var(--gray-200); font-size: 12px; font-family: inherit; text-align: center; background: var(--white); color: var(--black); -moz-appearance: textfield; }
+.rv-qty-stepper .var-qty-input::-webkit-outer-spin-button, .rv-qty-stepper .var-qty-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }

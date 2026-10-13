@@ -382,6 +382,18 @@ export async function saveFlagConfig(projectId, state) {
   await supabase.from('projects').update({ updated_at: new Date().toISOString() }).eq('id', projectId);
 }
 
+// Patches one variation's qty in place (re-reading the row first) so the
+// gallery's stepper can save without a full-state saveFlagConfig() upsert.
+export async function saveFlagVariationQty(projectId, variationId, qty) {
+  const cfg = await loadFlagConfig(projectId);
+  if (!cfg) throw new Error('no flag design found');
+  const raw = cfg.variations;
+  const items = (Array.isArray(raw) ? raw : raw?.items || []).map(v => v.id === variationId ? { ...v, qty } : v);
+  const variations = Array.isArray(raw) ? items : { ...raw, items };
+  const { error } = await supabase.from('flag_config').update({ variations, updated_at: new Date().toISOString() }).eq('project_id', projectId);
+  if (error) throw error;
+}
+
 export async function loadFlagConfig(projectId) {
   const { data, error } = await supabase
     .from('flag_config')
@@ -538,6 +550,16 @@ export async function clientApproveDesignProof(projectId, productType, reviewerN
 
 export async function clientRejectDesignProof(projectId, productType, note = null, client = supabase) {
   const { error } = await client.rpc('client_reject_design_proof', { target_project_id: projectId, target_product_type: productType, note });
+  if (error) throw error;
+}
+
+export async function clientSetVariationQty(projectId, productType, variationId, qty, client = supabase) {
+  const { error } = await client.rpc('client_set_variation_qty', {
+    target_project_id: projectId,
+    target_product_type: productType,
+    target_variation_id: String(variationId),
+    new_qty: qty,
+  });
   if (error) throw error;
 }
 

@@ -4,7 +4,7 @@ import { FLAGS } from './data.js';
 import { HS_DEFAULT_TEMPLATES } from './hole-sign-data.js';
 import { getFlag, renderInto, preloadLogoAspects, withMasterText, normaliseLogos, resolveColors } from './render.js';
 import { loadAllFlags } from './svgLoader.js';
-import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase, createReviewClient, clientApproveDesignProof, clientRejectDesignProof, sendReviewDecision, sendApprovalConfirmation, uploadFeedbackLogo, loadOrderIntake } from './supabase.js';
+import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase, createReviewClient, clientApproveDesignProof, clientRejectDesignProof, clientSetVariationQty, sendReviewDecision, sendApprovalConfirmation, uploadFeedbackLogo, loadOrderIntake } from './supabase.js';
 import { renderHoleSignInto } from './hole-sign-render.js';
 import { esc } from './dom-utils.js';
 
@@ -405,6 +405,56 @@ function computeApprovalState() {
   return { hasFlags, hasHoleSigns, allFlagsLocked, allHsLocked, allLocked, allFlagsApproved, allHsApproved, allApproved };
 }
 
+// Per-variation quantity stepper on the proof. Editable only while that
+// design's proof is out for review (the RPC enforces the same); otherwise
+// read-only. `kind` is 'flags' or 'hole-signs'.
+const QTY_KINDS = {
+  'flags':      { cfg: 'flagConfig',      list: () => S.variations, summary: '#rvSummary .rv-summary-total',   noun: 'flag' },
+  'hole-signs': { cfg: 'holeSignConfig',  list: () => hsVariations, summary: '#hsRvSummary .rv-summary-total', noun: 'sign' },
+};
+
+function qtyStepperHtml(v, kind) {
+  const qty = parseInt(v.qty, 10) || 1;
+  if (currentProject?.[QTY_KINDS[kind].cfg]?.status !== 'proof_sent') {
+    return `<span class="rv-qty">&times; ${qty}</span>`;
+  }
+  return `<span class="rv-qty-stepper qty-stepper" data-qty-for="${v.id}">
+    <button class="qty-btn" type="button" data-qty-step="-1" aria-label="Decrease quantity"><i class="fa-solid fa-minus" aria-hidden="true"></i></button>
+    <input class="var-qty-input" type="number" min="1" step="1" value="${qty}" aria-label="Quantity for ${esc(v.name)}">
+    <button class="qty-btn" type="button" data-qty-step="1" aria-label="Increase quantity"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+  </span>`;
+}
+
+async function commitQty(kind, v, raw, input) {
+  const { list, summary, noun } = QTY_KINDS[kind];
+  const next = Math.max(1, parseInt(raw, 10) || 1);
+  const prev = parseInt(v.qty, 10) || 1;
+  input.value = next;
+  if (next === prev) return;
+  try {
+    await clientSetVariationQty(projectId, kind, v.id, next, reviewClient);
+    v.qty = next;
+    const items = list();
+    const total = items.reduce((sum, x) => sum + (parseInt(x.qty, 10) || 1), 0);
+    const n = items.length;
+    const el = document.querySelector(summary);
+    if (el) el.innerHTML = `${n} variation${n === 1 ? '' : 's'} &middot; ${total} ${noun}${total === 1 ? '' : 's'} total`;
+  } catch (e) {
+    console.warn('Could not update quantity:', e);
+    input.value = prev;
+    alert('Could not update the quantity. Please try again.');
+  }
+}
+
+function wireQty(card, v, kind) {
+  const wrap = card.querySelector('.rv-qty-stepper');
+  if (!wrap) return;
+  const input = wrap.querySelector('input');
+  wrap.querySelectorAll('[data-qty-step]').forEach(btn => btn.addEventListener('click', () =>
+    commitQty(kind, v, (parseInt(input.value, 10) || 1) + parseInt(btn.dataset.qtyStep, 10), input)));
+  input.addEventListener('change', () => commitQty(kind, v, input.value, input));
+}
+
 function renderPage(project) {
   currentProject = project;
   const { hasFlags, hasHoleSigns, allFlagsLocked, allHsLocked, allLocked, allFlagsApproved, allHsApproved, allApproved } = computeApprovalState();
@@ -630,8 +680,9 @@ function buildCard(v, fb) {
 
   card.innerHTML = `
     <div class="rv-card-header">
-      <div class="rv-vname">${esc(v.name)} <span class="rv-qty">&times; ${parseInt(v.qty, 10) || 1}</span></div>
+      <div class="rv-vname">${esc(v.name)}</div>
       ${statusTile}
+      ${qtyStepperHtml(v, 'flags')}
     </div>
     ${reApprovalHint}${previewHtml}
     ${lockedNote}
@@ -678,6 +729,7 @@ function buildCard(v, fb) {
     });
     if (effectiveStatus === 'needs_edits') ensureFlagQuickPicksWired();
   }
+  wireQty(card, v, 'flags');
 
   return card;
 }
@@ -1023,8 +1075,9 @@ function buildHsCard(v, fb) {
 
   card.innerHTML = `
     <div class="rv-card-header">
-      <div class="rv-vname">${esc(v.name)} <span class="rv-qty">&times; ${parseInt(v.qty, 10) || 1}</span></div>
+      <div class="rv-vname">${esc(v.name)}</div>
       ${statusTile}
+      ${qtyStepperHtml(v, 'hole-signs')}
     </div>
     ${reApprovalHint}
     <div class="rv-preview hs-rv-preview" id="hsrvp-${v.id}"></div>
@@ -1059,6 +1112,7 @@ function buildHsCard(v, fb) {
     });
     wireHsQuickPicks(card, v);
   }
+  wireQty(card, v, 'hole-signs');
 
   return card;
 }

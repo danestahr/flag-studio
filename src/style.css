@@ -1887,3 +1887,9 @@ input[type=file] { display:none; }
     font-size: 16px !important;
   }
 }
+
+.var-card-qty { font-size:12px; font-weight:600; color:var(--gray-600); white-space:nowrap; }
+
+.var-card-qty-stepper .qty-btn { flex:none; min-width:0; width:26px; height:26px; padding:0; border:none; border-radius:0; background:var(--white); font-size:10px; }
+.var-card-qty-stepper .qty-btn:hover { background:var(--gray-50); }
+.var-card-qty-stepper .var-qty-input { width:40px; }

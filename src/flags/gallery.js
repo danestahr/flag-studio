@@ -12,7 +12,7 @@ import { loadAllFlags } from '../svgLoader.js';
 import {
   generateShareToken, getFeedback, supabase,
   loadOrderIntake, loadEventName, sendProofReady, sendPrestigeOrder,
-  submitDesignForReview, adminSendDesignProof,
+  submitDesignForReview, adminSendDesignProof, saveFlagVariationQty,
 } from '../supabase.js';
 import {
   getVarFlag, getVarColors, getVarGsTagOpts, sameSidesOf,
@@ -74,6 +74,13 @@ function renderVarList() {
         <div class="var-card-header-meta">
           <span class="var-status-tile ${status.cls}">${status.label}</span>
           <div class="var-card-actions">
+            ${isLockedForCustomer
+              ? `<span class="var-card-qty" title="Quantity">&times; ${parseInt(v.qty, 10) || 1}</span>`
+              : `<div class="qty-stepper var-card-qty-stepper">
+                  <button class="qty-btn" type="button" data-qty-step="-1" aria-label="Decrease quantity"><i class="fa-solid fa-minus" aria-hidden="true"></i></button>
+                  <input class="var-qty-input" type="number" min="1" step="1" value="${parseInt(v.qty, 10) || 1}" aria-label="Quantity">
+                  <button class="qty-btn" type="button" data-qty-step="1" aria-label="Increase quantity"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+                </div>`}
             ${isLockedForCustomer ? '' : `<a href="${editHref}" class="btn sm var-card-edit" title="Edit variation">${editIcon} Edit</a>`}
             <button class="btn sm var-card-pdf" title="Download PDF" onclick="event.stopPropagation();downloadVariationPdf(${i})">${pdfIcon} PDF</button>
           </div>
@@ -84,12 +91,42 @@ function renderVarList() {
         <div><div class="var-card-face-label">Back</div><div class="var-card-flag" id="vcf-b-${i}"></div></div>
       </div>`;
     el.appendChild(card);
+    wireGalleryQty(card, v);
 
     const frontEl = document.getElementById(`vcf-f-${i}`);
     if (frontEl) renderInto(frontEl, frontLogos, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
     const backEl = document.getElementById(`vcf-b-${i}`);
     if (backEl) renderInto(backEl, backLogos, 'back', backMirror, getVarFlag(v), getVarColors(v), [...(S.textLayers || []), ...backTextLayers], getVarGsTagOpts(v), S.imageLayers || []);
   });
+}
+
+async function commitGalleryQty(v, raw, input) {
+  const prev = parseInt(v.qty, 10) || 1;
+  const next = Math.max(1, parseInt(raw, 10) || 1);
+  input.value = next;
+  if (next === prev) return;
+  v.qty = next;
+  const total = S.variations.reduce((sum, x) => sum + (parseInt(x.qty, 10) || 1), 0);
+  const n = S.variations.length;
+  const stats = document.querySelector('.p1-header-stats');
+  if (stats) stats.innerHTML = `${n} variation${n === 1 ? '' : 's'} &middot; ${total} flag${total === 1 ? '' : 's'} total`;
+  try {
+    await saveFlagVariationQty(S.projectId, v.id, next);
+  } catch (e) {
+    console.warn('Could not save quantity:', e);
+    v.qty = prev;
+    input.value = prev;
+    alert('Could not save the quantity. Please try again.');
+  }
+}
+
+function wireGalleryQty(card, v) {
+  const wrap = card.querySelector('.var-card-qty-stepper');
+  if (!wrap) return;
+  const input = wrap.querySelector('input');
+  wrap.querySelectorAll('[data-qty-step]').forEach(btn => btn.addEventListener('click', () =>
+    commitGalleryQty(v, (parseInt(input.value, 10) || 1) + parseInt(btn.dataset.qtyStep, 10), input)));
+  input.addEventListener('change', () => commitGalleryQty(v, input.value, input));
 }
 
 function setupGallery() {
@@ -405,6 +442,14 @@ window.refreshGallery = async function () {
   // #shareStatus's whole parent's innerHTML wholesale, so a reference grabbed
   // beforehand would be a detached node the reviewer never sees updated.
   try {
+    // For staff, Update is the same as re-sending the proof: it puts the
+    // design (back) into review (proof_sent) so the customer's link reflects
+    // the latest edits and they can act on it again. approved/sent_to_print
+    // designs are left alone — the RPC doesn't allow moving those backward.
+    if (isAdmin && S.shareToken && ['draft', 'submitted', 'needs_changes', 'proof_sent'].includes(S.projectStatus)) {
+      if (S.projectStatus === 'draft') await submitDesignForReview(S.projectId, 'flags');
+      await adminSendDesignProof(S.projectId, 'flags');
+    }
     await loadAndRenderGallery();
     const statusEl = document.getElementById('shareStatus');
     if (statusEl) {

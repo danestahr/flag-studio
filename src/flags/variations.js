@@ -1466,6 +1466,23 @@ try {
     .channel('fb-var-' + S.projectId)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'variation_feedback', filter: `project_id=eq.${S.projectId}` },
       () => getFeedback(S.projectId, 'flags').then(fb => { S.feedback = fb; renderVarList(); renderVarCanvas(); updateEditRequestsBanner(); }).catch(() => {}))
+    // Customer qty changes from review.html (client_set_variation_qty) land in
+    // flag_config.variations. Merge only qty into local state — not the whole
+    // row — so in-progress staff edits aren't clobbered, and don't markDirty()
+    // since the value is already persisted.
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'flag_config', filter: `project_id=eq.${S.projectId}` },
+      payload => {
+        const raw = payload.new?.variations;
+        const items = Array.isArray(raw) ? raw : raw?.items;
+        if (!Array.isArray(items)) return;
+        let changed = false;
+        items.forEach(r => {
+          const v = S.variations.find(x => x.id === r.id);
+          const qty = parseInt(r.qty, 10);
+          if (v && qty >= 1 && (parseInt(v.qty, 10) || 1) !== qty) { v.qty = qty; changed = true; }
+        });
+        if (changed) { renderVarList(); renderVarCanvas(); }
+      })
     .subscribe();
 
   const _hashId = decodeURIComponent(window.location.hash.replace(/^#var-/, ''));
