@@ -85,6 +85,21 @@ function variationStats(productType, cfg) {
   };
 }
 
+// Flags only: the order intake's flag_qty is what the customer actually
+// ordered. A draft's variations are often just the single auto-seeded one, so
+// its count says nothing about order size until the designer assigns flags.
+function orderedFlagQty(productType) {
+  return productType === 'flags' ? (parseInt(_intake?.flag_qty, 10) || 0) : 0;
+}
+
+function statsLineHtml(t, stats) {
+  const ordered = orderedFlagQty(t.productType);
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  if (!ordered) return `${plural(stats.count, 'variation')} &middot; ${plural(stats.qty, t.unit)} total`;
+  const assigned = stats.count ? ` &middot; ${plural(stats.count, 'variation')}, ${stats.qty} of ${ordered} assigned` : '';
+  return `${plural(ordered, t.unit)} ordered${assigned}`;
+}
+
 // Re-fetches project/flagCfg/holeCfg/intake fresh from Supabase — split out
 // of init() so the "Update" button (next to each design's review-link Copy
 // button) can re-run just the fetch, without init()'s one-time DOM wiring
@@ -171,11 +186,13 @@ function renderToolCardStatus(t) {
   const cfg = cfgFor(t.productType);
 
   if (!cfg) {
+    const ordered = orderedFlagQty(t.productType);
     statusEl.innerHTML = `
       <div class="tool-card-group">
+        ${ordered ? `<div class="tool-card-stats">${statsLineHtml(t, { count: 0, qty: 0 })}</div>` : ''}
         <div class="status-block status-draft">
           <div class="status-block-label">Status</div>
-          <div class="status-block-value">${_intake ? 'Order received' : 'Not started'}</div>
+          <div class="status-block-value">${_intake ? 'Ready for design' : 'Not started'}</div>
         </div>
         <div class="tool-card-footer">
           <a class="btn primary block" href="${esc(t.editorHref)}">Start designing</a>
@@ -208,7 +225,7 @@ function renderToolCardStatus(t) {
   const stats = variationStats(t.productType, cfg);
   statusEl.innerHTML = `
     <div class="tool-card-group">
-      <div class="tool-card-stats">${stats.count} variation${stats.count === 1 ? '' : 's'} &middot; ${stats.qty} ${t.unit}${stats.qty === 1 ? '' : 's'} total</div>
+      <div class="tool-card-stats">${statsLineHtml(t, stats)}</div>
       <div id="statusBlock-${t.productType}" class="status-block">
         <div class="status-block-label">Status</div>
         <div id="statusValue-${t.productType}" class="status-block-value"></div>
@@ -252,7 +269,10 @@ function renderToolCardStatus(t) {
 // submitted design look stuck in Draft, so - same reasoning as
 // sent_to_print needing to read differently from merely "Approved" - both
 // get their own label here instead of falling through to the shared bucket.
-function displayStatusLabel(status) {
+function displayStatusLabel(status, productType) {
+  // An order has come in but nothing has been submitted for review: staff's
+  // next step is to design it, not "wait on the client".
+  if (status === 'draft' && isAdmin && _intake && orderedFlagQty(productType)) return 'Ready for design';
   if (status === 'submitted') return 'Submitted';
   if (status === 'sent_to_print') return 'Sent to Print';
   return STATUS_LABEL[status] || status;
@@ -270,7 +290,7 @@ function setStatusValue(productType, status, loading) {
   block.className = 'status-block status-' + status;
   value.innerHTML = loading
     ? `<span class="spinner-sm"></span>${esc(loading)}`
-    : esc(displayStatusLabel(status));
+    : esc(displayStatusLabel(status, productType));
 }
 
 // ── Admin actions (staff/admin only) ──────────────────────────
@@ -310,9 +330,19 @@ function renderDesignAdminActions(t, cfg, status) {
     // otherwise sit in draft forever. Staff can submit on its behalf here
     // too - the RPC already allows staff/admin to call
     // submit_design_for_review for any project, owned or not.
-    actionsEl.appendChild(document.createTextNode('Waiting on the client to submit for review. '));
-    if (designHasVariations(t.productType, cfg)) {
-      actionsEl.appendChild(btn('Submit for review', () => window.submitForReview(t.productType), true));
+    if (_intake && orderedFlagQty(t.productType)) {
+      const hasVars = designHasVariations(t.productType, cfg);
+      const a = document.createElement('a');
+      a.className = 'btn primary block';
+      a.href = t.editorHref;
+      a.textContent = hasVars ? 'Continue designing' : 'Start designing';
+      actionsEl.appendChild(a);
+      if (hasVars) actionsEl.appendChild(btn('Submit for review', () => window.submitForReview(t.productType)));
+    } else {
+      actionsEl.appendChild(document.createTextNode('Waiting on the client to submit for review. '));
+      if (designHasVariations(t.productType, cfg)) {
+        actionsEl.appendChild(btn('Submit for review', () => window.submitForReview(t.productType), true));
+      }
     }
   }
   // needs_changes/proof_sent: nothing extra here - sending/resending a
