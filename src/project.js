@@ -101,6 +101,11 @@ function flagDesignStarted(cfg) {
   return items.length > 1 || items.some(v => (v.logos?.length || 0) + (v.backLogos?.length || 0) > 0);
 }
 
+// Hole signs don't auto-seed a blank variation, so any variation means started.
+function designStarted(productType, cfg) {
+  return productType === 'flags' ? flagDesignStarted(cfg) : designHasVariations(productType, cfg);
+}
+
 function statsLineHtml(t, stats) {
   const ordered = orderedFlagQty(t.productType);
   const plural = (n, w) => `${n} ${w[0].toUpperCase()}${w.slice(1)}${n === 1 ? '' : 's'}`;
@@ -280,7 +285,7 @@ function renderToolCardStatus(t) {
 function displayStatusLabel(status, productType) {
   // An order has come in but nothing has been submitted for review: staff's
   // next step is to design it, not "wait on the client".
-  if (status === 'draft' && isAdmin && _intake && orderedFlagQty(productType)) return flagDesignStarted(cfgFor(productType)) ? 'In design' : 'Ready for design';
+  if (status === 'draft' && isAdmin) return designStarted(productType, cfgFor(productType)) ? 'In design' : 'Ready for design';
   if (status === 'submitted') return 'Submitted';
   if (status === 'sent_to_print') return 'Sent to Print';
   return STATUS_LABEL[status] || status;
@@ -339,8 +344,8 @@ function renderDesignAdminActions(t, cfg, status) {
     // otherwise sit in draft forever. Staff can submit on its behalf here
     // too - the RPC already allows staff/admin to call
     // submit_design_for_review for any project, owned or not.
-    if (_intake && orderedFlagQty(t.productType)) {
-      const hasVars = flagDesignStarted(cfg);
+    {
+      const hasVars = designStarted(t.productType, cfg);
       const a = document.createElement('a');
       a.className = 'btn primary block';
       a.href = t.editorHref;
@@ -353,11 +358,6 @@ function renderDesignAdminActions(t, cfg, status) {
         actionsEl.appendChild(sub);
       }
       actionsEl.style.cssText = 'display:flex;flex-direction:column;gap:8px';
-    } else {
-      actionsEl.appendChild(document.createTextNode('Waiting on the client to submit for review. '));
-      if (designHasVariations(t.productType, cfg)) {
-        actionsEl.appendChild(btn('Submit for review', () => window.submitForReview(t.productType), true));
-      }
     }
   }
   // needs_changes/proof_sent: nothing extra here - sending/resending a

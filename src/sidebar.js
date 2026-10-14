@@ -116,6 +116,15 @@ export function renderSidebar(container, { activeStep, steps, customerSection = 
   steps.forEach(s => {
     if (s.onClick) container.querySelector('#' + s.id)?.addEventListener('click', s.onClick);
   });
+  // A plain link would leave the page before any unsaved edit (e.g. a variation
+  // just created) reached Supabase, so flush the page's draft save first.
+  container.querySelector('.sidebar-overview-link')?.addEventListener('click', async e => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    const href = e.currentTarget.href;
+    e.preventDefault();
+    try { await window.saveDraft?.(); } catch (err) { console.error(err); }
+    window.location.href = href;
+  });
   // Only shown once the sidebar is collapsed (see .step-forward-btn in
   // style.css) — reads which .step-item is active at click time rather than
   // capturing an index, since goStep() moves the active/done classes around
