@@ -92,12 +92,20 @@ function orderedFlagQty(productType) {
   return productType === 'flags' ? (parseInt(_intake?.flag_qty, 10) || 0) : 0;
 }
 
+// Flags only: has any real design work happened? A logo placed on any
+// variation (front or back), or more than the single auto-seeded variation.
+// Removing the logo from a lone variation puts it back to "not started".
+function flagDesignStarted(cfg) {
+  if (!cfg) return false;
+  const items = Array.isArray(cfg.variations) ? cfg.variations : (cfg.variations?.items || []);
+  return items.length > 1 || items.some(v => (v.logos?.length || 0) + (v.backLogos?.length || 0) > 0);
+}
+
 function statsLineHtml(t, stats) {
   const ordered = orderedFlagQty(t.productType);
-  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const plural = (n, w) => `${n} ${w[0].toUpperCase()}${w.slice(1)}${n === 1 ? '' : 's'}`;
   if (!ordered) return `${plural(stats.count, 'variation')} &middot; ${plural(stats.qty, t.unit)} total`;
-  const assigned = stats.count ? ` &middot; ${plural(stats.count, 'variation')}, ${stats.qty} of ${ordered} assigned` : '';
-  return `${plural(ordered, t.unit)} ordered${assigned}`;
+  return `${plural(ordered, t.unit)}${stats.count ? ` &middot; ${plural(stats.count, 'variation')}` : ''}`;
 }
 
 // Re-fetches project/flagCfg/holeCfg/intake fresh from Supabase — split out
@@ -272,7 +280,7 @@ function renderToolCardStatus(t) {
 function displayStatusLabel(status, productType) {
   // An order has come in but nothing has been submitted for review: staff's
   // next step is to design it, not "wait on the client".
-  if (status === 'draft' && isAdmin && _intake && orderedFlagQty(productType)) return 'Ready for design';
+  if (status === 'draft' && isAdmin && _intake && orderedFlagQty(productType)) return flagDesignStarted(cfgFor(productType)) ? 'In design' : 'Ready for design';
   if (status === 'submitted') return 'Submitted';
   if (status === 'sent_to_print') return 'Sent to Print';
   return STATUS_LABEL[status] || status;
@@ -308,6 +316,7 @@ function renderDesignAdminActions(t, cfg, status) {
   };
 
   actionsEl.innerHTML = '';
+  actionsEl.style.cssText = '';
   // Sits directly under the status tile, full width (not with the other
   // actions below the review link) since it undoes the tile's own state.
   const reopenEl = document.getElementById(`reopenRow-${t.productType}`);
@@ -331,13 +340,19 @@ function renderDesignAdminActions(t, cfg, status) {
     // too - the RPC already allows staff/admin to call
     // submit_design_for_review for any project, owned or not.
     if (_intake && orderedFlagQty(t.productType)) {
-      const hasVars = designHasVariations(t.productType, cfg);
+      const hasVars = flagDesignStarted(cfg);
       const a = document.createElement('a');
       a.className = 'btn primary block';
       a.href = t.editorHref;
       a.textContent = hasVars ? 'Continue designing' : 'Start designing';
       actionsEl.appendChild(a);
-      if (hasVars) actionsEl.appendChild(btn('Submit for review', () => window.submitForReview(t.productType)));
+      if (hasVars) {
+        const sub = btn('Send for review', () => window.sendProofToClient(t.productType));
+        sub.classList.add('block');
+        sub.style.marginRight = '0';
+        actionsEl.appendChild(sub);
+      }
+      actionsEl.style.cssText = 'display:flex;flex-direction:column;gap:8px';
     } else {
       actionsEl.appendChild(document.createTextNode('Waiting on the client to submit for review. '));
       if (designHasVariations(t.productType, cfg)) {
@@ -748,10 +763,14 @@ window.sendProofToClient = async function (productType) {
   // Any send that isn't the client's very first proof - a resend after
   // needs_changes, or a reshare of an updated design while still proof_sent -
   // gets the "revised proof" copy instead of the original "ready for review".
-  const isRevision = cfgFor(productType)?.status !== 'submitted';
   const status = cfgFor(productType)?.status || 'draft';
+  const isRevision = status !== 'submitted' && status !== 'draft';
   setStatusValue(productType, status, 'Sending proof…');
   try {
+    // Staff sending straight from a draft (the order-intake flow) skips the
+    // separate submitted/"Request changes" stop: submit, then send the proof.
+    // admin_send_design_proof only accepts submitted/needs_changes/proof_sent.
+    if (status === 'draft') await submitDesignForReview(pid, productType);
     const token = await adminSendDesignProof(pid, productType);
     const reviewUrl = `${window.location.origin}/review?token=${token}`;
     const contact = contactInfo();
