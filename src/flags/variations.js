@@ -15,6 +15,7 @@ import {
 } from '../supabase.js';
 import { initDropZones, renderDropZones, hideZoneToolbar, triggerAdd } from './drop-zones.js';
 import { syncHoleNumberText, hasHoleNumbers, enableHoleNumbers, disableHoleNumbers } from './hole-numbers.js';
+import './layer-clipboard.js';
 import { renderFlagTextOverlays, addFlagTextLayer, clearFlagTextOverlays, renderFlagTextOverlaysStatic } from './text-layers.js';
 import { eyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
 import { esc } from '../dom-utils.js';

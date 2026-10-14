@@ -266,6 +266,28 @@ function syncFlagTlFontSizes(wrap, textLayers) {
 // of the same wrap (e.g. the back mirror preview, which bakes text directly
 // into its SVG) — otherwise the front's overlay DOM lingers on top of it,
 // showing the text twice.
+// Copy/paste support (see flags/layer-clipboard.js).
+export function getActiveTextLayer() {
+  if (!_activeFlagTlId || _editingFlagTlId || !_ctx) return null;
+  const l = _ctx.textLayers.find(x => x.id === _activeFlagTlId);
+  return l ? JSON.parse(JSON.stringify(l)) : null;
+}
+
+export function pasteTextLayer(layer) {
+  if (!_ctx || !Array.isArray(_ctx.textLayers)) return false;
+  const { textLayers, onChange, wrapId } = _ctx;
+  textLayers.push(layer);
+  _activeFlagTlId = layer.id;
+  renderFlagTextOverlays(wrapId, textLayers, onChange);
+  onChange();
+  const overlay = document.querySelector(`.flag-tl-overlay[data-tl-id="${layer.id}"]`);
+  if (overlay) {
+    overlay.classList.add('selected');
+    openFlagTlToolbar(layer.id, overlay, textLayers, onChange);
+  }
+  return true;
+}
+
 export function clearFlagTextOverlays(wrapId) {
   closeFlagTlToolbar();
   _activeFlagTlId = null;

@@ -14,6 +14,29 @@ let _ensureProject = async () => {};
 let _selectedIds = new Set();
 let _addActive = false;
 let _ctx = null;
+// Args of the most recent renderDropZones() call — unlike _ctx (cleared on
+// deselect) this persists, so a paste can target the canvas on screen even
+// when nothing is selected.
+let _lastRender = null;
+
+// Copy/paste support (see flags/layer-clipboard.js): deep copies of the
+// selected logo layers, and a paste that appends clones (already re-id'd by
+// the caller) to the canvas currently on screen.
+export function getSelectedLogoLayers() {
+  if (_addActive || !_selectedIds.size || !_ctx) return [];
+  return _ctx.logos.filter(l => _selectedIds.has(l.id)).map(l => JSON.parse(JSON.stringify(l)));
+}
+
+export function pasteLogoLayers(layers) {
+  const r = _lastRender;
+  if (!r || !layers.length) return false;
+  const { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts } = r;
+  logos.push(...layers);
+  hideZoneToolbar();
+  renderDropZones(wrapId, svgId, logos, face, onChange, flagOverride, colorsOverride, gsTagOpts);
+  onChange();
+  return true;
+}
 
 // Set on every renderDropZones() call to open that zone's Text/Logo choice —
 // there's no in-canvas "+" anymore, so callers outside this module (a header
@@ -408,6 +431,7 @@ export function renderDropZones(wrapId, svgId, logos, face = 'front', onChange =
   const wrap = document.getElementById(wrapId);
   if (!wrap) return;
   wrap._dzReadonly = false;
+  _lastRender = { logos, wrapId, svgId, face, onChange, flagOverride, colorsOverride, gsTagOpts };
 
   wrap.querySelectorAll('.dzone, .dz-badge, .dz-frame-overlay').forEach(d => d.remove());
   const svg = document.getElementById(svgId);
