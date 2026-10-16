@@ -529,6 +529,11 @@ export async function adminReopenDesignReview(projectId, productType, note = nul
   if (error) throw error;
 }
 
+export async function adminCancelDesignCompletion(projectId, productType, note = null) {
+  const { error } = await supabase.rpc('admin_cancel_design_completion', { target_project_id: projectId, target_product_type: productType, note });
+  if (error) throw error;
+}
+
 // Returns the project's share_token (minted server-side if it didn't
 // already have one) so the caller can build the review URL without a
 // second round trip.

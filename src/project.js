@@ -3,7 +3,7 @@ import './icons.js';
 import { requireAuth, isStaffOrAdmin } from './auth.js';
 import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake,
          updateProject, deleteProject, upsertCustomerInfo,
-         submitDesignForReview, adminRequestDesignChanges, adminReopenDesignReview, adminSendDesignProof, adminMarkDesignSentToPrint,
+         submitDesignForReview, adminRequestDesignChanges, adminReopenDesignReview, adminCancelDesignCompletion, adminSendDesignProof, adminMarkDesignSentToPrint,
          sendProofReady, loadLatestEmailFailure, loadLatestChangeNote, loadLatestPrintAction, sendPrestigeOrder } from './supabase.js';
 import { FLAGS } from './data.js';
 import { loadAllFlags } from './svgLoader.js';
@@ -332,6 +332,12 @@ function renderDesignAdminActions(t, cfg, status) {
     b.style.marginRight = '0';
     reopenEl.appendChild(b);
   }
+  if (status === 'sent_to_print') {
+    const b = btn('Cancel Completion', () => window.cancelCompletion(t.productType));
+    b.classList.add('block');
+    b.style.marginRight = '0';
+    reopenEl.appendChild(b);
+  }
   if (status === 'submitted') {
     actionsEl.appendChild(btn('Request changes', () => {
       document.getElementById(`requestChangesForm-${t.productType}`).style.display = '';
@@ -432,6 +438,7 @@ function renderPrintSection(productType, status, cfg) {
     ${approverText ? `<div style="font-size:12px;color:var(--gray-400)">${approverText}</div>` : ''}
     ${status === 'sent_to_print' ? `<div id="printMeta-${productType}" style="font-size:12px;color:var(--gray-400)"></div>` : ''}
     <button class="btn primary block" onclick="window.confirmMarkSentToPrint('${productType}')">${esc(label)}</button>
+    ${productType === 'flags' && status === 'approved' ? `<button class="btn block" onclick="window.markSentToPrestigeManually()" title="Files were sent to Prestige outside the app - record it without emailing them">Mark as complete</button>` : ''}
   `;
 
   // Fetched separately (not awaited) so the button itself renders instantly
@@ -687,6 +694,20 @@ window.confirmRequestChanges = async function (productType) {
   }
 };
 
+window.cancelCompletion = async function (productType) {
+  if (!confirm('Cancel completion? The design goes back to "Approved" so it can be edited and sent to print again.')) return;
+  setReviewPanelStatus(productType, '');
+  try {
+    await adminCancelDesignCompletion(pid, productType);
+    const cfg = cfgFor(productType);
+    if (cfg) cfg.status = 'approved';
+    renderToolCardStatus(DESIGN_TYPES.find(t => t.productType === productType));
+  } catch (err) {
+    console.error('Failed to cancel completion', err);
+    setReviewPanelStatus(productType, 'Could not cancel completion — please try again.');
+  }
+};
+
 window.reopenForReview = async function (productType) {
   if (!confirm('Cancel this approval? The design goes back to "Proof sent", the review link stays live, and every variation must be re-approved by the client.')) return;
   setReviewPanelStatus(productType, '');
@@ -844,6 +865,22 @@ window.refreshProjectStatus = async function (productType) {
   } catch (err) {
     console.error('Failed to refresh project status', err);
     setReviewPanelStatus(productType, 'Could not refresh — try again.');
+  }
+};
+
+// Files went to Prestige outside the app (emailed/uploaded by hand): record
+// the status transition only - no zip build, no Prestige email.
+window.markSentToPrestigeManually = async function () {
+  if (!window.confirm('Mark flags as sent to print? This will NOT email Prestige - use it only if you already sent the files yourself.')) return;
+  setReviewPanelStatus('flags', '');
+  try {
+    await adminMarkDesignSentToPrint(pid, 'flags', null, 'Sent to Prestige manually (outside the app)');
+    _flagCfg = await loadFlagConfig(pid);
+    renderToolCardStatus(DESIGN_TYPES.find(t => t.productType === 'flags'));
+    setReviewPanelStatus('flags', 'Marked as sent to print.');
+  } catch (err) {
+    console.error('Failed to mark sent manually', err);
+    setReviewPanelStatus('flags', 'Could not update status — please try again.');
   }
 };
 
