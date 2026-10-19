@@ -149,12 +149,6 @@ async function rasterizeThumbnail(logos, face, mirrorX = false, textLayers = [],
   const colors = colorsOverride || S.colors;
   const [, , vbW, vbH] = (flag?.viewBox || '0 0 7519 4669').split(' ').map(Number);
   const svg = makeSvg(logos, vbW, vbH, face, mirrorX, flagOverride, colorsOverride, textLayers, gsTagOpts, imageLayers);
-  // Always show GS tag in order summary thumbnails regardless of S.gsTag
-  const gst = gsTagOpts ?? { enabled: S.gsTag, mode: S.gsTagMode };
-  if (!gst.enabled) {
-    const keyZone = flag?.tagKeyZone || 'zone-primary';
-    showGsTagVariant(svg, face, 'auto', resolveColors(colors, flag)[keyZone]);
-  }
   await injectFonts(svg);
   await Promise.all(Array.from(svg.querySelectorAll('image')).map(async img => {
     const src = img.getAttribute('href') || img.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || '';
