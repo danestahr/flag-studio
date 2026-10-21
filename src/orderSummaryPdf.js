@@ -8,6 +8,12 @@ const BLACK = rgb(0x11/255, 0x11/255, 0x10/255);
 const GRAY  = rgb(0x5A/255, 0x5A/255, 0x54/255);
 const LGRAY = rgb(0xE8/255, 0xE8/255, 0xE4/255);
 const WHITE = rgb(1, 1, 1);
+const YELLOW = rgb(1, 0.93, 0.35);
+
+// Thin black outline around a flag preview so a white flag doesn't disappear into the page.
+function drawPreviewBorder(page, x, y, w, h) {
+  page.drawRectangle({ x, y, width: w, height: h, borderColor: rgb(0, 0, 0), borderWidth: 0.75 });
+}
 
 function hexToRgb(hex) {
   const h = hex.replace('#', '');
@@ -16,11 +22,12 @@ function hexToRgb(hex) {
 
 function formatDate(iso) {
   if (!iso) return '—';
-  const [y, m, d] = iso.split('-').map(Number);
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
   const months = ['January','February','March','April','May','June',
     'July','August','September','October','November','December'];
   return `${months[m-1]} ${d}, ${y}`;
 }
+
 
 // ISO date moved back `n` business days (Mon-Fri; holidays not considered).
 // Vendor (Prestige) requires the in-hand date to be 2 business days before the
@@ -37,8 +44,6 @@ function subtractBusinessDays(iso, n) {
   return dt.toISOString().slice(0, 10);
 }
 
-function today() { return formatDate(new Date().toISOString().slice(0, 10)); }
-
 // ── Data loaders ──────────────────────────────────────────
 async function loadCustomerData(projectId) {
   const [{ data: project }, { data: intake }] = await Promise.all([
@@ -48,7 +53,9 @@ async function loadCustomerData(projectId) {
   const ci = project?.customer_info && Object.keys(project.customer_info).length
     ? project.customer_info
     : intake || {};
-  return { projectName: project?.name || '', ci };
+  // Same source as the Prestige email subject (send-prestige-order): customer_info's event
+  // date, falling back to the order intake's, per field rather than per object.
+  return { projectName: project?.name || '', ci: { ...ci, event_date: ci.event_date || intake?.event_date || '' } };
 }
 
 async function loadApprovalStatus(projectId, productType) {
@@ -134,6 +141,16 @@ function drawSectionHeader(cursor, title, font) {
   page.drawRectangle({ x: M, y: y - 2, width: W - M * 2, height: size + 8, color: LGRAY });
   page.drawText(title.toUpperCase(), { x: M + 6, y, size, font, color: GRAY });
   cursor.setY(y - size - 14);
+}
+
+// Value only, no label, flush left.
+function drawValueLine(cursor, value, { valueFont, size = 11 }) {
+  if (!value) return;
+  cursor.ensureSpace(size * 1.5 + 4);
+  const page = cursor.current();
+  const y = cursor.getY();
+  page.drawText(String(value), { x: M, y, size, font: valueFont, color: BLACK });
+  cursor.setY(y - size * 1.5 - 2);
 }
 
 function drawRow(cursor, label, value, { labelFont, valueFont, size = 11 }) {
@@ -299,24 +316,12 @@ export async function buildOrderSummaryPdf({
     let y = cursor.getY();
     page.drawText(projectName || 'Untitled Project', { x: M, y, size: 16, font: bold, color: BLACK });
     y -= 18;
-    page.drawText(`Generated: ${today()}`, { x: M, y, size: 9, font: reg, color: GRAY });
-    if (approval) {
-      const aw = reg.widthOfTextAtSize(approval.label, 9);
-      page.drawCircle({ x: W - M - aw - 14, y: y + 3, size: 4, color: approval.color });
-      page.drawText(approval.label, { x: W - M - aw, y, size: 9, font: reg, color: approval.color });
-    }
-    if (approver) {
-      const approverText = `Approved by ${approver.name || ''}${approver.email ? ` (${approver.email})` : ''}`.trim();
-      const tw = reg.widthOfTextAtSize(approverText, 9);
-      y -= 14;
-      page.drawText(approverText, { x: W - M - tw, y, size: 9, font: reg, color: GRAY });
-    }
-    y -= 28;
+    y -= 14;
     cursor.setY(y);
   }
 
   // ── Customer Information (shown once, packed two fields per line) ────
-  drawSectionHeader(cursor, 'Customer Information', bold);
+  drawSectionHeader(cursor, 'Tournament Details', bold);
 
   const addrParts = [
     ci.address_line1, ci.address_line2,
@@ -326,19 +331,34 @@ export async function buildOrderSummaryPdf({
 
   const effectiveAttn = ci.attn || ci.contact_name;
 
-  const infoEntries = [
-    ['Event',      ci.event_name],
-    ['Course',     ci.course_name],
-    ['Event Date', formatDate(ci.event_date)],
-    ['In-Hand',    formatDate(subtractBusinessDays(ci.event_date?.slice(0, 10), 2))],
-    ['Contact',    ci.contact_name],
-    ['Email',      ci.contact_email],
-    effectiveAttn ? ['ATTN', effectiveAttn] : null,
-  ].filter(Boolean);
-  for (let i = 0; i < infoEntries.length; i += 2) {
-    drawRowPair(cursor, [infoEntries[i], infoEntries[i + 1] || null], { labelFont: bold, valueFont: reg });
+  const rowOpts = { labelFont: bold, valueFont: reg, size: 10 };
+  drawRow(cursor, 'Event', ci.event_name, rowOpts);
+  drawRow(cursor, 'Course', ci.course_name, rowOpts);
+  // In-hand date sits above the event date, highlighted so it isn't missed.
+  cursor.ensureSpace(20);
+  {
+    const page = cursor.current();
+    const y = cursor.getY();
+    page.drawRectangle({ x: M - 4, y: y - 4, width: W - M * 2 + 8, height: 16, color: YELLOW });
   }
-  drawRow(cursor, 'Shipping Address', addrParts, { labelFont: bold, valueFont: reg, size: 10 });
+  drawRow(cursor, 'In-Hand Date', formatDate(subtractBusinessDays(ci.event_date?.slice(0, 10), 2)), rowOpts);
+  drawRow(cursor, 'Event Date', formatDate(ci.event_date), rowOpts);
+  // Name / ATTN / Address / Email grouped in one block (consecutive rows) so the vendor
+  // can select and copy the whole shipping contact in one go.
+  cursor.moveY(-6);
+  drawSectionHeader(cursor, 'Contact Details', bold);
+  // Unlabeled so the whole block copies as clean text.
+  drawValueLine(cursor, ci.contact_name, rowOpts);
+  if (effectiveAttn) drawValueLine(cursor, `ATTN: ${effectiveAttn}`, rowOpts);
+  drawValueLine(cursor, addrParts, rowOpts);
+  drawValueLine(cursor, ci.contact_email, rowOpts);
+  // Total flags = sum of per-variation quantities, falling back to an explicit `quantity`.
+  // Shown in the Flag Variations header when there are variations, else as its own row.
+  const summedQty = variationImages.reduce((n, v) => n + (Number(v.qty) || 0), 0);
+  const totalFlags = summedQty || quantity || 0;
+  if (totalFlags && !variationImages.length) {
+    drawRow(cursor, 'Total Flags', String(totalFlags), rowOpts);
+  }
   cursor.moveY(-10);
 
   // ── Colour Assignments ───────────────────────────────────
@@ -363,18 +383,39 @@ export async function buildOrderSummaryPdf({
   // can override both), so those are shown per-block instead of once globally.
   if (variationImages.length) {
     cursor.moveY(-8);
-    drawSectionHeader(cursor, 'Flag Variations', bold);
+    drawSectionHeader(cursor, totalFlags ? `Flag Variations  |  ${totalFlags} Total Flags` : 'Flag Variations', bold);
+
+    // Approval status + approver sit under the header, divided from the first variation.
+    if (approval || approver) {
+      cursor.ensureSpace(44);
+      let page = cursor.current();
+      let y = cursor.getY();
+      if (approval) {
+        page.drawCircle({ x: M + 4, y: y + 3, size: 4, color: approval.color });
+        page.drawText(approval.label, { x: M + 14, y, size: 9, font: reg, color: approval.color });
+        y -= 14;
+      }
+      if (approver) {
+        const approverText = `Approved by ${approver.name || ''}${approver.email ? ` (${approver.email})` : ''}`.trim();
+        page.drawText(approverText, { x: M, y, size: 9, font: reg, color: GRAY });
+        y -= 14;
+      }
+      page.drawLine({ start: { x: M, y: y + 4 }, end: { x: W - M, y: y + 4 }, thickness: 0.5, color: LGRAY });
+      cursor.setY(y - 8);
+    }
 
     // Flag aspect ~7519:4669. Front/back shown smaller than a full-bleed print
     // so a style + colour line fits above them and 2+ variations fit per page.
     const gap    = 12;
     const imgW   = 204;
-    const imgH   = Math.round(imgW / (7519 / 4669)); // ~127
+    const LEGACY_ASPECT = 7519 / 4669;
     const pairW  = imgW * 2 + gap;
     const xOff   = M + Math.round((W - M * 2 - pairW) / 2);
 
     for (let i = 0; i < variationImages.length; i++) {
       const { name, frontPng, backPng, flagName, colorEntries: varColors, qty } = variationImages[i];
+      // v2 (vendor print) thumbnails are the 20" x 13.5" art box, not the legacy canvas.
+      const imgH = Math.round(imgW / (variationImages[i].aspect || LEGACY_ASPECT)); // legacy ~127
       const colorRows = colorSwatchRowCount(varColors, reg, 9);
       const colorLineH = colorRows ? colorRows * 9 * 1.5 + 2 : 0; // matches drawColorSwatchLine's own consumption
       const blockH = 14 + colorLineH + 12 + imgH + 14; // name/style + colours + face labels + image + margin
@@ -420,12 +461,14 @@ export async function buildOrderSummaryPdf({
         try {
           const img = await doc.embedPng(frontPng);
           page.drawImage(img, { x: xOff, y: y - imgH, width: imgW, height: imgH });
+          drawPreviewBorder(page, xOff, y - imgH, imgW, imgH);
         } catch { /* skip */ }
       }
       if (backPng) {
         try {
           const img = await doc.embedPng(backPng);
           page.drawImage(img, { x: xOff + imgW + gap, y: y - imgH, width: imgW, height: imgH });
+          drawPreviewBorder(page, xOff + imgW + gap, y - imgH, imgW, imgH);
         } catch { /* skip */ }
       }
 
@@ -505,6 +548,7 @@ export async function buildFlagSheetsPdf({ projectName, variationImages = [] }) 
           const w = img.width * scale, h = img.height * scale;
           const x = (W - w) / 2;
           page.drawImage(img, { x, y: y - h, width: w, height: h });
+          drawPreviewBorder(page, x, y - h, w, h);
         } catch { /* skip */ }
       }
       y -= boxH + blockGap;
