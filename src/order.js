@@ -1,6 +1,9 @@
 import './order.css';
 import './icons.js';
-import { COLORS, FLAGS, LISTED_FLAGS } from './data.js';
+import { COLORS, FLAGS } from './data.js';
+
+// Print layouts are hidden sibling entries of a flag (`layoutOf`); only the base flags are pickable.
+const LISTED_FLAGS = FLAGS.filter(f => !f.layoutOf);
 import { createProject, saveOrderIntake, sendOrderStarted, loadOrderIntakeForResume, uploadLogo, uploadFlagPreview, sendOrderConfirmation, sendOrderNotification, syncEventInfo, getSession, getMyProfile } from './supabase.js';
 import { loadAllFlags } from './svgLoader.js';
 import { applyColors, showGsTagVariant, resolveColors } from './render.js';
