@@ -1,4 +1,5 @@
 import { logEmail } from '../_shared/email-log.ts';
+import { testRedirect } from '../_shared/test-to.ts';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { esc, wrapEmailHtml, ctaButton, linkFallback, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
@@ -73,21 +74,20 @@ function formatDate(iso: string): string {
 }
 
 // ── Approval deadline ─────────────────────────────────────
-// Deadline = 17 days before the event.
-// If that date falls on a Saturday, Sunday, or Monday → roll back to the preceding Friday.
+// If the event falls on a Saturday, Sunday, or Monday, count from the preceding
+// Friday instead; the deadline is 17 days before that date.
 function calcApprovalDeadline(eventDateIso: string): { iso: string; display: string } | null {
   if (!eventDateIso) return null;
   const [y, m, d] = eventDateIso.split('-').map(Number);
-  const event = new Date(y, m - 1, d);
-  const deadline = new Date(event);
-  deadline.setDate(deadline.getDate() - 17);
+  const deadline = new Date(y, m - 1, d);
 
   const dow = deadline.getDay(); // 0=Sun, 1=Mon, 6=Sat
   if (dow === 6) deadline.setDate(deadline.getDate() - 1);      // Sat → Fri
   else if (dow === 0) deadline.setDate(deadline.getDate() - 2); // Sun → Fri
   else if (dow === 1) deadline.setDate(deadline.getDate() - 3); // Mon → Fri
+  deadline.setDate(deadline.getDate() - 17);
 
-  const iso = deadline.toISOString().slice(0, 10);
+  const iso = `${deadline.getFullYear()}-${String(deadline.getMonth() + 1).padStart(2, '0')}-${String(deadline.getDate()).padStart(2, '0')}`;
   const display = deadline.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   return { iso, display };
 }
@@ -155,7 +155,7 @@ function buildHtml(p: OrderPayload): string {
       <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:${deadlineColor};">${esc(deadline.display)}</p>
       <p style="margin:0;font-size:13px;color:#666;line-height:1.5;">
         Final artwork must be approved by this date to avoid rush fees. This is 17 days before your event${
-          esc(deadline.display).includes('Friday') ? ' — adjusted to the preceding Friday because the 17-day mark fell on a weekend or Monday' : ''
+          [0, 1, 6].includes(new Date(p.eventDate + 'T00:00:00').getDay()) ? ' (counted from the Friday before your event, since it falls on a weekend or Monday)' : ''
         }.
       </p>
     </div>` : ''}
@@ -297,7 +297,8 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
   try {
-    const payload: OrderPayload = await req.json();
+    const payload: OrderPayload & { testTo?: string } = await req.json();
+    const { to: toEmail, prefix } = testRedirect(payload.testTo, payload.contactEmail);
 
     if (!payload.projectId || !(await projectExists(payload.projectId))) {
       return new Response(JSON.stringify({ error: 'Invalid project' }), { status: 403, headers: { ...CORS, 'Content-Type': 'application/json' } });
@@ -311,11 +312,11 @@ serve(async (req) => {
       method: 'POST',
       headers: { Authorization: `Bearer ${SENDGRID_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        personalizations: [{ to: [{ email: payload.contactEmail, name: payload.contactName }] }],
+        personalizations: [{ to: [{ email: toEmail, name: payload.contactName }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         tracking_settings: { click_tracking: { enable: false } },
-        subject: `Order confirmed — ${payload.eventName}`,
+        subject: `${prefix}Order confirmed — ${payload.eventName}`,
         content: [
           { type: 'text/plain', value: buildText(payload) },
           { type: 'text/html', value: buildHtml(payload) },
@@ -323,11 +324,11 @@ serve(async (req) => {
       }),
     });
 
-    if (res.ok) await logEmail({ kind: 'order-confirmation', projectId: payload.projectId, recipient: payload.contactEmail, ok: true, httpStatus: res.status });
+    if (res.ok) await logEmail({ kind: 'order-confirmation', projectId: payload.projectId, recipient: toEmail, ok: true, httpStatus: res.status });
     if (!res.ok) {
       const body = await res.text();
       console.error('SendGrid error', res.status, body);
-      await logEmail({ kind: 'order-confirmation', projectId: payload.projectId, recipient: payload.contactEmail, ok: false, httpStatus: res.status, error: body });
+      await logEmail({ kind: 'order-confirmation', projectId: payload.projectId, recipient: toEmail, ok: false, httpStatus: res.status, error: body });
       return new Response(JSON.stringify({ error: 'SendGrid failed', status: res.status }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
     }
 

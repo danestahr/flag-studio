@@ -165,7 +165,7 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
   }
 
   // Artwork approval deadline (calcApprovalDeadline: 17 days before the
-  // event, nudged back off the weekend) - the same date customers are shown
+  // event, or before the preceding Friday for Sat/Sun/Mon events) - the same date customers are shown
   // in order.js/submitted.js, not the event date itself. customer_info holds
   // the staff-corrected event date; the original intake is the fallback.
   const approvalIso = (p) => calcApprovalDeadline(p.customer_info?.event_date || p.order_intakes?.[0]?.event_date)?.iso || null;

@@ -53,13 +53,14 @@ export function formatDate(isoDate) {
 export function calcApprovalDeadline(eventDateIso) {
   if (!eventDateIso) return null;
   const [y, m, d] = eventDateIso.split('-').map(Number);
+  // Weekend/Monday events count from the preceding Friday, then 17 days back.
   const deadline = new Date(y, m - 1, d);
-  deadline.setDate(deadline.getDate() - 17);
   const dow = deadline.getDay();
   if (dow === 6) deadline.setDate(deadline.getDate() - 1);
   else if (dow === 0) deadline.setDate(deadline.getDate() - 2);
   else if (dow === 1) deadline.setDate(deadline.getDate() - 3);
-  const iso = deadline.toISOString().slice(0, 10);
+  deadline.setDate(deadline.getDate() - 17);
+  const iso = `${deadline.getFullYear()}-${String(deadline.getMonth() + 1).padStart(2, '0')}-${String(deadline.getDate()).padStart(2, '0')}`;
   return { iso, display: formatDate(iso) };
 }
 
@@ -233,7 +234,7 @@ export function renderDeadlineCallout(eventDateIso) {
   return `<div class="deadline-callout">
     <div class="deadline-callout-label">Your artwork approval deadline</div>
     <div class="deadline-callout-date">${esc(dl.display)}</div>
-    <div class="deadline-callout-note">17 days before your event — adjusted to the preceding Friday if needed.</div>
+    <div class="deadline-callout-note">17 days before your event — counted from the preceding Friday if your event is on a Saturday, Sunday or Monday.</div>
   </div>`;
 }
 
