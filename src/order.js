@@ -1,6 +1,6 @@
 import './order.css';
 import './icons.js';
-import { COLORS, FLAGS } from './data.js';
+import { COLORS, FLAGS, LISTED_FLAGS } from './data.js';
 import { createProject, saveOrderIntake, sendOrderStarted, loadOrderIntakeForResume, uploadLogo, uploadFlagPreview, sendOrderConfirmation, sendOrderNotification, syncEventInfo, getSession, getMyProfile } from './supabase.js';
 import { loadAllFlags } from './svgLoader.js';
 import { applyColors, showGsTagVariant, resolveColors } from './render.js';
@@ -816,7 +816,7 @@ function renderStep5() {
 
   const setupLabel = O.flagSetup === 'different' ? 'Different Front & Back' : 'Same Front & Back';
   const selectedFlag = FLAGS.find(f => f.id === O.flagStyle);
-  const styleLabel = selectedFlag ? selectedFlag.name : (O.flagStyle || null);
+  const styleLabel = selectedFlag ? `${selectedFlag.name} - ${flagDimensions(selectedFlag)}` : (O.flagStyle || null);
   const flagPreviewHtml = selectedFlag ? buildFlagSvgHtml(selectedFlag) : '';
   // Border isn't user-configurable right now (SHOW_BORDER_COLOR_TOGGLE is off
   // on Step 3 - it always just matches secondary/primary), so it has nothing
@@ -1023,6 +1023,8 @@ async function rasterizeFlagPreviewPng(flag) {
 }
 
 // ── Flag style picker ────────────────────────────────────────
+const flagDimensions = flag => (flag.id === 'putting-green-flag' ? '6" x 4"' : '20" x 13.5"');
+
 function renderFlagStylePicker() {
   if (O.flagStyle && !O.flagStyleOpen) {
     const flag = FLAGS.find(f => f.id === O.flagStyle);
@@ -1031,19 +1033,20 @@ function renderFlagStylePicker() {
     return `<div class="flag-selected-preview">
       <div class="flag-selected-thumb" onclick="window.openPicker('flagStyle')" style="cursor:pointer">${svgHtml}</div>
       <div class="flag-selected-footer">
-        <span class="picker-collapsed-name">${esc(label)}</span>
+        <span class="picker-collapsed-name">${esc(label)}${flag ? ` · ${flagDimensions(flag)}` : ''}</span>
         <span style="flex:1"></span>
         <button class="picker-change-btn" onclick="window.openPicker('flagStyle')">Change</button>
       </div>
     </div>`;
   }
 
-  const cards = FLAGS.map(flag => {
+  const cards = LISTED_FLAGS.map(flag => {
     const isActive = O.flagStyle === flag.id;
     const svgHtml = buildFlagSvgHtml(flag);
     return `<div class="flag-tmpl-card${isActive ? ' active' : ''}" onclick="window.selectFlagStyle('${flag.id}')">
       <div class="flag-tmpl-thumb">${svgHtml}</div>
       <div class="flag-tmpl-name">${esc(flag.name)}</div>
+      <div class="flag-tmpl-dims">${flagDimensions(flag)}</div>
     </div>`;
   }).join('');
   return `<div class="flag-tmpl-grid">${cards}</div>`;
@@ -1344,6 +1347,7 @@ async function saveStartedOrder() {
         shipping: buildShipping(),
         projectId,
         projectUrl: `${window.location.origin}/project?project=${projectId}`,
+      approvalDeadline: calcApprovalDeadline(O.eventDate)?.iso || '',
       }).catch(err => console.warn('Order started notification failed', err));
       // Customer-facing copy with the "continue your order" link.
       sendOrderStarted(projectId).catch(err => console.warn('Order started email failed', err));

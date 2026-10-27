@@ -92,7 +92,7 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 /* Form fields */
 .form-field { display:flex; flex-direction:column; gap:4px; }
 .form-label { font-size:12px; font-weight:500; color:var(--gray-600); text-transform:capitalize; }
-.required-mark { color:#fff; margin-left:2px; }
+.required-mark { color:var(--black); margin-left:2px; }
 .form-input { width:100%; border:1.5px solid var(--gray-200); border-radius:8px; padding:8px 12px; font-family:inherit; font-size:14px; color:var(--black); background:var(--white); outline:none; transition:border-color .15s; }
 .form-input:focus { border-color:var(--accent); }
 .form-input::placeholder { color:var(--gray-400); }
