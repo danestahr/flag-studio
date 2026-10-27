@@ -12,7 +12,7 @@
 // caller that already loaded FLAGS earlier in the same page (or is about to
 // re-hydrate on a refresh) doesn't pay to re-fetch every template SVG again.
 import JSZip from 'jszip';
-import { pngBlobToPdfBlob as pngToPdfPt } from '../pdf-utils.js';
+import { jpgBlobToPdfBlob as jpgToPdfPt } from '../pdf-utils.js';
 import { S } from '../state.js';
 import { FLAGS, COLORS } from '../data.js';
 import { getFlag, makeSvg, showGsTagVariant, resolveColors, preloadLogoAspects, withMasterText } from '../render.js';
@@ -232,17 +232,21 @@ async function rasterizeForPrint(logos, face, mirrorX = false, textLayers = [], 
     img.onload = () => {
       const c = document.createElement('canvas');
       c.width = vbW; c.height = vbH;
-      c.getContext('2d').drawImage(img, 0, 0, vbW, vbH);
+      const ctx = c.getContext('2d');
+      // JPEG has no alpha: flatten onto white after the face is fully composed, so
+      // transparent logos still show the flag colour beneath them.
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, vbW, vbH);
+      ctx.drawImage(img, 0, 0, vbW, vbH);
       URL.revokeObjectURL(blobUrl);
-      c.toBlob(blob => blob ? resolve({ blob, vbW, vbH }) : reject(new Error('canvas.toBlob failed')), 'image/png');
+      c.toBlob(blob => blob ? resolve({ blob, vbW, vbH }) : reject(new Error('canvas.toBlob failed')), 'image/jpeg', 0.95);
     };
     img.onerror = () => { URL.revokeObjectURL(blobUrl); reject(new Error('SVG render failed')); };
     img.src = blobUrl;
   });
 }
 
-export function pngBlobToPdfBlob(pngBlob, vbW, vbH) {
-  return pngToPdfPt(pngBlob, (vbW / FLAG_DPI) * 72, (vbH / FLAG_DPI) * 72);
+export function jpgBlobToPdfBlob(jpgBlob, vbW, vbH) {
+  return jpgToPdfPt(jpgBlob, (vbW / FLAG_DPI) * 72, (vbH / FLAG_DPI) * 72);
 }
 
 // How many variations to rasterize at once during print export. Purely a
@@ -295,8 +299,8 @@ export async function buildFlagsPrintZip(setStatus = () => {}) {
       const { blob: backPng,  vbW: bW, vbH: bH } = await rasterizeForPrint(backLogos,  'back', mirrored, [...(S.textLayers || []), ...backTextLayers], getVarFlag(v), getVarColors(v), getVarGsTagOpts(v), S.imageLayers || []);
       const file = num == null ? safe : `${safe}-hole-${String(num).padStart(2, '0')}`;
       const [frontPdf, backPdf] = await Promise.all([
-        pngBlobToPdfBlob(frontPng, fW, fH),
-        pngBlobToPdfBlob(backPng, bW, bH),
+        jpgBlobToPdfBlob(frontPng, fW, fH),
+        jpgBlobToPdfBlob(backPng, bW, bH),
       ]);
       zip.file(`${safe}/${file}-front.pdf`, frontPdf);
       zip.file(`${safe}/${file}-back.pdf`,  backPdf);

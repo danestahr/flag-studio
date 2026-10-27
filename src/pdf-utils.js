@@ -10,3 +10,14 @@ export async function pngBlobToPdfBlob(pngBlob, ptW, ptH) {
   page.drawImage(png, { x: 0, y: 0, width: ptW, height: ptH });
   return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
 }
+
+// JPEG counterpart of pngBlobToPdfBlob. A full-page photo-style logo rasterized
+// at print resolution compresses to a multi-MB PNG; JPEG keeps it small. Callers
+// must flatten any transparency first (JPEG has no alpha).
+export async function jpgBlobToPdfBlob(jpgBlob, ptW, ptH) {
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage([ptW, ptH]);
+  const jpg = await pdfDoc.embedJpg(await jpgBlob.arrayBuffer());
+  page.drawImage(jpg, { x: 0, y: 0, width: ptW, height: ptH });
+  return new Blob([await pdfDoc.save()], { type: 'application/pdf' });
+}
