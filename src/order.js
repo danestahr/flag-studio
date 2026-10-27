@@ -1723,9 +1723,9 @@ async function init() {
   render();
   prefillContactFromSession();
 
-  // Re-render step 3 once the flag SVGs are loaded so thumbnails appear
+  // Re-render steps 3 and 5 (review) once the flag SVGs are loaded so thumbnails appear
   loadAllFlags(FLAGS).then(() => {
-    if (O.step === 3) render();
+    if (O.step === 3 || O.step === 5) render();
   }).catch(err => console.error('Flag SVG load failed', err));
 }
 

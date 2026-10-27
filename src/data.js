@@ -171,7 +171,7 @@ export const FLAGS = [
     svgContent: '', viewBox: '0 0 7519 4671', logoZones: [],
   },
   {
-    id: 'putting-green-flag', name: 'Putting Green Flag',
+    id: 'putting-green-flag', name: 'Mini Pin Flag',
     tagKeyZone: 'zone-primary',
     noGsTag: true,
     colorZones: [
