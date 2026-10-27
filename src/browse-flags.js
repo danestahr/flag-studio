@@ -14,7 +14,8 @@ const session = await getSession();
 if (session) {
   await initHeaderForSession(session);
 } else {
-  injectHeaderCta('Sign In', '/login');
+  // Public template browsing is disabled for now - sign-in is the front door.
+  window.location.replace('/login');
 }
 
 // Present when arriving via the split-right "Change Flag" link mid

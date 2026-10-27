@@ -132,12 +132,6 @@ async function showEventInfoStep(session) {
 const existing = await getSession();
 if (existing) {
   await initHeaderForSession(existing);
-} else if (!hasGallerySelection) {
-  // With a gallery selection, this header CTA would hard-code '/signup'
-  // with no type/template/project - losing the selection the alt-link below
-  // the form correctly forwards (see the signupLink.href fixup further
-  // down). Simplest fix: don't show it at all on this arrival.
-  injectHeaderCta('Get Started', '/signup');
 }
 
 if (existing) {
@@ -149,25 +143,6 @@ if (existing) {
 }
 
 if (!existing) {
-  // Forward `next` through to signup.html so a visitor bounced here with a
-  // pending destination (e.g. from a locked page's requireAuth() redirect)
-  // doesn't lose it by switching to "Sign up" instead of signing in.
-  if (nextParam) {
-    const signupLink = document.querySelector('.login-alt-link-outside a[href="/signup"]');
-    if (signupLink) signupLink.href = `/signup?next=${encodeURIComponent(nextParam)}`;
-  }
-  // Same idea for a gallery selection - signup.js forwards back to this page
-  // afterward (see signup.js), where the already-signed-in branch above
-  // picks up the event-info step.
-  if (hasGallerySelection) {
-    const signupLink = document.querySelector('.login-alt-link-outside a[href="/signup"]');
-    const fwd = new URLSearchParams();
-    if (galleryType) fwd.set('type', galleryType);
-    if (galleryTemplate) fwd.set('template', galleryTemplate);
-    if (galleryProject) fwd.set('project', galleryProject);
-    if (signupLink) signupLink.href = `/signup?${fwd}`;
-  }
-
   const form  = document.getElementById('loginForm');
   const btn   = document.getElementById('loginBtn');
   const errEl = document.getElementById('loginError');

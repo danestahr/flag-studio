@@ -60,8 +60,8 @@ if (session) {
   // Anonymous visitor: the header otherwise has nothing but the logo (the
   // signed-in equivalent, injectHeaderActions() in auth.js, adds the avatar/
   // sign-out group instead) - this is the entry point into signing in.
-  injectHeaderCta('Sign In', '/login');
-  showGallery();
+  // Public template browsing is disabled for now - sign-in is the front door.
+  window.location.replace('/login' + window.location.search);
 }
 
 function showGallery() {

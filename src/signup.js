@@ -1,3 +1,6 @@
+// Self-serve signup is disabled for now - send visitors to sign in.
+window.location.replace('/login' + window.location.search);
+
 import './icons.js';
 import { signUp, getSession } from './supabase.js';
 import { injectHeaderCta } from './auth.js';
