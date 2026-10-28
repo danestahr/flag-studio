@@ -73,7 +73,7 @@ async function init(preloaded) {
       </div>` : ''}
       ${approver ? `<div style="font-size:12px;color:var(--gray-400)">${approver}${approvedStamp ? `<br>${esc(approvedStamp)}` : ''}</div>` : ''}
       <hr class="tool-card-divider">
-      <div class="status-block-label">Art Files</div>
+      <div class="status-block-label" style="margin:0 0 -.6rem">Art Files</div>
       <div style="display:flex;flex-direction:column;gap:.85rem;padding:1rem 1.1rem;border-radius:var(--r);border:1.5px solid var(--gray-100);background:var(--gray-100)">
         <div style="display:flex;align-items:center;gap:1rem">
           <div id="dlIcon" style="font-size:30px;line-height:1;color:var(--accent)"><i class="fa-solid fa-file-zipper" aria-hidden="true"></i></div>
