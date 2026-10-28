@@ -239,9 +239,9 @@ window.sendToPrestige = async function () {
   const setStatus = msg => { const el = document.getElementById('prestigeStatus'); if (el) el.textContent = msg; };
   try {
     const designHash = await currentFlagDesignHash(S.projectId);
-    const { zipBlob } = await buildFlagsPrintZip(setStatus);
+    const { zipBlob, summaryPdf } = await buildFlagsPrintZip(setStatus);
     setStatus('Sending to Prestige…');
-    await sendPrestigeOrder(S.projectId, S.projectName || 'Flag Order', zipBlob, { designHash });
+    await sendPrestigeOrder(S.projectId, S.projectName || 'Flag Order', zipBlob, { designHash, summaryPdf });
     setStatus('✓ Sent to Prestige Flag!');
     loadPrestigeLink();
     setTimeout(() => setStatus(''), 5000);

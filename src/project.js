@@ -953,9 +953,9 @@ window.confirmMarkSentToPrint = async function (productType) {
       await loadAllFlags(FLAGS);
       await hydrateFlagStateForProject(pid);
       const designHash = await currentFlagDesignHash(pid);
-      const { zipBlob } = await buildFlagsPrintZip(msg => setStatusValue(productType, status, msg));
+      const { zipBlob, summaryPdf } = await buildFlagsPrintZip(msg => setStatusValue(productType, status, msg));
       setStatusValue(productType, status, 'Sending to Prestige…');
-      await sendPrestigeOrder(pid, _project?.name || 'Flag Order', zipBlob, { designHash });
+      await sendPrestigeOrder(pid, _project?.name || 'Flag Order', zipBlob, { designHash, summaryPdf });
       prestigeSent = true;
     } else {
       setStatusValue(productType, status, 'Sending to print…');

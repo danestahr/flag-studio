@@ -1,4 +1,5 @@
 import { logEmail } from '../_shared/email-log.ts';
+import { encode as base64Encode } from 'https://deno.land/std@0.168.0/encoding/base64.ts';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { wrapEmailHtml, ctaButton, linkFallback, esc } from '../_shared/email-layout.ts';
 
@@ -116,7 +117,18 @@ serve(async (req) => {
     const designHash = /^[0-9a-f]{64}$/.test(rawHash) ? rawHash : null;
     const isTest = IS_LOCAL_SUPABASE || url.searchParams.get('testTo')?.toLowerCase() === TEST_TO_EMAIL;
     const toEmail = isTest ? TEST_TO_EMAIL : TO_EMAIL;
-    const zipBuffer = await req.arrayBuffer();
+    // Multipart (zip + summary PDF to attach) or a raw zip body.
+    let zipBuffer: ArrayBuffer;
+    let summaryBuffer: ArrayBuffer | null = null;
+    if ((req.headers.get('content-type') ?? '').startsWith('multipart/form-data')) {
+      const form = await req.formData();
+      const zipPart = form.get('zip');
+      const summaryPart = form.get('summary');
+      zipBuffer = zipPart instanceof File ? await zipPart.arrayBuffer() : new ArrayBuffer(0);
+      if (summaryPart instanceof File && summaryPart.size) summaryBuffer = await summaryPart.arrayBuffer();
+    } else {
+      zipBuffer = await req.arrayBuffer();
+    }
 
     if (!projectId || !zipBuffer.byteLength) {
       return new Response(JSON.stringify({ error: 'Missing zip or projectId' }), {
@@ -225,7 +237,7 @@ serve(async (req) => {
       title: name,
       bodyHtml: `<p style="margin:0 0 20px;color:#333;font-size:15px;line-height:1.6;">
       Hey ${TO_NAME},<br><br>
-      Here's the flag order for <strong>${name}</strong>. Use the button below to download the files (${zipMb.toFixed(1)} MB zip). It includes everything you should need to know about the order.
+      Here's the flag order for <strong>${name}</strong>. Use the button below to download the files (${zipMb.toFixed(1)} MB zip). It includes everything you should need to know about the order.${summaryBuffer ? ' The Order Summary PDF is attached for quick reference.' : ''}
     </p>
     ${ctaButton(esc(landing), 'View Project', false)}
     ${linkFallback(esc(landing))}
@@ -234,7 +246,7 @@ serve(async (req) => {
     </p>`,
     });
 
-    const text = `Hey ${TO_NAME},\n\nHere's the flag order for ${name}. Use the link below to download the files (${zipMb.toFixed(1)} MB zip). It includes everything you should need to know about the order.\n\nDownload files: ${landing}\n\nLet me know if you have any questions!`;
+    const text = `Hey ${TO_NAME},\n\nHere's the flag order for ${name}. Use the link below to download the files (${zipMb.toFixed(1)} MB zip). It includes everything you should need to know about the order.${summaryBuffer ? ' The Order Summary PDF is attached for quick reference.' : ''}\n\nDownload files: ${landing}\n\nLet me know if you have any questions!`;
 
     const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
@@ -250,6 +262,14 @@ serve(async (req) => {
         // Echoed back on Event Webhook events so sendgrid-events can alert on a bounce.
         custom_args: { kind: 'prestige-order', project_id: projectId },
         subject,
+        ...(summaryBuffer ? {
+          attachments: [{
+            content: base64Encode(new Uint8Array(summaryBuffer)),
+            filename: 'Order Summary.pdf',
+            type: 'application/pdf',
+            disposition: 'attachment',
+          }],
+        } : {}),
         content: [
           { type: 'text/plain', value: text },
           { type: 'text/html', value: html },
