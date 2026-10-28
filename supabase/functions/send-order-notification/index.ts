@@ -44,6 +44,7 @@ function safeUrl(u: unknown): string | null {
 }
 
 interface Shipping {
+  shipTo?: string;
   attn?: string;
   addressLine1: string;
   addressLine2?: string;
@@ -87,6 +88,7 @@ function formatDate(iso: string): string {
 function formatShipping(s: Shipping | undefined): string {
   if (!s) return '—';
   return [
+    s.shipTo || '',
     s.attn ? `ATTN: ${s.attn}` : '',
     s.addressLine1,
     s.addressLine2 || '',
@@ -196,7 +198,7 @@ function buildText(p: OrderPayload & { safeProjectUrl: string }): string {
   lines.push(`Full Name: ${p.contactName}`, `Email: ${p.contactEmail}`);
   if (p.shipping) {
     const s = p.shipping;
-    const addrLines = [s.attn ? `ATTN: ${s.attn}` : '', s.addressLine1, s.addressLine2, [s.city, s.stateProvince, s.postalCode].filter(Boolean).join(', '), s.country === 'CA' ? 'Canada' : 'USA']
+    const addrLines = [s.shipTo || '', s.attn ? `ATTN: ${s.attn}` : '', s.addressLine1, s.addressLine2, [s.city, s.stateProvince, s.postalCode].filter(Boolean).join(', '), s.country === 'CA' ? 'Canada' : 'USA']
       .filter(Boolean);
     lines.push('Address:', ...addrLines.map(l => `  ${l}`));
   }

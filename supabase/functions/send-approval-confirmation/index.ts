@@ -48,7 +48,7 @@ function json(body: unknown, status = 200): Response {
 
 function addressLines(c: Record<string, any>): string[] {
   const cityLine = [c.city, [c.state_province, c.postal_code].filter(Boolean).join(' ')].filter(Boolean).join(', ');
-  return [c.attn, c.address_line1, c.address_line2, cityLine, c.country && c.country !== 'US' ? c.country : '']
+  return [c.ship_to, c.attn, c.address_line1, c.address_line2, cityLine, c.country && c.country !== 'US' ? c.country : '']
     .map((s) => String(s ?? '').trim()).filter(Boolean);
 }
 
@@ -82,7 +82,7 @@ serve(async (req) => {
     const get = (k: string) => ci[k] ?? intake[k] ?? '';
     const contact = { name: get('contact_name'), email: get('contact_email') };
     const ship = {
-      attn: get('attn'), address_line1: get('address_line1'), address_line2: get('address_line2'),
+      ship_to: get('ship_to'), attn: get('attn'), address_line1: get('address_line1'), address_line2: get('address_line2'),
       city: get('city'), state_province: get('state_province'), postal_code: get('postal_code'), country: get('country'),
     };
     const eventName = get('event_name') || project.name;

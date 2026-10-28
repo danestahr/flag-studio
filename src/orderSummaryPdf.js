@@ -349,6 +349,7 @@ export async function buildOrderSummaryPdf({
   drawSectionHeader(cursor, 'Contact Details', bold);
   // Unlabeled so the whole block copies as clean text.
   drawValueLine(cursor, ci.contact_name, rowOpts);
+  if (ci.ship_to) drawValueLine(cursor, ci.ship_to, rowOpts);
   if (effectiveAttn) drawValueLine(cursor, `ATTN: ${effectiveAttn}`, rowOpts);
   drawValueLine(cursor, addrParts, rowOpts);
   drawValueLine(cursor, ci.contact_email, rowOpts);

@@ -67,6 +67,7 @@ const O = {
   eventName: '',courseName: '', eventDate: '',
   // Step 2
   contactName: '', contactEmail: '',
+  shipTo: null, // null = follow contactName; '' = explicitly cleared
   attn: null,   // null = default to contactName; '' = explicitly cleared
   country: 'US',
   addressLine1: '', addressLine2: '',
@@ -134,7 +135,7 @@ const O = {
 const DRAFT_KEY = 'flagstudio.orderDraft.v1';
 const DRAFT_FIELDS = [
   'step', 'syncUrl', 'eventName', 'courseName', 'eventDate',
-  'contactName', 'contactEmail', 'attn', 'country',
+  'contactName', 'contactEmail', 'shipTo', 'attn', 'country',
   'addressLine1', 'addressLine2', 'city', 'stateProvince', 'postalCode',
   'shipMode', 'courseAddress',
   'flagStyle', 'flagColors', 'gsTag', 'gsTagMode', 'flagSetup', 'flagQty', 'flagQtyCustom', 'designNotes',
@@ -295,6 +296,7 @@ function validate(step) {
     if (!O.contactName.trim()) errors.contactName = 'Full name is required.';
     if (!O.contactEmail.trim()) errors.contactEmail = 'Email is required.';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(O.contactEmail)) errors.contactEmail = 'Enter a valid email address.';
+    if (!(O.shipTo !== null ? O.shipTo : O.contactName).trim()) errors.shipTo = 'Full name is required.';
     if (!O.addressLine1.trim()) errors.addressLine1 = 'Address is required.';
     if (!O.city.trim()) errors.city = 'City is required.';
     if (!O.stateProvince) errors.stateProvince = (O.country === 'CA' ? 'Province' : 'State') + ' is required.';
@@ -649,24 +651,37 @@ function renderStep2() {
   const postalLabel = O.country === 'CA' ? 'Postal Code' : 'ZIP Code';
   const postalPlaceholder = O.country === 'CA' ? 'A1A 1A1' : '12345';
   return `
+    <div class="order-group">
+    <div class="form-section-label">Contact</div>
+    <div class="form-hint">This person will review and approve the flags.</div>
+    <div class="order-section">
     <div class="form-field">
       <label class="form-label" for="f-contactName">Full Name${req()}</label>
       <input class="form-input" id="f-contactName" type="text" value="${esc(O.contactName)}" autocomplete="name">
       ${e.contactName ? `<div class="form-error">${esc(e.contactName)}</div>` : ''}
     </div>
     <div class="form-field">
-      <label class="form-label" for="f-contactEmail">Email${req()}</label>
+      <label class="form-label" for="f-contactEmail">Email Address${req()}</label>
       <input class="form-input" id="f-contactEmail" type="email" value="${esc(O.contactEmail)}" autocomplete="email">
       ${e.contactEmail ? `<div class="form-error">${esc(e.contactEmail)}</div>` : ''}
     </div>
+    </div>
+    </div>
+    <div class="order-group">
+    <div class="form-section-label">Shipping</div>
+    <div class="order-section">
     ${O.courseAddress ? `
     <div class="form-field">
-      <label class="form-label">Shipping</label>
       <div class="country-toggle">
         <button class="country-btn${O.shipMode === 'course' ? ' active' : ''}" onclick="window.selectShipMode('course')">Ship to golf course</button>
         <button class="country-btn${O.shipMode === 'other' ? ' active' : ''}" onclick="window.selectShipMode('other')">Ship to a different address</button>
       </div>
     </div>` : ''}
+    <div class="form-field">
+      <label class="form-label" for="f-shipTo">Full Name${req()}</label>
+      <input class="form-input" id="f-shipTo" type="text" value="${esc(O.shipTo !== null ? O.shipTo : O.contactName)}" placeholder="Full Name" autocomplete="name">
+      ${e.shipTo ? `<div class="form-error">${esc(e.shipTo)}</div>` : ''}
+    </div>
     <div class="form-field">
       <label class="form-label" for="f-attn">ATTN <span style="font-weight:400;color:var(--gray-400)">(Optional)</span></label>
       <input class="form-input" id="f-attn" type="text" value="${esc(O.attn !== null ? O.attn : O.eventName)}" placeholder="Recipient name" autocomplete="off">
@@ -717,7 +732,9 @@ function renderStep2() {
         ${e.postalCode ? `<div class="form-error">${esc(e.postalCode)}</div>` : ''}
       </div>
     </div>
-    `}`;
+    `}
+    </div>
+    </div>`;
 }
 
 function renderStep3() {
@@ -811,7 +828,9 @@ function renderStep5() {
   }
 
   const effectiveAttn = O.attn !== null ? O.attn : O.eventName;
+  const effectiveShipTo = (O.shipTo !== null ? O.shipTo : O.contactName).trim();
   const addrParts = [
+    effectiveShipTo || null,
     effectiveAttn ? 'ATTN: ' + effectiveAttn : null,
     O.addressLine1, O.addressLine2,
     [O.city, O.stateProvince, O.postalCode].filter(Boolean).join(', '),
@@ -1182,10 +1201,18 @@ function attachListeners() {
 
   // Step 2 inputs
   const cName = document.getElementById('f-contactName');
-  if (cName) cName.addEventListener('input', e => { O.contactName = e.target.value; });
+  if (cName) cName.addEventListener('input', e => {
+    O.contactName = e.target.value;
+    // Ship To follows Your Name until the customer edits it themselves
+    const shipTo = document.getElementById('f-shipTo');
+    if (shipTo && O.shipTo === null) shipTo.value = O.contactName;
+  });
 
   const cEmail = document.getElementById('f-contactEmail');
   if (cEmail) cEmail.addEventListener('input', e => { O.contactEmail = e.target.value; });
+
+  const shipToInput = document.getElementById('f-shipTo');
+  if (shipToInput) shipToInput.addEventListener('input', e => { O.shipTo = e.target.value; });
 
   const attnInput = document.getElementById('f-attn');
   if (attnInput) attnInput.addEventListener('input', e => { O.attn = e.target.value; });
@@ -1281,6 +1308,7 @@ function buildIntakePayload() {
     event_date: O.eventDate,
     contact_name: O.contactName,
     contact_email: O.contactEmail,
+    ship_to: (O.shipTo !== null ? O.shipTo : O.contactName).trim() || null,
     attn: O.attn !== null ? O.attn : O.eventName,
     address_line1: O.addressLine1,
     address_line2: O.addressLine2 || null,
@@ -1304,6 +1332,7 @@ function buildIntakePayload() {
 
 function buildShipping() {
   return {
+    shipTo: (O.shipTo !== null ? O.shipTo : O.contactName).trim(),
     attn: O.attn !== null ? O.attn : O.eventName,
     addressLine1: O.addressLine1,
     addressLine2: O.addressLine2 || '',
@@ -1688,6 +1717,7 @@ async function resumeOrder(projectId) {
   O.syncUrl = row.event_source_url || '';
   O.contactName = row.contact_name || '';
   O.contactEmail = row.contact_email || '';
+  O.shipTo = row.ship_to ?? null;
   O.attn = row.attn ?? null;
   O.country = row.country || 'US';
   O.addressLine1 = row.address_line1 || '';

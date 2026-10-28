@@ -544,6 +544,7 @@ const CUSTOMER_FIELDS = [
   { key: 'event_source_url', label: 'Event Site Link', type: 'url' },
   { key: 'contact_name', label: 'Contact Name', type: 'text' },
   { key: 'contact_email', label: 'Contact Email', type: 'email' },
+  { key: 'ship_to', label: 'Ship To (Full Name)', type: 'text' },
   { key: 'attn', label: 'ATTN', type: 'text' },
   { key: 'address_line1', label: 'Address Line 1', type: 'text' },
   { key: 'address_line2', label: 'Address Line 2', type: 'text' },
