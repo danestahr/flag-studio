@@ -37,14 +37,30 @@ async function rest(path: string) {
   return res.ok ? await res.json() : null;
 }
 
-async function notifyDownloaded(order: any, meta: { project: string; eventName: string | null }) {
+async function notifyDownloaded(
+  order: any,
+  meta: { project: string; eventName: string | null },
+  failure?: { stage: string | null; error: string | null; userAgent: string | null },
+) {
   if (!SENDGRID_API_KEY) return;
   const to = IS_LOCAL_SUPABASE ? TEST_TO_EMAIL : NOTIFY_EMAIL;
   const name = meta.eventName || meta.project;
-  const when = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' });
-  const subject = `${IS_LOCAL_SUPABASE ? '[TEST] ' : ''}Prestige downloaded the files for ${name}`;
-  const bodyHtml = `<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 12px;">Prestige finished downloading <strong>${esc(order.filename ?? 'the order zip')}</strong> for <strong>${esc(name)}</strong>.</p>
-<p style="font-size:14px;color:#666;margin:0;">${esc(when)} ET</p>`;
+  const when = new Date().toLocaleString('en-US', { timeZone: 'America/Chicago', dateStyle: 'medium', timeStyle: 'short' });
+  const file = order.filename ?? 'the order zip';
+  const kind = failure ? 'prestige-download-error' : 'prestige-downloaded';
+  const heading = failure ? 'Prestige download failed' : 'Prestige downloaded the files';
+  const subject = `${IS_LOCAL_SUPABASE ? '[TEST] ' : ''}${failure ? `Prestige hit an error downloading the files for ${name}` : `Prestige downloaded the files for ${name}`}`;
+  const bodyHtml = failure
+    ? `<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 12px;">Prestige hit an error downloading <strong>${esc(file)}</strong> for <strong>${esc(name)}</strong>.</p>
+<p style="font-size:14px;color:#333;margin:0 0 4px;">Stage: ${esc(failure.stage ?? 'unknown')}</p>
+<p style="font-size:14px;color:#333;margin:0 0 4px;">Error: ${esc(failure.error ?? 'unknown')}</p>
+<p style="font-size:13px;color:#666;margin:0 0 4px;">Browser: ${esc(failure.userAgent ?? 'unknown')}</p>
+<p style="font-size:14px;color:#666;margin:0;">${esc(when)} CT</p>`
+    : `<p style="font-size:15px;color:#333;line-height:1.6;margin:0 0 12px;">Prestige finished downloading <strong>${esc(file)}</strong> for <strong>${esc(name)}</strong>.</p>
+<p style="font-size:14px;color:#666;margin:0;">${esc(when)} CT</p>`;
+  const text = failure
+    ? `Prestige hit an error downloading ${file} for ${name} at ${when} CT. Stage: ${failure.stage ?? 'unknown'}. Error: ${failure.error ?? 'unknown'}.`
+    : `Prestige finished downloading ${file} for ${name} at ${when} CT.`;
   try {
     const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
@@ -52,17 +68,17 @@ async function notifyDownloaded(order: any, meta: { project: string; eventName: 
       body: JSON.stringify({
         personalizations: [{ to: [{ email: to }] }],
         from: { email: NOTIFY_EMAIL, name: FROM_NAME },
-        custom_args: { kind: 'prestige-downloaded', project_id: order.project_id },
+        custom_args: { kind, project_id: order.project_id },
         subject,
         content: [
-          { type: 'text/plain', value: `Prestige finished downloading ${order.filename ?? 'the order zip'} for ${name} at ${when} ET.` },
-          { type: 'text/html', value: wrapEmailHtml({ title: 'Prestige downloaded the files', bodyHtml }) },
+          { type: 'text/plain', value: text },
+          { type: 'text/html', value: wrapEmailHtml({ title: heading, bodyHtml }) },
         ],
       }),
     });
     const err = res.ok ? undefined : await res.text();
     if (err) console.error('download notify failed', res.status, err);
-    await logEmail({ kind: 'prestige-downloaded', projectId: order.project_id, recipient: to, ok: res.ok, httpStatus: res.status, error: err });
+    await logEmail({ kind, projectId: order.project_id, recipient: to, ok: res.ok, httpStatus: res.status, error: err });
   } catch (e) {
     console.error('download notify threw', e);
   }
@@ -155,12 +171,17 @@ serve(async (req) => {
             }
           : { order_id: id }),
       });
+      const failure = {
+        stage: String(stage ?? '').slice(0, 20) || null,
+        error: String(error ?? '').slice(0, 500) || null,
+        userAgent: (req.headers.get('user-agent') ?? '').slice(0, 300) || null,
+      };
       if (isError) console.error('prestige download failed', id, stage, error);
       if (!logRes.ok) {
         console.error('download log failed', logRes.status, await logRes.text());
         return json({ error: 'Could not record download' }, 500);
       }
-      if (!isError) await notifyDownloaded(order, meta);
+      await notifyDownloaded(order, meta, isError ? failure : undefined);
       return json({ ok: true });
     }
     if (!download) return json(meta);
