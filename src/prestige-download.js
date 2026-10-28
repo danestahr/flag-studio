@@ -89,7 +89,7 @@ async function init(preloaded) {
         </div>
         <button class="btn primary block" id="dlBtn"><i class="fa-solid fa-circle-arrow-down" aria-hidden="true"></i> Download</button>
       </div>
-      <div id="dlStatus" style="min-height:1.2em;font-size:12px;color:var(--gray-400)"></div>
+      <div id="dlStatus" hidden style="font-size:12px;color:var(--gray-400)"></div>
     </div>`);
   const btn = document.getElementById('dlBtn');
   const status = document.getElementById('dlStatus');
@@ -115,7 +115,7 @@ async function init(preloaded) {
       }
     }
     // Progress shows in the tile (spinner where the file icon is), not on the button.
-    status.textContent = '';
+    status.textContent = ''; status.hidden = true;
     btn.style.display = 'none'; // .btn's display beats [hidden], so hide via style
     icon.innerHTML = '<div class="spinner-sm dl-spinner" role="status" aria-label="Downloading"></div>';
     icon.style.color = 'var(--accent)';
@@ -157,11 +157,13 @@ async function init(preloaded) {
       icon.style.color = '#86E99A';
       doneLabel.textContent = 'Download complete';
       againWrap.hidden = false; // "Download again" lives in the status line, not a button
+      status.hidden = false;
       status.textContent = 'We’ve let GolfStatus know you have the print files.';
     } catch (err) {
       logPrestigeDownloadEvent(servedId, 'error', { stage, message: `${err.name}: ${err.message}` });
       // pipeTo can fail mid-stream (network drop) after the save dialog; a failed
       // sign/log call surfaces the function's own message.
+      status.hidden = false;
       status.textContent = err.name === 'TypeError'
         ? 'The download was interrupted. Please try again.'
         : `${err.message || 'Download failed.'} If it keeps happening, email design@gsds.space.`;
