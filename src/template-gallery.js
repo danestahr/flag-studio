@@ -3,7 +3,7 @@
 // templates" toggle), plus the flag browse step on its own page
 // (browse-flags.html). No auth/project-creation logic of its own - callers
 // route into the login/event-info hand-off from whatever a card reports.
-import { FLAGS } from './data.js';
+import { FLAGS, LISTED_FLAGS } from './data.js';
 import { loadAllFlags } from './svgLoader.js';
 import { applyColors } from './render.js';
 import { HS_TEMPLATES, HS_DEFAULT_TEMPLATES, emptyBanner, emptyTemplateLogos } from './hole-sign-data.js';
@@ -153,7 +153,7 @@ export async function renderFlagGallery(container, { onSelect }) {
 }
 
 function renderFlagGrid(el, onSelect) {
-  el.innerHTML = FLAGS.map(flag => `
+  el.innerHTML = LISTED_FLAGS.map(flag => `
     <div class="flag-tmpl-card" data-flag-id="${esc(flag.id)}">
       <div class="flag-tmpl-thumb">
         <div class="flag-tmpl-thumb-img flag-tmpl-thumb-default">${buildFlagSvgHtml(flag)}</div>

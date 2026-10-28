@@ -1,4 +1,5 @@
 import { logEmail } from '../_shared/email-log.ts';
+import { testRedirect } from '../_shared/test-to.ts';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { esc, wrapEmailHtml, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
@@ -56,7 +57,7 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
   try {
-    const payload: Payload = await req.json();
+    const payload: Payload & { testTo?: string } = await req.json();
     const { projectId, productType } = payload;
     if (!projectId || (productType !== 'flags' && productType !== 'hole-signs')) {
       return json({ error: 'Invalid request' }, 400);
@@ -151,11 +152,11 @@ serve(async (req) => {
       method: 'POST',
       headers: { Authorization: `Bearer ${SENDGRID_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        personalizations: [{ to: [{ email: to, name: approverName || undefined }] }],
+        personalizations: [{ to: [{ email: testRedirect(payload.testTo, to).to, name: approverName || undefined }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         tracking_settings: { click_tracking: { enable: false } },
-        subject: `Your ${productLabel.toLowerCase()} order is approved — ${eventName}`,
+        subject: `${testRedirect(payload.testTo, to).prefix}Your ${productLabel.toLowerCase()} order is approved — ${eventName}`,
         content: [
           { type: 'text/plain', value: text },
           { type: 'text/html', value: wrapEmailHtml({ title: 'Order Approved', bodyHtml }) },

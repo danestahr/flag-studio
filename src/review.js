@@ -1,8 +1,8 @@
 import './icons.js';
-import { S, findLogo } from './state.js';
-import { FLAGS } from './data.js';
+import { S, findLogo, loadTemplateBack } from './state.js';
+import { FLAGS, LISTED_FLAGS } from './data.js';
 import { HS_DEFAULT_TEMPLATES } from './hole-sign-data.js';
-import { getFlag, renderInto, preloadLogoAspects, withMasterText, normaliseLogos, resolveColors } from './render.js';
+import { getFlag, renderInto, preloadLogoAspects, withMasterText, tplImages, customTplImages, normaliseLogos, resolveColors, printOpts, backSpecOf, showsBackFace } from './render.js';
 import { loadAllFlags } from './svgLoader.js';
 import { getProjectByToken, loadLogosForProject, submitFeedback, getFeedback, supabase, createReviewClient, clientApproveDesignProof, clientRejectDesignProof, clientSetVariationQty, sendReviewDecision, sendApprovalConfirmation, uploadFeedbackLogo, loadOrderIntake } from './supabase.js';
 import { renderHoleSignInto } from './hole-sign-render.js';
@@ -48,7 +48,9 @@ async function loadFlagsInto(project) {
   S.gsTagMode = Array.isArray(varData) ? 'auto' : (varData.gsTagMode ?? 'auto');
   S.textLayers = Array.isArray(varData) ? [] : (varData.textLayers || []);
   S.imageLayers = Array.isArray(varData) ? [] : (varData.imageLayers || []);
-  await preloadLogoAspects(S.imageLayers);
+  loadTemplateBack(varData);
+  S.printSpec = Array.isArray(varData) ? 'legacy' : (varData.printSpec ?? 'legacy');
+  await preloadLogoAspects([...S.imageLayers, ...S.backImageLayers, ...customTplImages(varItems)]);
   S.variations = varItems.map(v => ({ ...v }));
   await loadAllFlags(FLAGS);
   const activeFlag = FLAGS.find(f => f.id === S.flagId);
@@ -214,11 +216,11 @@ function updateSummary() {
 // (the default) the back mirrors the front's logos/text, matching gallery.js.
 function renderFlagFaces(frontEl, backEl, v) {
   const frontLogos = v.logos || v.assignment || [];
-  const mirrored = v.sameLogoOnBothSides ?? true;
-  const backLogos = mirrored ? frontLogos : (v.backLogos || v.backAssignment || []);
-  const backText = mirrored ? (v.textLayers || []) : (v.backTextLayers || []);
-  if (frontEl) renderInto(frontEl, frontLogos, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
-  if (backEl) renderInto(backEl, backLogos, 'back', mirrored, getVarFlag(v), getVarColors(v), [...(S.textLayers || []), ...backText], getVarGsTagOpts(v), S.imageLayers || []);
+  const back = backSpecOf(v);
+  if (frontEl) renderInto(frontEl, frontLogos, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), tplImages(v), printOpts(getVarFlag(v)));
+  if (backEl && !showsBackFace(v)) {
+    (backEl.parentElement?.parentElement?.classList.contains('rv-dual-preview') ? backEl.parentElement : backEl).style.display = 'none';
+  } else if (backEl) renderInto(backEl, back.logos, 'back', back.mirrored, getVarFlag(v), getVarColors(v), back.textLayers, getVarGsTagOpts(v), back.imageLayers, printOpts(getVarFlag(v)));
 }
 
 function collapseRejectedCard(card, v, map, thumbHtml, renderThumbs) {
@@ -777,12 +779,12 @@ function flagLogoRefs(v) {
     const entry = findLogo(item.logoId);
     if (entry) refs.push({ id: 'back-' + item.id, src: entry.src });
   });
-  // Template-level free images (Step 1's "Images" row, S.imageLayers) — same
-  // for every variation, unlike the per-variation placements above, but just
+  // Template-level free images (S.imageLayers, or this variation's own
+  // customized v.tpl copy) — shared across variations by default, unlike the per-variation placements above, but just
   // as replaceable from the reviewer's point of view. Their own 'fil-'-
   // prefixed ids (see addFlagImageLayer, flags/image-layers.js) already
   // can't collide with a zone placement id or the 'back-' prefix above.
-  (S.imageLayers || []).forEach(layer => {
+  tplImages(v).forEach(layer => {
     if (layer.src) refs.push({ id: layer.id, src: layer.src });
   });
   return refs;
@@ -930,7 +932,7 @@ function wireFlagQuickPicks(card, v) {
   const flagThumb = (f, extraCls = '') => {
     const thumb = document.createElement('div');
     thumb.className = 'rv-qp-style-thumb rv-qp-flag-thumb' + extraCls;
-    renderInto(thumb, [], 'front', false, f, getVarColors(v));
+    renderInto(thumb, [], 'front', false, f, getVarColors(v), [], null, [], printOpts(f));
     return thumb;
   };
 
@@ -965,7 +967,7 @@ function wireFlagQuickPicks(card, v) {
       stylesEl.append(name, remove);
       return;
     }
-    FLAGS.filter(f => f.id !== currentFlag.id).forEach(f => {
+    LISTED_FLAGS.filter(f => f.id !== currentFlag.id).forEach(f => {
       const opt = document.createElement('div');
       opt.className = 'rv-qp-style-opt';
       opt.dataset.flagId = f.id;

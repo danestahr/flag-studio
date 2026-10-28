@@ -24,6 +24,11 @@ const EDGE_MARGIN = 12;
 // tool, but document.getElementById is always re-resolved at fire time.
 const wiredResize = new Set();
 
+// Every panel's refit, keyed by scroll id, so something outside the panel (a
+// pole appearing beside the canvas on a face switch) can ask for a re-fit.
+const refitters = new Map();
+export function refitCanvasPanels() { refitters.forEach(fn => fn()); }
+
 function fitCanvas(scroll, wrap, aspect, pct) {
   if (!scroll || !wrap) return;
   // Budget off the whole panel's bottom edge, not just canvas-scroll's own —
@@ -35,13 +40,33 @@ function fitCanvas(scroll, wrap, aspect, pct) {
   const chromeHeight = panel.offsetHeight - scroll.offsetHeight;
   const availH = Math.max(MIN_HEIGHT, Math.round(window.innerHeight - panelTop - chromeHeight - BELOW_MARGIN));
   scroll.style.height = availH + 'px';
-  const cw = scroll.clientWidth - EDGE_MARGIN * 2, ch = scroll.clientHeight - EDGE_MARGIN * 2;
+  // With a pole, fit inside the gap between the side menus (the scroll inner's
+  // padding) so the pole isn't tucked under one - the pole is the part that
+  // hangs past the art box. Other canvases keep their existing sizing.
+  let padX = 0;
+  if (wrap.dataset.pole && wrap.parentElement) {
+    const cs = getComputedStyle(wrap.parentElement);
+    padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+  }
+  const cw = scroll.clientWidth - padX - EDGE_MARGIN * 2, ch = scroll.clientHeight - EDGE_MARGIN * 2;
   if (cw <= 0 || ch <= 0) return;
-  let w = cw, h = cw / aspect;
-  if (h > ch) { h = ch; w = ch * aspect; }
+  // A pole beside the canvas (wrap.dataset.pole, see render.js syncWrapPole)
+  // takes 400/6000 of the art box's width on one side: fit art + pole together,
+  // then size the wrap to the art alone and reserve the pole's room as a margin.
+  const poleFrac = wrap.dataset.pole ? 400 / 6000 : 0;
+  const total = aspect * (1 + poleFrac);
+  let w = cw, h = cw / total;
+  if (h > ch) { h = ch; w = ch * total; }
   const k = (pct || 100) / 100;
-  wrap.style.width  = Math.round(w * k) + 'px';
+  const artW = Math.round(w / (1 + poleFrac) * k);
+  wrap.style.width  = artW + 'px';
   wrap.style.height = Math.round(h * k) + 'px';
+  const poleW = Math.round(artW * poleFrac) + 'px';
+  // Both sides are set explicitly while a pole is shown: the wrap's CSS
+  // `margin:auto` would otherwise soak up the free space on the side left
+  // unset and push the canvas against the left menu instead of centering it.
+  wrap.style.marginLeft  = !wrap.dataset.pole ? '' : wrap.dataset.pole === 'left'  ? poleW : '0px';
+  wrap.style.marginRight = !wrap.dataset.pole ? '' : wrap.dataset.pole === 'right' ? poleW : '0px';
 }
 
 // Keeps a side panel (e.g. the variations list) sized to roughly fill the
@@ -78,7 +103,8 @@ export function createCanvasPanel({
   aspect, getZoom, setZoom, onApply,
 }) {
   function refit() {
-    fitCanvas(document.getElementById(scrollId), document.getElementById(wrapId), aspect, getZoom());
+    // aspect may be a function so a panel can follow the active flag's canvas shape.
+    fitCanvas(document.getElementById(scrollId), document.getElementById(wrapId), typeof aspect === 'function' ? aspect() : aspect, getZoom());
   }
 
   function apply(pct) {
@@ -144,6 +170,7 @@ export function createCanvasPanel({
   }
 
   wireOnce();
+  refitters.set(scrollId, () => { refit(); onApply?.(); });
   // Nothing else forces an initial fit — without this the canvas would sit
   // at its natural (unconstrained) CSS size until the first resize/zoom
   // interaction, which is exactly what showed up as a clipped-looking canvas
@@ -169,10 +196,12 @@ export function renderCanvasPanel(container, {
   aspect, getZoom, setZoom, onApply,
   headerName = '', headerNameId = panelId + 'Title',
   onAdd, addBtnId = panelId + 'AddBtn', addBtnTitle = 'Add text or logo',
+  // Optional icon button in the face row, before the add button (flags: "Reset template" on Variations, hidden until the caller shows it; "Lock" on Templates, `visible`).
+  extraBtn = null,
   noteHtml = '',
   faceToggleHidden = true,
   faceTabFrontId = panelId + 'FaceFront', faceTabBackId = panelId + 'FaceBack', onFaceChange,
-  sameSidesRowId = panelId + 'SidesRow', sameSidesCheckId = panelId + 'SidesCheck', onToggleSameSides,
+  sameSidesRowId = panelId + 'SidesRow', sameSidesCheckId = panelId + 'SidesCheck', onToggleSameSides, sameSidesLabel = 'Same Front & Back Design',
   canvasContentHtml = '',
   description = '',
   zoomHint = '⌘ + scroll to zoom',
@@ -185,6 +214,7 @@ export function renderCanvasPanel(container, {
   // or hole signs' hidden face row) keeps the button in the header as before.
   const addBtnInFaceRow = !!(onAdd && !faceToggleHidden);
   const addBtnHtml = onAdd ? `<button class="btn sm" id="${addBtnId}" type="button" title="${esc(addBtnTitle)}"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>` : '';
+  const extraBtnHtml = extraBtn ? `<button class="btn sm" id="${extraBtn.id}" type="button" title="${esc(extraBtn.title || extraBtn.label)}" aria-label="${esc(extraBtn.label)}"${extraBtn.visible ? '' : ' style="display:none"'}><i class="fa-solid ${extraBtn.icon || 'fa-arrow-rotate-left'}" aria-hidden="true"></i></button>` : '';
   const hasHeader = !!(headerName || (onAdd && !addBtnInFaceRow));
   container.innerHTML = `
     ${hasHeader ? `
@@ -202,11 +232,11 @@ export function renderCanvasPanel(container, {
         <div class="sides-row" id="${sameSidesRowId}" style="display:none">
           <label class="gs-tag-label">
             <input type="checkbox" id="${sameSidesCheckId}" class="gs-toggle-input">
-            <span class="gs-toggle-text">Same Front &amp; Back Design</span>
+            <span class="gs-toggle-text">${esc(sameSidesLabel)}</span>
             <span class="gs-toggle-switch"></span>
           </label>
         </div>
-        ${addBtnInFaceRow ? addBtnHtml : ''}
+        ${(extraBtn && !faceToggleHidden ? extraBtnHtml : '') + (addBtnInFaceRow ? addBtnHtml : '')}
       </div>
     </div>
     <div class="canvas-preview-box">
@@ -226,6 +256,7 @@ export function renderCanvasPanel(container, {
     </div>`;
 
   if (onAdd) document.getElementById(addBtnId)?.addEventListener('click', onAdd);
+  if (extraBtn) document.getElementById(extraBtn.id)?.addEventListener('click', extraBtn.onClick);
   document.getElementById(faceTabFrontId)?.addEventListener('click', () => onFaceChange?.('front'));
   document.getElementById(faceTabBackId)?.addEventListener('click', () => onFaceChange?.('back'));
   document.getElementById(sameSidesCheckId)?.addEventListener('change', e => onToggleSameSides?.(e.target.checked));

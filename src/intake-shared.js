@@ -50,18 +50,34 @@ export function formatDate(isoDate) {
   return months[month - 1] + ' ' + day + ', ' + year;
 }
 
-export function calcApprovalDeadline(eventDateIso) {
+// Weekend/Monday events count from the preceding Friday, then `days` back.
+function daysBeforeWorkingFriday(eventDateIso, days) {
   if (!eventDateIso) return null;
   const [y, m, d] = eventDateIso.split('-').map(Number);
-  // Weekend/Monday events count from the preceding Friday, then 17 days back.
   const deadline = new Date(y, m - 1, d);
   const dow = deadline.getDay();
   if (dow === 6) deadline.setDate(deadline.getDate() - 1);
   else if (dow === 0) deadline.setDate(deadline.getDate() - 2);
   else if (dow === 1) deadline.setDate(deadline.getDate() - 3);
-  deadline.setDate(deadline.getDate() - 17);
+  deadline.setDate(deadline.getDate() - days);
   const iso = `${deadline.getFullYear()}-${String(deadline.getMonth() + 1).padStart(2, '0')}-${String(deadline.getDate()).padStart(2, '0')}`;
   return { iso, display: formatDate(iso) };
+}
+
+export function calcApprovalDeadline(eventDateIso) {
+  return daysBeforeWorkingFriday(eventDateIso, 17);
+}
+
+// Standard deadline, or the rush one (10 days before the working Friday) once
+// today is past the standard deadline. Mirrors rush logic in send-prestige-order.
+export function calcEffectiveDeadline(eventDateIso, now = new Date()) {
+  const std = calcApprovalDeadline(eventDateIso);
+  if (!std) return null;
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  if (today <= std.iso) return { ...std, rush: false };
+  const rush = daysBeforeWorkingFriday(eventDateIso, 10);
+  // expired: even the rush deadline has passed, so the order can't be turned around in time.
+  return { ...rush, rush: true, expired: rush.iso < today };
 }
 
 // ── Event fields (order.js Step 1) ──────────────────────────────────────

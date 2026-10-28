@@ -7,11 +7,11 @@ const session = await requireAuth();
 
 import { S, navigateTo } from '../state.js';
 import { FLAGS } from '../data.js';
-import { renderInto, withMasterText } from '../render.js';
+import { renderInto, withMasterText, tplImages, printOpts, backSpecOf } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
 import {
   generateShareToken, getFeedback, supabase,
-  loadOrderIntake, loadEventName, sendProofReady, sendPrestigeOrder,
+  loadOrderIntake, loadEventName, sendProofReady, sendPrestigeOrder, loadLatestPrestigeOrder, currentFlagDesignHash, onDesignChanged,
   submitDesignForReview, adminSendDesignProof, saveFlagVariationQty,
 } from '../supabase.js';
 import {
@@ -37,6 +37,15 @@ let isLockedForCustomer = false;
 // A customer can still generate/copy a link and notify via this same modal;
 // it just never flips their own design's status to "In Review" for them.
 let isAdmin = false;
+// Declared up here, not beside publishFlags: the page's top-level await below runs
+// renderGallerySidebar() -> refreshPublishState() before the rest of the module
+// has evaluated, and a later `let` would still be in its temporal dead zone.
+let _publishing = false;
+// Whether the project's Prestige order has already been emailed. An update then
+// changes files Prestige may already have, so it's confirmed first (no new email
+// is sent; an open download page just shows its "newer version" banner).
+let _prestigeSent = false;
+const SENT_UPDATE_WARNING = 'This Prestige link was already emailed. Update the files behind it? Prestige will see a "newer version" banner on the page, but no new email is sent.';
 
 // ── Gallery ────────────────────────────────────────────────
 
@@ -63,9 +72,7 @@ function renderVarList() {
     card.dataset.varIdx = i;
     card.id = `var-card-${i}`;
     const frontLogos = v.logos || v.assignment || [];
-    const backMirror = sameSidesOf(v);
-    const backLogos = backMirror ? frontLogos : (v.backLogos || v.backAssignment || []);
-    const backTextLayers = backMirror ? (v.textLayers || []) : (v.backTextLayers || []);
+    const back = backSpecOf(v);
     const editHref = `${editBase}#var-${encodeURIComponent(v.id)}`;
     const status = reviewStatusOf(v);
     card.innerHTML = `
@@ -94,9 +101,9 @@ function renderVarList() {
     wireGalleryQty(card, v);
 
     const frontEl = document.getElementById(`vcf-f-${i}`);
-    if (frontEl) renderInto(frontEl, frontLogos, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
+    if (frontEl) renderInto(frontEl, frontLogos, 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), tplImages(v), printOpts(getVarFlag(v)));
     const backEl = document.getElementById(`vcf-b-${i}`);
-    if (backEl) renderInto(backEl, backLogos, 'back', backMirror, getVarFlag(v), getVarColors(v), [...(S.textLayers || []), ...backTextLayers], getVarGsTagOpts(v), S.imageLayers || []);
+    if (backEl) renderInto(backEl, back.logos, 'back', back.mirrored, getVarFlag(v), getVarColors(v), back.textLayers, getVarGsTagOpts(v), back.imageLayers, printOpts(getVarFlag(v)));
   });
 }
 
@@ -112,6 +119,7 @@ async function commitGalleryQty(v, raw, input) {
   if (stats) stats.innerHTML = `${n} variation${n === 1 ? '' : 's'} &middot; ${total} flag${total === 1 ? '' : 's'} total`;
   try {
     await saveFlagVariationQty(S.projectId, v.id, next);
+    refreshPublishState();
   } catch (e) {
     console.warn('Could not save quantity:', e);
     v.qty = prev;
@@ -153,20 +161,89 @@ function setupGallery() {
 // or state hydration — see that module for rasterizeSvg/pngBlobToPdfBlob/
 // buildFlagsPrintZip.
 
+// Link to the permanent Prestige download page for the latest send, so staff can
+// inspect exactly what Tom sees. Row is only readable by staff/owner via RLS.
+async function loadPrestigeLink() {
+  if (!document.getElementById('prestigeLinkBox') || !S.projectId) return;
+  try {
+    const order = await loadLatestPrestigeOrder(S.projectId);
+    // Looked up after the await - the sidebar can re-render while it runs.
+    const box = document.getElementById('prestigeLinkBox');
+    const input = document.getElementById('prestigeLinkInput');
+    if (!order || !box || !input) return;
+    input.value = `${window.location.origin}/prestige-download?id=${order.id}`;
+    box.style.display = 'flex';
+    _prestigeSent = !!order.sent_at;
+    const send = document.getElementById('prestigeSendBtn');
+    if (send && !send.disabled) send.innerHTML = `${_prestigeSent ? 'Resend to Prestige Flag' : 'Send to Prestige Flag'} <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>`;
+    const note = document.getElementById('prestigeStatus');
+    if (note && !note.textContent && _prestigeSent) {
+      note.textContent = `Emailed ${new Date(order.sent_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+    }
+  } catch (err) {
+    console.error('Failed to load Prestige order', err);
+  }
+}
+
+// Builds the zip from the latest saved design and (re)writes the project's
+// Prestige order in place - same link, new files, no email. Shared by the
+// link's Update button and "Publish flags".
+async function rebuildPrestigePage(setStatus) {
+  // Hash first: an edit landing mid-build then reads as out of date (one extra
+  // publish) rather than being recorded as already included.
+  const designHash = await currentFlagDesignHash(S.projectId);
+  const { zipBlob } = await buildFlagsPrintZip(setStatus);
+  setStatus('Creating download page…');
+  return sendPrestigeOrder(S.projectId, S.projectName || 'Flag Order', zipBlob, { prepareOnly: true, designHash });
+}
+
+window.copyPrestigeLink = function () {
+  const input = document.getElementById('prestigeLinkInput');
+  if (!input?.value) return;
+  navigator.clipboard.writeText(input.value).then(() => {
+    const status = document.getElementById('prestigeStatus');
+    if (status) { status.textContent = 'Link copied!'; setTimeout(() => { status.textContent = ''; }, 2000); }
+  });
+};
+
+// The Prestige counterpart of the review link's Update: rebuild the files from
+// the latest saved design into the same order, so the link doesn't change.
+window.updatePrestigeLink = async function () {
+  if (!S.variations.length || !S.projectId || _publishing) return;
+  if (_prestigeSent && !window.confirm(SENT_UPDATE_WARNING)) return;
+  const btn = document.getElementById('prestigeLinkUpdateBtn');
+  const origLabel = btn?.innerHTML;
+  const setStatus = msg => { const el = document.getElementById('prestigeStatus'); if (el) el.textContent = msg; };
+  if (btn) btn.disabled = true;
+  try {
+    await rebuildPrestigePage(setStatus);
+    await loadPrestigeLink();
+    setStatus('Updated with the latest design.');
+    setTimeout(() => setStatus(''), 2000);
+  } catch (err) {
+    console.error('updatePrestigeLink failed', err);
+    setStatus('Could not update — try again.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = origLabel; }
+    refreshPublishState();
+  }
+};
+
 window.sendToPrestige = async function () {
   if (!S.variations.length) { alert('No variations to export.'); return; }
   if (!S.projectId) { alert('Save your project first.'); return; }
   if (!(await confirmPrestigeSend())) return;
-  const btn = document.querySelector('[onclick="sendToPrestige()"]');
+  const btn = document.getElementById('prestigeSendBtn');
   const origLabel = btn?.innerHTML;
   if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
-  const status = document.getElementById('expPrintStatus');
-  const setStatus = msg => { if (status) status.textContent = msg; };
+  const setStatus = msg => { const el = document.getElementById('prestigeStatus'); if (el) el.textContent = msg; };
   try {
+    const designHash = await currentFlagDesignHash(S.projectId);
     const { zipBlob } = await buildFlagsPrintZip(setStatus);
     setStatus('Sending to Prestige…');
-    await sendPrestigeOrder(S.projectId, S.projectName || 'Flag Order', zipBlob);
+    await sendPrestigeOrder(S.projectId, S.projectName || 'Flag Order', zipBlob, { designHash });
     setStatus('✓ Sent to Prestige Flag!');
+    loadPrestigeLink();
     setTimeout(() => setStatus(''), 5000);
   } catch (err) {
     console.error('sendToPrestige failed', err);
@@ -356,11 +433,11 @@ function renderGallerySidebar() {
     completedSteps: S.projectStatus === 'sent_to_print' ? [3] : [],
     steps: [
       {
-        id: 'navDesign', label: 'Design', desc: 'Style, colors & logos',
+        id: 'navDesign', label: 'Template', desc: 'Style, colors & logos',
         ...(isLockedForCustomer ? {} : { onClick: () => { navigateTo('flags' + (p ? '?project=' + p : '')); } }),
       },
       {
-        id: 'navVariations', label: 'Variations', desc: 'Build combinations',
+        id: 'navVariations', label: 'Flags', desc: 'Build combinations',
         ...(isLockedForCustomer ? {} : { onClick: () => { if (p) navigateTo('flags-variations?project=' + p); } }),
       },
       { id: 'navGallery', label: 'Review', desc: 'Review & export' },
@@ -379,9 +456,19 @@ function renderGallerySidebar() {
   const logosTile = document.getElementById('sidebarLogosTile');
   if (logosTile) logosTile.innerHTML = `
     <div class="hs-design-controls-body">
+      ${isAdmin ? `
+      <div class="share-section" id="publishSection" style="display:none">
+        <div id="publishNotice" style="font-size:12px;line-height:1.4;color:#b45309"></div>
+        <button class="btn sm primary" id="publishFlagsBtn" style="width:100%;justify-content:center" onclick="publishFlags()"><i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i> Publish flags</button>
+        <div id="publishStatus" style="font-size:12px;color:var(--gray-600)"></div>
+      </div>` : ''}
+      ${S.shareToken || isAdmin ? `
+      <div class="share-section" id="statusSection">
+        <div class="rc-title">Status</div>
+        <div class="status-pill status-${S.projectStatus}" style="align-self:flex-start">${esc(STATUS_LABEL[S.projectStatus] || S.projectStatus)}</div>
+      </div>` : ''}
       <div class="share-section" id="shareSection">
         <div class="rc-title">Share for review</div>
-        ${S.shareToken ? `<div class="status-pill status-${S.projectStatus}" style="margin-bottom:8px">${esc(STATUS_LABEL[S.projectStatus] || S.projectStatus)}</div>` : ''}
         <div id="shareStatus" style="font-size:13px;color:var(--gray-400);min-height:16px"></div>
         <button class="btn sm primary" style="width:100%;justify-content:center" onclick="openShareModal()">Share for review <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
         <div class="share-link-box" id="shareLinkBox" style="display:${S.shareToken ? 'flex' : 'none'}">
@@ -390,15 +477,29 @@ function renderGallerySidebar() {
           <button class="btn sm" onclick="window.refreshGallery()" title="Refresh with the latest saved design"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i> Update</button>
         </div>
       </div>
+      ${isAdmin ? `
+      <div class="share-section" id="prestigeSection">
+        <div class="rc-title">Send to Prestige</div>
+        <div id="prestigeStatus" style="font-size:13px;color:var(--gray-400)"></div>
+        <button class="btn sm primary" id="prestigeSendBtn" style="width:100%;justify-content:center" onclick="sendToPrestige()">Send to Prestige Flag <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+        <div class="share-link-box" id="prestigeLinkBox" style="display:none">
+          <input class="share-link-input" id="prestigeLinkInput" readonly>
+          <button class="btn sm" onclick="copyPrestigeLink()">Copy</button>
+          <button class="btn sm" id="prestigeLinkUpdateBtn" onclick="updatePrestigeLink()" title="Rebuild the files behind this link from the latest saved design"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i> Update</button>
+        </div>
+      </div>` : ''}
       <div class="share-section">
-        <div class="rc-title">Print files</div>
-        <button class="btn sm primary" style="width:100%;justify-content:center" onclick="expAllPDF()"><i class="fa-solid fa-download" aria-hidden="true"></i> Download all as PDF</button>
-        <button class="btn sm primary" style="width:100%;justify-content:center" id="expPrintPdfBtn" onclick="downloadForPrint()"><i class="fa-solid fa-download" aria-hidden="true"></i> Print download (PDF zip)</button>
-        <div id="expPrintStatus" style="font-size:12px;color:var(--gray-600);min-height:14px"></div>
-        <button class="btn sm" style="width:100%;justify-content:center" onclick="sendToPrestige()"><i class="fa-solid fa-envelope" aria-hidden="true"></i> Send to Prestige Flag</button>
+        <div class="rc-title">Downloads</div>
+        <button class="btn sm" style="width:100%;justify-content:center" onclick="expAllPDF()"><i class="fa-solid fa-download" aria-hidden="true"></i> Download all as PDF</button>
+        <button class="btn sm" style="width:100%;justify-content:center" id="expPrintPdfBtn" onclick="downloadForPrint()"><i class="fa-solid fa-download" aria-hidden="true"></i> Print download (PDF zip)</button>
+        <div id="expPrintStatus" style="font-size:12px;color:var(--gray-600)"></div>
       </div>
     </div>`;
-  if (logosTile) fitSidePanel('sidebarLogosTile');
+  if (logosTile) {
+    loadPrestigeLink();
+    refreshPublishState(); // after the tile renders: the Publish button lives in it
+    fitSidePanel('sidebarLogosTile');
+  }
   if (isLockedForCustomer) {
     ['navDesign', 'navVariations'].forEach(id => {
       const el = document.getElementById(id);
@@ -436,6 +537,95 @@ try {
   console.error('Could not load project', err);
 }
 
+// Publish is enabled only when the saved design differs from what was last
+// published - i.e. from the design hash recorded on the project's Prestige order
+// (the review link always shows the live design, so the order is the marker).
+// No order yet means no links to refresh, so Publish stays hidden; an order with no
+// hash (built before hashes existed) is unknown, so it's treated as out of date.
+// The notice above the button says so in plain words.
+async function refreshPublishState() {
+  if (!document.getElementById('publishFlagsBtn') || _publishing) return;
+  try {
+    const [order, hash] = await Promise.all([
+      loadLatestPrestigeOrder(S.projectId),
+      currentFlagDesignHash(S.projectId),
+    ]);
+    // Looked up AFTER the awaits: the sidebar can re-render while they run,
+    // which replaces the section - updating references grabbed earlier would
+    // hit detached nodes and leave the live one stuck in its initial state.
+    const section = document.getElementById('publishSection');
+    const btn = document.getElementById('publishFlagsBtn');
+    const notice = document.getElementById('publishNotice');
+    if (!section || !btn) return;
+    _prestigeSent = !!order?.sent_at;
+    // Publish only refreshes links that already exist - it never creates one - so
+    // with no Prestige order there's nothing to compare against or update (the
+    // review link has no stale marker of its own; it shows the live design).
+    const outOfDate = !!S.variations.length && !!order && order.design_hash !== hash;
+    // The section only exists while there's something to publish - plus however
+    // long the "Published." confirmation is still on screen after a publish.
+    const hasMessage = !!document.getElementById('publishStatus')?.textContent;
+    section.style.display = outOfDate || hasMessage ? '' : 'none';
+    notice.style.display = btn.style.display = outOfDate ? '' : 'none';
+    notice.innerHTML = `<i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> ${S.shareToken
+      ? 'The review link and print files don\u2019t include your latest changes. Publish to update both.'
+      : 'The print files don\u2019t include your latest changes. Publish to update them.'}`;
+    btn.disabled = !outOfDate;
+  } catch (err) {
+    console.error('Could not check publish state', err);
+  }
+}
+
+// Edits happen on other pages/tabs (contact info, template, flags); re-check when
+// this tab comes back into view.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshPublishState(); });
+
+// ...and react the moment another tab saves the template, flags or contact info
+// (see notifyDesignChanged in supabase.js). Debounced: autosave can save in bursts.
+let _designChangedTimer = null;
+onDesignChanged(changedId => {
+  if (changedId !== S.projectId) return;
+  clearTimeout(_designChangedTimer);
+  _designChangedTimer = setTimeout(refreshPublishState, 400);
+});
+
+// Brings both outputs in line with the latest saved design: the print download
+// (Prestige page, rebuilt in place) first - it's the heavy, failure-prone step,
+// so the review link isn't touched if it fails - then the review link via the
+// same path as the sidebar's Update button. Sending/print status handling is
+// deliberately not part of this yet.
+window.publishFlags = async function () {
+  if (_publishing || !S.variations.length) return;
+  if (_prestigeSent && !window.confirm(SENT_UPDATE_WARNING)) return;
+  _publishing = true;
+  const btn = document.getElementById('publishFlagsBtn');
+  const origLabel = btn?.innerHTML;
+  // Looked up per call: refreshGallery() re-renders the sidebar.
+  const setStatus = msg => { const el = document.getElementById('publishStatus'); if (el) el.textContent = msg; };
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Publishing…';
+  }
+  try {
+    // Only update what exists; Publish never creates a link.
+    if (await loadLatestPrestigeOrder(S.projectId)) await rebuildPrestigePage(setStatus);
+    setStatus('Updating review link…');
+    const reviewOk = await window.refreshGallery(); // re-renders the sidebar
+    await loadPrestigeLink();
+    setStatus(reviewOk
+      ? '✓ Published.'
+      : 'Print files updated, but the review link could not be refreshed — try its Update button.');
+    setTimeout(() => { setStatus(''); refreshPublishState(); }, reviewOk ? 4000 : 8000);
+  } catch (err) {
+    console.error('publishFlags failed', err);
+    setStatus('Publish failed: ' + (err.message || err));
+    if (btn) btn.innerHTML = origLabel;
+  } finally {
+    _publishing = false;
+    refreshPublishState();
+  }
+};
+
 window.refreshGallery = async function () {
   // Look the status element up AFTER loadAndRenderGallery() below, not
   // before — it re-renders the sidebar via renderGallerySidebar(), replacing
@@ -456,9 +646,11 @@ window.refreshGallery = async function () {
       statusEl.textContent = 'Updated with the latest design.';
       setTimeout(() => { statusEl.textContent = ''; }, 2000);
     }
+    return true;
   } catch (err) {
     console.error('Could not refresh gallery', err);
     const statusEl = document.getElementById('shareStatus');
     if (statusEl) statusEl.textContent = 'Could not refresh — try again.';
+    return false;
   }
 };

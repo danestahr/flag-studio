@@ -1,4 +1,5 @@
 import { logEmail } from '../_shared/email-log.ts';
+import { testRedirect } from '../_shared/test-to.ts';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { esc, wrapEmailHtml, ctaButton, linkFallback, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
@@ -79,7 +80,7 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
   try {
-    const { projectId } = await req.json();
+    const { projectId, testTo } = await req.json();
     if (typeof projectId !== 'string' || !UUID_RE.test(projectId)) {
       return new Response(JSON.stringify({ error: 'Invalid project' }), { status: 400, headers: JSON_HEADERS });
     }
@@ -105,11 +106,11 @@ serve(async (req) => {
       method: 'POST',
       headers: { Authorization: `Bearer ${SENDGRID_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        personalizations: [{ to: [{ email: intake.contact_email, name: intake.contact_name }] }],
+        personalizations: [{ to: [{ email: testRedirect(testTo, intake.contact_email).to, name: intake.contact_name }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         tracking_settings: { click_tracking: { enable: false } },
-        subject: `Your order has been started — ${intake.event_name}`,
+        subject: `${testRedirect(testTo, intake.contact_email).prefix}Your order has been started — ${intake.event_name}`,
         content: [
           { type: 'text/plain', value: buildText(payload) },
           { type: 'text/html', value: buildHtml(payload) },

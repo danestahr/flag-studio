@@ -823,14 +823,17 @@ export function createImageBox(zone, canvasEl, data, opts = {}) {
     if (snapX) nx = snapX.newPos;
     if (snapY) ny = snapY.newPos;
 
-    // Guides are drawn on the whole canvas, not just this zone, so convert
+    // Guides live in the canvas element (but span only this zone), so convert
     // the matched candidate's zone-relative percent into a canvas-relative
     // percent for display (falls back to the zone's own center when nothing
     // matched, same position the guide always used before extra candidates).
     const guideXPct = (zoneRect.left + ((snapX ? snapX.value : 50) / 100) * zoneRect.width - canvasRect.left) / canvasRect.width * 100 + '%';
     const guideYPct = (zoneRect.top + ((snapY ? snapY.value : 50) / 100) * zoneRect.height - canvasRect.top) / canvasRect.height * 100 + '%';
-    setAlignGuide(canvasEl, 'v', !!snapX, guideXPct);
-    setAlignGuide(canvasEl, 'h', !!snapY, guideYPct);
+    // Confine each line to the placement zone's extent along its own axis.
+    const zoneXExt = { start: (zoneRect.left - canvasRect.left) / canvasRect.width * 100, end: (zoneRect.right - canvasRect.left) / canvasRect.width * 100 };
+    const zoneYExt = { start: (zoneRect.top - canvasRect.top) / canvasRect.height * 100, end: (zoneRect.bottom - canvasRect.top) / canvasRect.height * 100 };
+    setAlignGuide(canvasEl, 'v', !!snapX, guideXPct, zoneYExt);
+    setAlignGuide(canvasEl, 'h', !!snapY, guideYPct, zoneXExt);
 
     data.x = nx; data.y = ny;
     wrap.style.left = nx + '%';

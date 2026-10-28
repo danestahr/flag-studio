@@ -2,9 +2,123 @@ import { S, DEFAULT_COLORS, findLogo } from './state.js';
 import { FLAGS } from './data.js';
 import { isLightColor } from './gsTag.js';
 import { HS_FONTS } from './hole-sign-data.js';
+import { poleInner } from './flags/pole.js';
+import { refitCanvasPanels } from './canvas-panel.js';
 import { wrapText } from './text-utils.js';
+import { ART, PRINT_FRAMES, POLE_W, artViewBox, frameViewBox, poleViewBox, usesV2Print } from './flags/print-spec.js';
 
 export const getFlag = () => FLAGS.find(f => f.id === S.flagId);
+
+// Opts for makeSvg/renderInto selecting the vendor print frames (v2). Returns
+// undefined for legacy projects and for flags without print frames, so every
+// existing call site renders exactly as before.
+export const printOpts = (flag) => usesV2Print({ print_spec: S.printSpec }, flag) ? { print: true } : undefined;
+
+// v2 crop: an <svg>'s overflow clips to its viewport, not its viewBox, so any
+// letterboxing (a container whose shape isn't exactly 20" x 13.5") would reveal
+// the bleed/wrap area around the art box. Moving the content into a nested <svg>
+// that is itself exactly the art box clips it there regardless of container shape.
+function artClipAttrs(face) {
+  const f = PRINT_FRAMES[face === 'back' ? 'back' : 'front'];
+  return { x: f.artX, y: f.artY, width: ART.w, height: ART.h, viewBox: artViewBox(face), overflow: 'hidden' };
+}
+export function clipChildrenToArt(svg, face) {
+  const clip = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  Object.entries(artClipAttrs(face)).forEach(([k, v]) => clip.setAttribute(k, v));
+  while (svg.firstChild) clip.appendChild(svg.firstChild);
+  svg.appendChild(clip);
+  return clip;
+}
+
+// Preview pole (see print-spec.js POLE_W, flags/pole.js): the layout's pole
+// artwork, recolored from the flag's colors. The back's is the same artwork
+// turned 180deg (it sits on the opposite side, text reading the other way up).
+function poleParts(flag, colors) {
+  const rc = resolveColors(colors, flag);
+  return poleInner(flag.poleText, { primary: rc['zone-primary'], border: rc['zone-border'] });
+}
+
+// In-SVG pole for read-only tiles/PDF thumbnails: drawn beside the art box,
+// outside the clip holding the flag content, so nothing inside it moves.
+function appendPole(svg, face, flag, colors) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const f = PRINT_FRAMES[face === 'back' ? 'back' : 'front'];
+  const x = face === 'back' ? f.artX + ART.w : f.artX - POLE_W;
+  const pole = document.createElementNS(ns, 'svg');
+  pole.setAttribute('class', 'flag-pole');
+  pole.setAttribute('x', x); pole.setAttribute('y', f.artY);
+  pole.setAttribute('width', POLE_W); pole.setAttribute('height', ART.h);
+  const part = poleParts(flag, colors);
+  pole.setAttribute('viewBox', part.viewBox);
+  pole.setAttribute('preserveAspectRatio', 'none');
+  pole.setAttribute('overflow', 'hidden');
+  pole.innerHTML = part.inner;
+  if (face === 'back') {
+    const g = document.createElementNS(ns, 'g');
+    g.setAttribute('transform', `rotate(180 ${x + POLE_W / 2} ${f.artY + ART.h / 2})`);
+    g.appendChild(pole);
+    svg.appendChild(g);
+  } else {
+    svg.appendChild(pole);
+  }
+}
+
+// DOM pole for the interactive canvases. `zoomWrap` is the fitted .canvas-zoom-wrap
+// around the art box; the pole hangs just outside it (absolute, so the overlay
+// math keyed to the art box is untouched) and wrap.dataset.pole tells
+// canvas-panel's fit to reserve room for it. Pass flag=null (or a flag with no
+// pole) to remove it.
+export function syncWrapPole(zoomWrap, flag, face, colors) {
+  if (!zoomWrap) return;
+  const side = flag?.poleText && printOpts(flag) ? (face === 'back' ? 'right' : 'left') : '';
+  let el = zoomWrap.querySelector(':scope > .flag-pole-dom');
+  if (!side) {
+    el?.remove();
+    if (zoomWrap.dataset.pole) { delete zoomWrap.dataset.pole; refitCanvasPanels(); }
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'flag-pole-dom';
+    zoomWrap.appendChild(el);
+  }
+  el.className = `flag-pole-dom ${side}`;
+  const part = poleParts(flag, colors || S.colors);
+  el.innerHTML = `<svg viewBox="${part.viewBox}" preserveAspectRatio="none" overflow="hidden">${part.inner}</svg>`;
+  if (zoomWrap.dataset.pole !== side) { zoomWrap.dataset.pole = side; refitCanvasPanels(); }
+}
+
+// Style-picker thumbnail: paints `host` with the flag's v2 front view (art box
+// plus pole) in the given colors, like every other v2 preview. Returns false
+// - leaving `host` untouched - for projects/flags not on v2, so callers keep
+// painting the legacy template there.
+export function paintFlagCardV2(host, flag, colors, gsTagOpts = null) {
+  const opts = printOpts(flag);
+  if (!opts) return false;
+  host.innerHTML = '';
+  const inner = document.createElement('div');
+  host.appendChild(inner);
+  renderInto(inner, [], 'front', false, flag, colors, [], gsTagOpts, [], opts);
+  host.classList.add('v2');
+  return true;
+}
+
+// Zone whose color the GolfStatus tag's auto light/dark pick is judged against.
+// v2 views may differ from the legacy template (print-manifest.js tagKeyZone).
+export const tagKeyZoneOf = (flag) => (printOpts(flag) && flag?.v2TagKeyZone) || flag?.tagKeyZone || 'zone-primary';
+
+// Canvas shape for a flag: the 20" x 13.5" crop for v2 print flags, the legacy
+// template ratio otherwise. Passed to canvas panels as a function (canvas-panel.js).
+export const canvasAspect = (flag) => printOpts(flag) ? ART.w / ART.h : 7519 / 4669;
+
+// The markup + viewBox an editor preview should paint for a flag's face: the
+// cropped vendor print frame for v2 projects, the legacy template otherwise.
+export function flagFaceSource(flag, face = 'front') {
+  const pf = printOpts(flag) ? flag.print[face === 'back' ? 'back' : 'front'] : null;
+  return pf
+    ? { viewBox: artViewBox(face), svgContent: `<svg ${Object.entries(artClipAttrs(face)).map(([k, v]) => `${k}="${v}"`).join(' ')}>${pf.svgContent}</svg>`, v2: true }
+    : { viewBox: flag.viewBox || '0 0 7519 4669', svgContent: flag.svgContent, v2: false };
+}
 
 // A cropped logo's clipPath id must be unique across the whole document, not
 // just within its own <svg> — the gallery (and other callers) render a
@@ -23,7 +137,87 @@ let cropClipSeq = 0;
 // as colors/gsTag to a variation's own content. Callers that already collect
 // `v.textLayers` for a render pass should thread it through here instead of
 // passing that array bare.
-export const withMasterText = (v) => [...(S.textLayers || []), ...((v && v.textLayers) || [])];
+export const withMasterText = (v) => [...(tplOf(v).textLayers || []), ...((v && v.textLayers) || [])];
+
+// The template-level layers a variation actually renders with: its own
+// customized snapshot (v.tpl — textLayers/imageLayers/backLogos/
+// backTextLayers/backImageLayers, same field names as S) when the designer
+// altered the template for just this variation, else the project template
+// (S). A customized variation stays frozen on its snapshot until reset
+// (flags/variations.js's veResetTpl deletes v.tpl). separateBack stays a
+// project-level switch — read from S either way.
+export const tplOf = (v) => {
+  if (!v || !v.tpl) return S;
+  if (!S.frontLocked && !S.backLocked) return v.tpl;
+  // A locked face ignores the variation's own copy and keeps the template's.
+  const pick = (locked, f) => (locked ? S : v.tpl)[f];
+  return {
+    textLayers: pick(S.frontLocked, 'textLayers'),
+    imageLayers: pick(S.frontLocked, 'imageLayers'),
+    backLogos: pick(S.backLocked, 'backLogos'),
+    backTextLayers: pick(S.backLocked, 'backTextLayers'),
+    backImageLayers: pick(S.backLocked, 'backImageLayers'),
+  };
+};
+// Every image layer any variation's customized template carries — for
+// preloadLogoAspects, which has to measure them all before the first render.
+export const customTplImages = (items) => (items || []).flatMap(v => [...(v?.tpl?.imageLayers || []), ...(v?.tpl?.backImageLayers || [])]);
+export const tplImages = (v) => tplOf(v).imageLayers || [];
+
+// Whether a variation's back face is worth showing on its own. With a plain
+// template (same front & back) a variation that just mirrors its front has
+// nothing new on the back, so only the front is displayed; with a separate
+// template back every variation shows both faces (the back defaults to the
+// variation's front design until its own toggle is switched off).
+export const showsBackFace = (v) => !!S.separateBack || !!S.backLocked || !(v?.sameLogoOnBothSides ?? true);
+
+// Template-back items are authored directly in back-screen coordinates, but
+// makeSvg reflects everything on a mirrored back (a variation whose back
+// mirrors its front) — so counter-flip them first and they land where they
+// were authored. Logos/images are center-x percentages; text is a box (x, w)
+// whose alignment also swaps under the mirror (see paintTextLayers).
+const flipLogo = (l) => {
+  const x = 100 - l.x;
+  const out = { ...l, x };
+  if (l.cropped && l.imageAbsX != null) out.imageAbsX = x + (l.imageAbsX - l.x);
+  return out;
+};
+const flipImage = (l) => ({ ...l, x: 100 - l.x });
+const flipText = (l) => ({ ...l, x: 100 - l.x - l.w, align: l.align === 'left' ? 'right' : l.align === 'right' ? 'left' : l.align });
+
+// The single place that decides what a variation's back face contains —
+// every consumer (editor thumbs, gallery, review, print export) renders the
+// back from this instead of re-deriving it. `mirrored` is makeSvg's mirrorX
+// (true = the variation's own back reflects its front). With a template back
+// (S.separateBack) the project's standard back text/images/logos replace the
+// front's master layers on the back, and the variation's own content still
+// defaults to mirroring its front on top of them.
+//   logos/textLayers/imageLayers — full lists to hand to makeSvg/renderInto
+//   masterText — the template-level text part of textLayers (own is the rest)
+export function backSpecOf(v) {
+  // A locked back is the template back and nothing else: no variation logos
+  // or text, and no mirroring of the variation's front onto it.
+  const locked = !!S.backLocked;
+  const mirrored = locked || (v?.sameLogoOnBothSides ?? true);
+  const ownText = locked ? [] : ((mirrored ? v?.textLayers : v?.backTextLayers) || []);
+  const ownLogos = locked ? [] : (mirrored ? (v?.logos || v?.assignment || []) : (v?.backLogos || v?.backAssignment || []));
+  const t = tplOf(v);
+  if (!S.separateBack) {
+    const masterText = t.textLayers || [];
+    return { logos: ownLogos, masterText, ownTextLayers: ownText, textLayers: [...masterText, ...ownText], imageLayers: t.imageLayers || [], mirrored, template: false };
+  }
+  const f = (flip, list) => (list || []).map(l => mirrored ? flip(l) : l);
+  const masterText = f(flipText, t.backTextLayers);
+  return {
+    logos: [...f(flipLogo, t.backLogos), ...ownLogos],
+    masterText,
+    ownTextLayers: ownText,
+    textLayers: [...masterText, ...ownText],
+    imageLayers: f(flipImage, t.backImageLayers),
+    mirrored,
+    template: true,
+  };
+}
 
 // Fills in any zone the user hasn't picked a color for so rendering — and the
 // step "Next" buttons — never block on an unmade choice. Primary/secondary
@@ -62,9 +256,22 @@ function gsTagCenterX(tagGroup) {
 // face: 'front' | 'back' — which side's tag group to show (the other is hidden)
 // mode: 'auto' | 'dark' | 'light' — 'auto' picks black/white from keyHex's lightness
 // keyHex: background color behind the tag, used to resolve 'auto'
-export function showGsTagVariant(svg, face = 'front', mode = 'auto', keyHex = null) {
+// printFrame: v2 print frames carry one readable tag per face file (no Front/Back
+// variants, and the back frame isn't mirrored), so there is nothing to swap or
+// counter-mirror - the group is only shown and recoloured. Legacy templates
+// (printFrame false) keep the variant/mirror behaviour below untouched.
+export function showGsTagVariant(svg, face = 'front', mode = 'auto', keyHex = null, printFrame = false) {
   const tagGroup = svg.querySelector('[id="GolfStatus Tag"]');
   if (!tagGroup) return;
+  if (printFrame) {
+    tagGroup.removeAttribute('transform');
+    tagGroup.removeAttribute('display');
+    const color = mode === 'dark' ? '#000000'
+      : mode === 'light' ? '#ffffff'
+      : isLightColor(keyHex) ? '#000000' : '#ffffff';
+    tagGroup.querySelectorAll('path,rect,circle,polygon,ellipse').forEach(p => p.setAttribute('fill', color));
+    return;
+  }
   if (face === 'back') {
     const cx = gsTagCenterX(tagGroup);
     tagGroup.setAttribute('transform', `translate(${(2 * cx).toFixed(1)},0) scale(-1,1)`);
@@ -174,7 +381,7 @@ function loadLogoAspect(logo) {
 
 // Synchronous read used inside makeSvg — returns the cached ratio, or kicks
 // off a load (for next time) and falls back to a square box until it lands.
-function getLogoAspect(logo) {
+export function getLogoAspect(logo) {
   if (!logo?.src) return 1;
   if (_logoAspectCache.has(logo.src)) return _logoAspectCache.get(logo.src);
   loadLogoAspect(logo);
@@ -265,21 +472,28 @@ export function paintImageLayers(imageLayers, vbW, vbH, isBack, append) {
   });
 }
 
-export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null, imageLayers = []) {
+export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null, imageLayers = [], opts = {}) {
   const flag = flagOverride || getFlag();
   if (!flag) return null;
+  // v2 print mode: render the face's own vendor print frame instead of the
+  // legacy single template (see flags/print-spec.js). Cropped to the 20" x
+  // 13.5" art box unless opts.fullFrame (export).
+  const pf = (opts?.print && flag.print) ? flag.print[face === 'back' ? 'back' : 'front'] : null;
   const colors = colorsOverride || S.colors;
-  const zone = flag.logoZones[0];
+  const zone = pf ? pf.zones?.[0] : flag.logoZones[0];
   const ns = 'http://www.w3.org/2000/svg';
-  const vbW = +((flag.viewBox || '0 0 7519 4669').split(' ')[2]);
+  const vbW = pf ? pf.w : +((flag.viewBox || '0 0 7519 4669').split(' ')[2]);
 
   const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', flag.viewBox || '0 0 7519 4669');
+  svg.setAttribute('viewBox', pf ? (opts.fullFrame ? frameViewBox(face) : artViewBox(face)) : (flag.viewBox || '0 0 7519 4669'));
   svg.setAttribute('width', w);
   svg.setAttribute('height', h);
   svg.setAttribute('xmlns', ns);
 
-  if (face === 'back') {
+  if (pf) {
+    // The back print frame is authored as its own artboard, so no mirror.
+    svg.innerHTML = pf.svgContent;
+  } else if (face === 'back') {
     const g = document.createElementNS(ns, 'g');
     g.setAttribute('transform', `translate(${vbW},0) scale(-1,1)`);
     g.innerHTML = flag.svgContent;
@@ -291,13 +505,18 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
 
   const gst = gsTagOpts ?? { enabled: S.gsTag, mode: S.gsTagMode };
   if (gst.enabled) {
-    const keyZone = flag.tagKeyZone || 'zone-primary';
+    const keyZone = tagKeyZoneOf(flag);
     // Resolve so the tag's auto light/dark pick matches the background it's
     // actually rendered on, even when that zone fell back to a default color.
     // Must run before extractFrameElements below — it only sets attributes,
     // but those need to land on the tag before it's relocated.
-    showGsTagVariant(svg, face, gst.mode, resolveColors(colors, flag)[keyZone]);
+    showGsTagVariant(svg, face, gst.mode, resolveColors(colors, flag)[keyZone], !!pf);
   }
+
+  // Print frames: "Cut Guides" is print-only (the printer's cut marks), so the
+  // customer-facing crop never shows it. "Stitches" is the opposite - shown to
+  // the client, stripped from the print export (see renderPrintSheetV2).
+  if (pf && !opts.fullFrame) svg.querySelectorAll('[id="Cut Guides"]').forEach(el => el.remove());
 
   // The frame (border + GS tag) defaults to painting above added content —
   // collected now, moved to the top once all default-layer content below it
@@ -308,7 +527,7 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
 
   const list = normaliseLogos(logos);
   if (zone && list.length) {
-    const zoneX = face === 'back' ? vbW - zone.x - zone.w : zone.x;
+    const zoneX = (face === 'back' && !pf) ? vbW - zone.x - zone.w : zone.x;
     // The zone rect is just a placement suggestion, not a hard boundary — the
     // editor lets a logo be dragged/scaled past it, clipped only by the flag
     // canvas itself (`.flag-wrap { overflow:hidden }`), which the SVG root's
@@ -386,9 +605,19 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
   }
 
   if (textLayers?.length || imageLayers?.length) {
-    const [vbW2, vbH2] = (flag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
+    // v2: text/image layer percentages are of the 20" x 13.5" art box, placed
+    // at the box's offset inside the print frame.
+    const [vbW2, vbH2] = pf ? [ART.w, ART.h] : (flag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
     const isBack = face === 'back' && mirrorX;
-    const append = (el, aboveFrame) => { if (aboveFrame) aboveEls.push(el); else svg.appendChild(el); };
+    const append = (el, aboveFrame) => {
+      if (pf) {
+        const g = document.createElementNS(ns, 'g');
+        g.setAttribute('transform', `translate(${PRINT_FRAMES[face === 'back' ? 'back' : 'front'].artX},${PRINT_FRAMES[face === 'back' ? 'back' : 'front'].artY})`);
+        g.appendChild(el);
+        el = g;
+      }
+      if (aboveFrame) aboveEls.push(el); else svg.appendChild(el);
+    };
     paintTextLayers(textLayers, vbW2, vbH2, isBack, append);
     paintImageLayers(imageLayers, vbW2, vbH2, isBack, append);
   }
@@ -400,25 +629,37 @@ export function makeSvg(logos, w, h, face = 'front', mirrorX = false, flagOverri
   // transform on the back face instead of losing it) so every renderInto()
   // consumer (variation thumbnails, gallery cards) sees it, not just call
   // sites that patched this locally.
-  const bleedEl = svg.querySelector('[id="Bleed"], [id="bleed"]');
+  const bleedEl = svg.querySelector('[id="Bleed"], [id="bleed"], [id="Stitches"]');
   if (frameEls.length || bleedEl) {
     const frameHolder = document.createElementNS(ns, 'g');
     // Elements are moving out of the mirrored `g` wrapper built above (for
     // face === 'back') — re-apply that same transform here or the frame
     // loses its mirroring/position.
-    if (face === 'back') frameHolder.setAttribute('transform', `translate(${vbW},0) scale(-1,1)`);
+    if (face === 'back' && !pf) frameHolder.setAttribute('transform', `translate(${vbW},0) scale(-1,1)`);
     frameEls.forEach(el => frameHolder.appendChild(el));
     if (bleedEl) frameHolder.appendChild(bleedEl);
     svg.appendChild(frameHolder);
   }
   aboveEls.forEach(el => svg.appendChild(el));
 
+  if (pf && !opts.fullFrame) clipChildrenToArt(svg, face);
+  if (pf && !opts.fullFrame && opts.pole && flag.poleText) {
+    svg.setAttribute('viewBox', poleViewBox(face));
+    appendPole(svg, face, flag, colors);
+  }
+
   return svg;
 }
 
-export function renderInto(el, logos, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null, imageLayers = []) {
+export function renderInto(el, logos, face = 'front', mirrorX = false, flagOverride = null, colorsOverride = null, textLayers = [], gsTagOpts = null, imageLayers = [], opts = {}) {
   el.innerHTML = '';
-  const svg = makeSvg(logos, '100%', '100%', face, mirrorX, flagOverride, colorsOverride, textLayers, gsTagOpts, imageLayers);
+  // The v2 crop is 20" x 13.5", not the legacy 7519:4669 many card containers
+  // are hard-coded to in CSS - match the container to the crop (legacy: CSS rules).
+  // renderInto only paints read-only tiles/previews, so v2 ones get the pole.
+  if (opts?.print) opts = { ...opts, pole: true };
+  const poled = opts?.print && (flagOverride || getFlag())?.poleText;
+  if (opts?.print) el.style.aspectRatio = `${ART.w + (poled ? POLE_W : 0)} / ${ART.h}`;
+  const svg = makeSvg(logos, '100%', '100%', face, mirrorX, flagOverride, colorsOverride, textLayers, gsTagOpts, imageLayers, opts);
   if (svg) {
     svg.style.cssText = 'display:block;width:100%;height:100%';
     el.appendChild(svg);
@@ -427,11 +668,11 @@ export function renderInto(el, logos, face = 'front', mirrorX = false, flagOverr
     // measure real geometry and fell back to an approximation — visibly
     // leaving the tag looking like it never moved off the front position.
     // Re-run it now that the SVG is in the document.
-    if (face === 'back') {
+    if (face === 'back' && !opts?.print) {
       const flag = flagOverride || getFlag();
       const gst = gsTagOpts ?? { enabled: S.gsTag, mode: S.gsTagMode };
       if (gst.enabled && flag) {
-        const keyZone = flag.tagKeyZone || 'zone-primary';
+        const keyZone = tagKeyZoneOf(flag);
         showGsTagVariant(svg, 'back', gst.mode, resolveColors(colorsOverride || S.colors, flag)[keyZone]);
       }
     }

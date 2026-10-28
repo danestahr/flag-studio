@@ -4,9 +4,10 @@ import { requireAuth, isStaffOrAdmin } from '../auth.js';
 
 const session = await requireAuth();
 
-import { S, setDragLogoId, addCustomColor, allSwatches, navigateTo } from '../state.js';
-import { FLAGS, COLORS } from '../data.js';
-import { getFlag, applyColors, renderInto, showGsTagVariant, makeSvg, resolveColors, preloadLogoAspects, withMasterText } from '../render.js';
+import { S, isFaceLocked, loadTemplateBack, setDragLogoId, addCustomColor, allSwatches, navigateTo } from '../state.js';
+import { newProjectPrintSpec, ART } from './print-spec.js';
+import { FLAGS, LISTED_FLAGS, COLORS, baseFlagId } from '../data.js';
+import { getFlag, applyColors, renderInto, showGsTagVariant, makeSvg, resolveColors, preloadLogoAspects, withMasterText, tplImages, tplOf, customTplImages, getLogoAspect, printOpts, canvasAspect, backSpecOf, showsBackFace, syncWrapPole, paintFlagCardV2, tagKeyZoneOf } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
 import {
   loadProject, saveFlagConfig, loadFlagConfig,
@@ -17,6 +18,7 @@ import { initDropZones, renderDropZones, hideZoneToolbar, triggerAdd } from './d
 import { syncHoleNumberText, hasHoleNumbers, enableHoleNumbers, disableHoleNumbers } from './hole-numbers.js';
 import './layer-clipboard.js';
 import { renderFlagTextOverlays, addFlagTextLayer, clearFlagTextOverlays, renderFlagTextOverlaysStatic } from './text-layers.js';
+import { renderFlagImageOverlays, clearFlagImageOverlays } from './image-layers.js';
 import { eyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
 import { esc } from '../dom-utils.js';
 import { renderSidebar, renderLogosTileShell, setSidebarProjectName } from '../sidebar.js';
@@ -30,6 +32,10 @@ let isDirty = false;
 let activeFace = 'front';
 let editingVarId = null;
 let veExpandedZones = new Set();
+// Id of the variation whose customized template layers (v.tpl) are the live,
+// editable ones on the canvas right now — null shows its own content instead
+// (template layers then paint baked-in, same as for an uncustomized one).
+let tplEditVarId = null;
 
 // The customer's originally-ordered flag count (order_intakes.flag_qty) —
 // null for admin-created projects, which skip order.html entirely and so
@@ -68,6 +74,9 @@ let defaultSameSides = true;
 // call site stays agnostic about the ?? true fallback (older variations
 // saved before this was per-variation — see the flagCfg migration below).
 function sameSidesOf(v) {
+  // A locked template back never takes variation content (render.js's
+  // backSpecOf), so the back is always the read-only template view.
+  if (S.backLocked) return true;
   return v?.sameLogoOnBothSides ?? true;
 }
 
@@ -139,7 +148,9 @@ window.delLogo = async function (id) {
   S.variations.forEach(v => {
     if (Array.isArray(v.logos))     v.logos     = v.logos.filter(l => l.logoId !== id);
     if (Array.isArray(v.backLogos)) v.backLogos = v.backLogos.filter(l => l.logoId !== id);
+    if (v.tpl?.backLogos) v.tpl.backLogos = v.tpl.backLogos.filter(l => l.logoId !== id);
   });
+  S.backLogos = (S.backLogos || []).filter(l => l.logoId !== id);
   hideZoneToolbar();
   renderVarStrip();
   renderVarCanvas();
@@ -178,6 +189,7 @@ function renderVarStrip() {
         if (Array.isArray(v.logos)) v.logos.forEach(pl => { if (pl.logoId === l.id) pl.logoId = newLogo.id; });
         if (Array.isArray(v.backLogos)) v.backLogos.forEach(pl => { if (pl.logoId === l.id) pl.logoId = newLogo.id; });
       });
+      (S.backLogos || []).forEach(pl => { if (pl.logoId === l.id) pl.logoId = newLogo.id; });
       renderVarStrip();
       renderVarCanvas();
       refreshVarThumbs();
@@ -224,8 +236,12 @@ function updateFaceUI() {
   const backBtn  = document.getElementById('faceTabBack');
   if (frontBtn) frontBtn.classList.toggle('active', activeFace === 'front');
   if (backBtn)  backBtn.classList.toggle('active', activeFace === 'back');
+  // Same lock marker as the Templates step's tabs.
+  const lockIcon = ' <i class="fa-solid fa-lock" aria-hidden="true"></i>';
+  if (frontBtn) frontBtn.innerHTML = 'Front' + (S.frontLocked ? lockIcon : '');
+  if (backBtn)  backBtn.innerHTML = 'Back' + (S.backLocked ? lockIcon : '');
   const sameRow = document.getElementById('sameSidesRow');
-  if (sameRow) sameRow.style.display = activeFace === 'back' ? '' : 'none';
+  if (sameRow) sameRow.style.display = activeFace === 'back' && !S.backLocked ? '' : 'none';
   const sameCheck = document.getElementById('sameSidesCheck');
   if (sameCheck) sameCheck.checked = sameSidesOf(S.variations.find(v => v.id === S.activeVarId));
 }
@@ -288,11 +304,13 @@ const flagCanvas = renderCanvasPanel(document.getElementById('flagCanvasPanel'),
   wrapId: 'flagZoomWrap',
   zoomValueId: 'flagZoomValue',
   zoomResetId: 'flagZoomReset',
-  aspect: 7519 / 4669,
+  // follows the active variation's flag (v2 print flags are 20:13.5, legacy 7519:4669)
+  aspect: () => canvasAspect(getVarFlag(S.variations.find(v => v.id === S.activeVarId))),
   getZoom: () => _flagZoom,
   setZoom: v => { _flagZoom = v; },
   onAdd: e => window.openVarAddMenu(e),
   addBtnId: 'varAddBtn',
+  extraBtn: { id: 'varResetTplBtn', label: 'Reset template', title: "Discard this variation's template changes and follow the project template again", onClick: () => window.veResetTpl() },
   // Global, not scoped to whichever variation is active — the right-hand
   // "All variations" list is where a specific variation's own request lives
   // now (its "View edits" link, see variation-list.js), so this banner is
@@ -332,15 +350,17 @@ const flagCanvas = renderCanvasPanel(document.getElementById('flagCanvasPanel'),
 });
 
 const varThumbId = v => 'vt-' + v.id;
-const paintVarThumb = (el, v) => renderInto(el, v.logos || [], 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), S.imageLayers || []);
+const paintVarThumb = (el, v) => renderInto(el, v.logos || [], 'front', false, getVarFlag(v), getVarColors(v), withMasterText(v), getVarGsTagOpts(v), tplImages(v), printOpts(getVarFlag(v)));
 
-// Independent-back preview for the tile — only shown (see showBackThumb
-// below) for a variation whose own sameSidesOf(v) is off, so mirrorX is
-// always false here: an on back is just a reflection of the front thumb
-// already shown, nothing new to see, same reasoning as gallery.js's own
-// backMirror branch.
+// Back preview for the tile — shown (see showsBackFace in render.js) when the
+// template has its own back or the variation's back is independent. A
+// mirrored back (the default until the variation's toggle is switched off)
+// renders as the reflection of its front plus the template back.
 const varBackThumbId = v => 'vtb-' + v.id;
-const paintVarBackThumb = (el, v) => renderInto(el, v.backLogos || [], 'back', false, getVarFlag(v), getVarColors(v), v.backTextLayers || [], getVarGsTagOpts(v));
+const paintVarBackThumb = (el, v) => {
+  const b = backSpecOf(v);
+  renderInto(el, b.logos, 'back', b.mirrored, getVarFlag(v), getVarColors(v), b.textLayers, getVarGsTagOpts(v), b.imageLayers, printOpts(getVarFlag(v)));
+};
 
 // Clicking a variation's card just makes it the active one on the canvas —
 // a lightweight preview/select, not the full per-variation editor (that's
@@ -355,7 +375,7 @@ function selectVariation(varId, face) {
   renderVarCanvas();
 }
 
-// Keeps the "N variations · M flags total" line under the Variations header
+// Keeps the "Flag Variations | N Total Flags" header
 // in sync — renderVarList() covers add/duplicate/delete/select, but the
 // per-row qty stepper (variation-list.js's commitQty) only calls its
 // onQtyChange callback, not renderVarList() itself, so that callback below
@@ -363,9 +383,8 @@ function selectVariation(varId, face) {
 function updateVarSummary() {
   const el = document.getElementById('varStatsLine');
   if (!el) return;
-  const count = S.variations.length;
   const qty = S.variations.reduce((sum, v) => sum + (parseInt(v.qty, 10) || 1), 0);
-  el.textContent = `${count} variation${count === 1 ? '' : 's'} · ${qty} flag${qty === 1 ? '' : 's'} total`;
+  el.textContent = ` | ${qty} Total Flag${qty === 1 ? '' : 's'}`;
 }
 
 function renderVarList() {
@@ -373,7 +392,7 @@ function renderVarList() {
     activeId: S.activeVarId,
     thumbId: varThumbId,
     renderThumb: paintVarThumb,
-    showBackThumb: v => !sameSidesOf(v),
+    showBackThumb: showsBackFace,
     backThumbId: varBackThumbId,
     renderBackThumb: paintVarBackThumb,
     feedbackFor: v => S.feedback?.find(f => f.variation_id === v.id),
@@ -390,7 +409,22 @@ function renderVarList() {
 
 function refreshVarThumbs() {
   refreshVariationThumbs(S.variations, varThumbId, paintVarThumb);
-  refreshVariationThumbs(S.variations.filter(v => !sameSidesOf(v)), varBackThumbId, paintVarBackThumb);
+  refreshVariationThumbs(S.variations.filter(showsBackFace), varBackThumbId, paintVarBackThumb);
+}
+
+// Canvas edits (text styling, logo drags) only ever change the active
+// variation, so repaint just its tile — and coalesce to once per frame, since
+// sliders/color pickers fire an input event per pixel/step.
+let _activeThumbRaf = 0;
+function refreshActiveVarThumbs() {
+  if (_activeThumbRaf) return;
+  _activeThumbRaf = requestAnimationFrame(() => {
+    _activeThumbRaf = 0;
+    const v = S.variations.find(x => x.id === S.activeVarId);
+    if (!v) return;
+    refreshVariationThumbs([v], varThumbId, paintVarThumb);
+    if (showsBackFace(v)) refreshVariationThumbs([v], varBackThumbId, paintVarBackThumb);
+  });
 }
 
 function renderVarFlagRow(v) {
@@ -537,8 +571,8 @@ function renderVarFlagRow(v) {
           ${hasFlag ? `<button class="ve-override-badge" onclick="veClearFlag()">Reset</button>` : ''}
         </div>
         <div class="flag-grid ve-flag-grid" id="veFlagGrid">
-          ${FLAGS.map(f => `
-            <div class="flag-card${varFlag?.id === f.id ? ' selected' : ''}" onclick="vePickFlag('${f.id}')">
+          ${LISTED_FLAGS.map(f => `
+            <div class="flag-card${baseFlagId(varFlag?.id) === f.id ? ' selected' : ''}" onclick="vePickFlag('${f.id}')">
               <div class="flag-card-preview">
                 <svg viewBox="${f.viewBox || '0 0 7519 4669'}" preserveAspectRatio="xMidYMid meet">${f.svgContent}</svg>
               </div>
@@ -558,13 +592,17 @@ function renderVarFlagRow(v) {
 function refreshVeFlagCards(v) {
   const varColors = getVarColors(v);
   const gst = getVarGsTagOpts(v) ?? { enabled: S.gsTag, mode: S.gsTagMode };
+  const curFlag = getVarFlag(v);
   document.querySelectorAll('#veFlagGrid .flag-card').forEach((card, i) => {
-    const f = FLAGS[i];
+    const f = LISTED_FLAGS[i];
+    // v2 projects: the new front view (with pole) - the selected style's card follows the variation's layout.
+    const host = card.querySelector('.flag-card-preview');
+    if (host && paintFlagCardV2(host, baseFlagId(curFlag?.id) === f.id ? curFlag : f, varColors, getVarGsTagOpts(v))) return;
     const svg = card.querySelector('svg');
     if (!svg) return;
     applyColors(svg, varColors, f.noColors, f);
     if (gst.enabled) {
-      const keyZone = f.tagKeyZone || 'zone-primary';
+      const keyZone = tagKeyZoneOf(f);
       showGsTagVariant(svg, 'front', gst.mode, resolveColors(varColors, f)[keyZone]);
     }
   });
@@ -1043,6 +1081,104 @@ window.veClearGsTagOverride = function () {
   markDirty();
 };
 
+// ── Per-variation template layers (v.tpl) ──────────────────
+// A variation normally renders the project template's text/image layers and
+// standard back (S.*) as locked, baked-in content. Double-clicking one on the
+// canvas snapshots them
+// onto v.tpl (render.js's tplOf), which that variation then renders and edits
+// instead; it stays frozen on the snapshot — later template changes don't
+// reach it — until "Reset to template" deletes v.tpl.
+const TPL_FIELDS = ['textLayers', 'imageLayers', 'backLogos', 'backTextLayers', 'backImageLayers'];
+
+function cloneTpl(t) {
+  const out = {};
+  TPL_FIELDS.forEach(f => { out[f] = JSON.parse(JSON.stringify(t?.[f] || [])); });
+  return out;
+}
+
+const tplEditing = (v) => !!v && !!v.tpl && tplEditVarId === v.id;
+
+// The template layer lists the canvas is editing on the active face — the
+// back's own only when the project template has a separate back (otherwise
+// the back template is the front's, reflected, and is edited on the front).
+const tplBackEditable = () => !!S.separateBack;
+// The template face the canvas is showing is locked (state.js) — its layers
+// can't be altered per variation. The reflected back is the front's layers.
+const tplFaceLocked = () => isFaceLocked(activeFace === 'back' && tplBackEditable() ? 'back' : 'front');
+function tplTargetLists(v) {
+  return activeFace === 'back' && tplBackEditable()
+    ? { text: v.tpl.backTextLayers, images: v.tpl.backImageLayers }
+    : { text: v.tpl.textLayers, images: v.tpl.imageLayers };
+}
+
+window.veResetTpl = function () {
+  const v = S.variations.find(v => v.id === S.activeVarId);
+  if (!v || !v.tpl) return;
+  delete v.tpl;
+  if (tplEditVarId === v.id) tplEditVarId = null;
+  renderVarCanvas();
+  refreshVarThumbs();
+  refreshEditPanel();
+  markDirty();
+};
+
+// ── Double-click a template element → edit template ────────
+// Template layers are baked into the canvas SVG (no DOM of their own to
+// target), so a double-click is hit-tested against their boxes in canvas
+// percent space. Text height is estimated from its font size and line count.
+function hitTestTpl(v, e) {
+  const svg = document.getElementById('varSvg');
+  const r = svg?.getBoundingClientRect();
+  if (!r || !r.width || !r.height) return null;
+  const px = ((e.clientX - r.left) / r.width) * 100;
+  const py = ((e.clientY - r.top) / r.height) * 100;
+  const vb = svg.viewBox.baseVal;
+  const t = tplOf(v);
+  const back = activeFace === 'back';
+  const ownBack = back && S.separateBack;     // authored directly on the back
+  const x = back && !ownBack ? 100 - px : px; // front layers reflected onto the back
+  const texts = ownBack ? t.backTextLayers : t.textLayers;
+  const images = ownBack ? t.backImageLayers : t.imageLayers;
+  for (const l of [...(images || [])].reverse()) {
+    const h = (l.w / getLogoAspect(l)) * (vb.width / vb.height);
+    if (Math.abs(x - l.x) <= l.w / 2 && Math.abs(py - l.y) <= h / 2) return { kind: 'image', id: l.id };
+  }
+  for (const l of [...(texts || [])].reverse()) {
+    const lines = Math.max(1, String(l.text || '').split('\n').length);
+    const h = (l.fontSize || 8) * 1.1 * lines;
+    if (x >= l.x && x <= l.x + l.w && py >= l.y && py <= l.y + h) return { kind: 'text', id: l.id };
+  }
+  return null;
+}
+
+document.getElementById('varWrap')?.addEventListener('dblclick', e => {
+  const v = S.variations.find(v => v.id === S.activeVarId);
+  if (!v) return;
+  if (e.target.closest('.dz-logo-wrap, .flag-tl-overlay, .flag-img-layer, .dz-toolbar, button, input')) return;
+  if (tplEditing(v)) {
+    // Double-clicking bare canvas leaves template mode.
+    if (!hitTestTpl(v, e)) { tplEditVarId = null; renderVarCanvas(); refreshEditPanel(); }
+    return;
+  }
+  const hit = tplFaceLocked() ? null : hitTestTpl(v, e);
+  if (!hit) return;
+  e.preventDefault();
+  window.getSelection?.()?.removeAllRanges();
+  if (editingVarId !== v.id) openVarEdit(v.id);
+  if (!v.tpl) { v.tpl = cloneTpl(S); markDirty(); refreshVarThumbs(); }
+  tplEditVarId = v.id;
+  // Template layers behind a reflected back are edited on the front.
+  if (activeFace === 'back' && !tplBackEditable()) activeFace = 'front';
+  renderVarCanvas();
+  refreshEditPanel();
+  // Select the layer that was hit so it can be moved/removed straight away.
+  requestAnimationFrame(() => {
+    const el = document.querySelector(hit.kind === 'text' ? `.flag-tl-overlay[data-tl-id="${hit.id}"]` : `.flag-img-layer[data-img-id="${hit.id}"]`);
+    el?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    el?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+});
+
 window.resetVarToDefaults = function () {
   const v = S.variations.find(v => v.id === editingVarId);
   if (!v) return;
@@ -1051,6 +1187,8 @@ window.resetVarToDefaults = function () {
   delete v.gsTag;
   delete v.gsTagMode;
   delete v.gsTagColor;
+  delete v.tpl;
+  if (tplEditVarId === v.id) tplEditVarId = null;
   veExpandedZones.clear();
   renderVarCanvas();
   refreshVarThumbs();
@@ -1079,6 +1217,7 @@ function openVarEdit(varId) {
 
 window.closeVarEdit = function () {
   editingVarId = null;
+  tplEditVarId = null;
   veExpandedZones.clear();
   document.getElementById('varListView').style.display = '';
   document.getElementById('varEditPanel').style.display = 'none';
@@ -1112,14 +1251,21 @@ function renderBackMirrorPreview(v, varFlag, varColors, gsTagOpts) {
   // it stays layered on top of this mirrored back render.
   wrap._dzReadonly = true;
   wrap.querySelectorAll('.dzone, .dz-badge, .dz-frame-overlay').forEach(d => d.remove());
-  const [vbW, vbH] = (varFlag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
+  // v2 shows the cropped art box (see render.js printOpts), so size the wrap to that
+  // - the legacy canvas ratio made it jump when switching front/back.
+  const pOpts = printOpts(varFlag);
+  const [vbW, vbH] = pOpts ? [ART.w, ART.h] : (varFlag.viewBox || '0 0 7519 4669').split(' ').slice(2).map(Number);
   wrap.style.aspectRatio = vbW + ' / ' + vbH;
+  syncWrapPole(wrap.closest('.canvas-zoom-wrap'), varFlag, 'back', varColors);
   // Only S.textLayers (template-level) bakes into the SVG here — v.textLayers
   // is drawn separately below via renderFlagTextOverlaysStatic. Passing
   // withMasterText(v) (which also includes v.textLayers) would bake the
   // variation's own text into the SVG *and* draw it again as the overlay,
   // showing it twice, offset (SVG baseline metrics vs. HTML line-height).
-  const svg = makeSvg(v.logos, '100%', '100%', 'back', true, varFlag, varColors, S.textLayers || [], gsTagOpts, S.imageLayers || []);
+  // backSpecOf swaps in the template back's text/images/logos (counter-flipped
+  // so they land as authored) when Step 1 set a separate back.
+  const spec = backSpecOf(v);
+  const svg = makeSvg(spec.logos, '100%', '100%', 'back', true, varFlag, varColors, spec.masterText, gsTagOpts, spec.imageLayers, pOpts);
   const old = document.getElementById('varSvg');
   if (!svg) { if (old) old.remove(); return; }
   svg.id = 'varSvg';
@@ -1133,8 +1279,8 @@ function renderBackMirrorPreview(v, varFlag, varColors, gsTagOpts) {
   // independent-back canvas. Re-run it now that the SVG is in the document.
   const gst = gsTagOpts ?? { enabled: S.gsTag, mode: S.gsTagMode };
   if (gst.enabled) {
-    const keyZone = varFlag.tagKeyZone || 'zone-primary';
-    showGsTagVariant(svg, 'back', gst.mode, resolveColors(varColors, varFlag)[keyZone]);
+    const keyZone = tagKeyZoneOf(varFlag);
+    showGsTagVariant(svg, 'back', gst.mode, resolveColors(varColors, varFlag)[keyZone], !!pOpts);
   }
   renderFlagTextOverlaysStatic('varWrap', v.textLayers || [], true);
 }
@@ -1163,28 +1309,68 @@ function renderVarCanvas() {
   if (!Array.isArray(v.backTextLayers)) v.backTextLayers = [];
   const varColors = getVarColors(v);
   const gsTagOpts = getVarGsTagOpts(v);
-  const onChange = () => { refreshVarThumbs(); markDirty(); };
+  const onChange = () => { refreshActiveVarThumbs(); markDirty(); };
 
-  if (activeFace === 'back' && sameSidesOf(v)) {
+  const tplEdit = tplEditing(v);
+  // Template layers are live-editable on this face (rather than baked in).
+  const editTplHere = tplEdit && !tplFaceLocked() && (activeFace === 'front' || tplBackEditable());
+  const t = tplOf(v);
+  document.getElementById('varWrap')?.classList.toggle('tpl-editing', editTplHere);
+  const resetTplBtn = document.getElementById('varResetTplBtn');
+  // A locked face takes no additions and ignores template edits, so neither
+  // the add nor the reset button applies there.
+  const faceLocked = isFaceLocked(activeFace);
+  if (resetTplBtn) resetTplBtn.style.display = v.tpl && !faceLocked ? '' : 'none';
+  const addBtn = document.getElementById('varAddBtn');
+  if (addBtn) addBtn.style.display = faceLocked ? 'none' : '';
+  if (activeFace === 'back' && sameSidesOf(v) && !editTplHere) {
     // Derived, read-only mirror of the front — matches what export produces
     // (makeSvg's `mirrorX`), so there's nothing here to drag/select.
     // clearFlagTextOverlays drops the front's selection/toolbar state before
     // renderBackMirrorPreview draws its own static (non-interactive) text.
     clearFlagTextOverlays('varWrap');
+    clearFlagImageOverlays('varWrap');
     renderBackMirrorPreview(v, varFlag, varColors, gsTagOpts);
   } else if (activeFace === 'front') {
     ensureVarSvg();
-    renderDropZones('varWrap', 'varSvg', v.logos, 'front', onChange, varFlag, varColors, gsTagOpts);
-    renderFlagTextOverlays('varWrap', v.textLayers, onChange);
+    // A customized variation bakes its own template layers instead of the
+    // project's (S.*) — or none, when they're the live editable overlays.
+    // While editing the template layers, the variation's own text bakes in
+    // instead (the text overlay only drives one live layer list at a time).
+    const master = v.tpl ? { text: editTplHere ? v.textLayers : t.textLayers, images: editTplHere ? [] : t.imageLayers } : null;
+    renderDropZones('varWrap', 'varSvg', v.logos, 'front', onChange, varFlag, varColors, gsTagOpts, master);
+    if (editTplHere) {
+      renderFlagTextOverlays('varWrap', v.tpl.textLayers, onChange);
+      renderFlagImageOverlays('varWrap', v.tpl.imageLayers, onChange);
+    } else {
+      clearFlagImageOverlays('varWrap');
+      renderFlagTextOverlays('varWrap', v.textLayers, onChange);
+    }
   } else {
     // Independent back — starts blank when "Same Front & Back Design" is
     // switched off, then holds only whatever the user places here directly;
     // it never tracks the front once independent.
     ensureVarSvg();
-    renderDropZones('varWrap', 'varSvg', v.backLogos, 'back', onChange, varFlag, varColors, gsTagOpts);
-    renderFlagTextOverlays('varWrap', v.backTextLayers, onChange);
+    const master = S.separateBack
+      ? { text: editTplHere ? (sameSidesOf(v) ? [] : v.backTextLayers) : t.backTextLayers, images: editTplHere ? [] : t.backImageLayers, logos: t.backLogos }
+      : (v.tpl ? { text: t.textLayers, images: t.imageLayers, mirror: true } : null);
+    const sameSides = sameSidesOf(v);
+    renderDropZones('varWrap', 'varSvg', sameSides ? [] : v.backLogos, 'back', onChange, varFlag, varColors, gsTagOpts, master);
+    if (sameSides) {
+      // Editing the template back only — the variation's own (mirrored)
+      // content isn't editable from here, so lock the drop zone.
+      document.getElementById('varWrap')._dzReadonly = true;
+    }
+    if (editTplHere) {
+      renderFlagTextOverlays('varWrap', v.tpl.backTextLayers, onChange);
+      renderFlagImageOverlays('varWrap', v.tpl.backImageLayers, onChange);
+    } else {
+      clearFlagImageOverlays('varWrap');
+      renderFlagTextOverlays('varWrap', v.backTextLayers, onChange);
+    }
   }
 
+  requestAnimationFrame(flagCanvas.refit);
 }
 
 function setupVariations() {
@@ -1239,9 +1425,10 @@ window.addFlagText = function () {
   // The mirrored back view is read-only — nothing to add to there, so fall
   // back to front (matches openVarAddMenu's logo behavior below). Independent
   // back editing gets its own text layers, same as it gets its own logos.
-  if (activeFace === 'back' && sameSidesOf(v)) window.setActiveFace('front');
-  const target = activeFace === 'back' ? v.backTextLayers : v.textLayers;
-  addFlagTextLayer(target, 'varWrap', () => { refreshVarThumbs(); markDirty(); });
+  const tplHere = tplEditing(v) && !tplFaceLocked() && (activeFace === 'front' || tplBackEditable());
+  if (activeFace === 'back' && sameSidesOf(v) && !tplHere) window.setActiveFace('front');
+  const target = tplHere ? tplTargetLists(v).text : (activeFace === 'back' ? v.backTextLayers : v.textLayers);
+  addFlagTextLayer(target, 'varWrap', () => { refreshActiveVarThumbs(); markDirty(); });
 };
 
 // Header "+" button — there's no in-canvas add affordance anymore, so this is
@@ -1278,7 +1465,8 @@ function dupVar(id) {
   };
   if (src.flagId) nv.flagId = src.flagId;
   if (src.colors) nv.colors = { ...src.colors };
-  nv.sameLogoOnBothSides = sameSidesOf(src);
+  if (src.tpl) nv.tpl = cloneTpl(src.tpl);
+  nv.sameLogoOnBothSides = src.sameLogoOnBothSides ?? true;
   if (src.holeStart != null) {
     nv.holeStart = src.holeStart;
     nv.textLayers.forEach((l, i) => { if (src.textLayers[i]?.holeNumber) l.holeNumber = true; });
@@ -1352,14 +1540,14 @@ renderSidebar(document.getElementById('sidebar'), {
   projectId: new URLSearchParams(window.location.search).get('project'),
   steps: [
     {
-      id: 'navDesign', label: 'Design', desc: 'Style, colors & logos',
+      id: 'navDesign', label: 'Template', desc: 'Style, colors & logos',
       onClick: async () => {
         const p = new URLSearchParams(window.location.search).get('project');
         await window.saveDraft?.();
         navigateTo('flags' + (p ? '?project=' + p : ''));
       },
     },
-    { id: 'navVariations', label: 'Variations', desc: 'Build combinations' },
+    { id: 'navVariations', label: 'Flags', desc: 'Build combinations' },
     {
       id: 'navGallery', label: 'Review', desc: 'Review & export',
       onClick: async () => {
@@ -1374,8 +1562,7 @@ renderSidebar(document.getElementById('sidebar'), {
 document.getElementById('sidebarPanelHeader').innerHTML = `
   <div class="p1-header hs-panel-header">
     <div>
-      <div class="ptitle">Variations</div>
-      <div class="p1-header-stats" id="varStatsLine"></div>
+      <div class="ptitle">Flag Variations<span id="varStatsLine" style="font-weight:400;color:var(--gray-500)"></span></div>
     </div>
     <div class="p1-header-actions">
       <div id="logoLayoutRow" style="display:none">
@@ -1384,7 +1571,7 @@ document.getElementById('sidebarPanelHeader').innerHTML = `
           <button class="face-tab" id="layoutBtnMulti" onclick="setLogoLayout('multi')">Multi</button>
         </div>
       </div>
-      <button class="btn sm" id="backToDesignBtn" onclick="backToDesign()" style="display:none"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Design</button>
+      <button class="btn sm" id="backToDesignBtn" onclick="backToDesign()" style="display:none"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Template</button>
       <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
         <button class="btn sm" id="saveDesignsBtn" onclick="saveDraft()" style="display:none">Save draft</button>
         <div id="saveStatus" style="font-size:11px;color:var(--gray-400);text-align:center;min-height:14px"></div>
@@ -1434,6 +1621,7 @@ try {
   S.projectId = project.id;
   S.projectName = project.name || '';
   S.library = logos;
+  S.printSpec = flagCfg ? (flagCfg.variations?.printSpec ?? 'legacy') : newProjectPrintSpec(); // pinned per project; no row yet = brand-new project
   await preloadLogoAspects(S.library);
   if (flagCfg) {
     S.flagId = flagCfg.flag_id;
@@ -1447,7 +1635,8 @@ try {
     S.gsTagColor = Array.isArray(varData) ? '#ffffff' : (varData.gsTagColor ?? '#ffffff');
     S.textLayers = Array.isArray(varData) ? [] : (varData.textLayers || []);
     S.imageLayers = Array.isArray(varData) ? [] : (varData.imageLayers || []);
-    await preloadLogoAspects(S.imageLayers);
+    loadTemplateBack(varData);
+    await preloadLogoAspects([...S.imageLayers, ...S.backImageLayers, ...customTplImages(varItems)]);
     // "Same Front & Back Design" used to be one project-wide flag
     // (flag_config.same_logo_on_both_sides) — now every variation carries
     // its own (see toggleSameSides). A variation saved before this migration
@@ -1459,6 +1648,9 @@ try {
     });
     S.activeVarId = S.variations[0]?.id || null;
   }
+  // Brand-new project opened straight on this page: no style picked yet, so
+  // default to Plain (same fallback design.js uses) instead of rendering blank.
+  if (!S.flagId) S.flagId = 'plain';
   setSidebarProjectName(S.projectName, S.projectId);
 
   // Subscribe to feedback updates

@@ -1,6 +1,6 @@
 import { logEmail } from '../_shared/email-log.ts';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { wrapEmailHtml } from '../_shared/email-layout.ts';
+import { wrapEmailHtml, ctaButton, linkFallback, esc } from '../_shared/email-layout.ts';
 
 // SENDGRID_API_KEY_2 is the current key; SENDGRID_API_KEY is kept as a fallback
 // during rotation and can be removed once SENDGRID_API_KEY_2 is confirmed live everywhere.
@@ -15,12 +15,38 @@ const TO_NAME = 'Tom';
 // ?testTo= redirects the send for testing; only this address is honored so the
 // (unauthenticated) endpoint can't be used to mail arbitrary recipients.
 const TEST_TO_EMAIL = 'dane@danestahr.com';
+// Fail-safe on top of ?testTo=: a function running against a local Supabase
+// (http://kong:8000 / 127.0.0.1 / localhost inside the dev container, never an
+// https hosted project) always redirects to the test address, even when the
+// client forgot to ask - e.g. the app opened via a LAN IP or tunnel.
+const IS_LOCAL_SUPABASE = (() => {
+  try {
+    const u = new URL(Deno.env.get('SUPABASE_URL') ?? '');
+    return u.protocol !== 'https:' || ['kong', 'localhost', '127.0.0.1', 'host.docker.internal'].includes(u.hostname);
+  } catch { return true; }
+})();
+
+const BUCKET = 'print-sheets';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'authorization, content-type, apikey, x-client-info',
 };
+
+// Variation + total flag counts from the saved design (qty defaults to 1, same
+// as print-export.js). variations is either an array or { items: [...] }.
+async function flagCounts(projectId: string): Promise<{ variationCount: number; flagCount: number }> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/flag_config?project_id=eq.${encodeURIComponent(projectId)}&select=variations&limit=1`,
+    { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } },
+  );
+  if (!res.ok) return { variationCount: 0, flagCount: 0 };
+  const [row] = await res.json();
+  const raw = row?.variations;
+  const items: Array<{ qty?: number }> = Array.isArray(raw) ? raw : (raw?.items ?? []);
+  return { variationCount: items.length, flagCount: items.reduce((n, v) => n + (Number(v?.qty) || 1), 0) };
+}
 
 async function projectExists(projectId: string): Promise<boolean> {
   const res = await fetch(
@@ -44,9 +70,8 @@ function subtractBusinessDays(y: number, m: number, d: number, n: number): Date 
   return dt;
 }
 
-// In-hand date (event date - 2 business days) as MM/DD/YY for the subject line,
-// or '' when the project has no event date.
-async function inHandDateLabel(projectId: string): Promise<string> {
+// Event date for the project (staff-corrected customer_info first), or ''.
+async function eventDateIso(projectId: string): Promise<string> {
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}&select=customer_info,order_intakes(event_date)&limit=1`,
     { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } },
@@ -54,12 +79,27 @@ async function inHandDateLabel(projectId: string): Promise<string> {
   if (!res.ok) return '';
   const [row] = await res.json();
   const iso = (row?.customer_info?.event_date || row?.order_intakes?.[0]?.event_date || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : '';
+}
+
+// In-hand date (event date - 2 business days) as YYYY-MM-DD, or '' when the
+// project has no event date.
+function inHandDateIso(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   if (!m) return '';
-  const dt = subtractBusinessDays(+m[1], +m[2], +m[3], 2);
-  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(dt.getUTCDate()).padStart(2, '0');
-  return `${mm}/${dd}/${String(dt.getUTCFullYear()).slice(2)}`;
+  return subtractBusinessDays(+m[1], +m[2], +m[3], 2).toISOString().slice(0, 10);
+}
+
+// Rush = sent inside the standard approval window: the event (moved back to the
+// preceding Friday if Sat/Sun/Mon) is less than 17 days away. Mirrors
+// calcEffectiveDeadline() in src/intake-shared.js. Compared in UTC.
+function isRush(iso: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return false;
+  const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  const back = { 6: 1, 0: 2, 1: 3 }[dt.getUTCDay() as 0 | 1 | 6] ?? 0;
+  dt.setUTCDate(dt.getUTCDate() - back - 17);
+  return new Date().toISOString().slice(0, 10) > dt.toISOString().slice(0, 10);
 }
 
 serve(async (req) => {
@@ -69,7 +109,12 @@ serve(async (req) => {
     const url = new URL(req.url);
     const projectId = url.searchParams.get('projectId');
     const projectName = url.searchParams.get('projectName') || 'Flag Order';
-    const isTest = url.searchParams.get('testTo')?.toLowerCase() === TEST_TO_EMAIL;
+    // ?prepare=1: build the order + download page only, no email (admin inspection before sending).
+    const prepareOnly = url.searchParams.get('prepare') === '1';
+    // SHA-256 hex of the design the zip was built from (see flagDesignHash in src/supabase.js).
+    const rawHash = url.searchParams.get('designHash') ?? '';
+    const designHash = /^[0-9a-f]{64}$/.test(rawHash) ? rawHash : null;
+    const isTest = IS_LOCAL_SUPABASE || url.searchParams.get('testTo')?.toLowerCase() === TEST_TO_EMAIL;
     const toEmail = isTest ? TEST_TO_EMAIL : TO_EMAIL;
     const zipBuffer = await req.arrayBuffer();
 
@@ -85,38 +130,111 @@ serve(async (req) => {
       });
     }
 
-    // Base64 encode the zip for SendGrid attachment
-    // Encode in 3-byte-aligned chunks: a per-byte string concat on a multi-MB zip
-    // blows the worker memory limit (546 WORKER_RESOURCE_LIMIT).
-    const bytes = new Uint8Array(zipBuffer);
-    const CHUNK = 0x7800; // 30720, divisible by 3 so chunk base64 joins cleanly
-    const parts: string[] = [];
-    for (let i = 0; i < bytes.byteLength; i += CHUNK) {
-      parts.push(btoa(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK) as unknown as number[])));
+    // Store the zip privately and email a link to the landing page (no attachment).
+    const zipMb = zipBuffer.byteLength / 1048576;
+    console.log(`prestige zip ${zipMb.toFixed(2)} MB project=${projectId}`);
+
+    const rawName = projectName;
+    const safeName = rawName.replace(/[^a-zA-Z0-9_\- ]/g, '_');
+    const filename = `${safeName}-flags.zip`;
+    const path = `prestige/${projectId}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.zip`;
+    const storageHeaders = { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` };
+
+    const upRes = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, {
+      method: 'POST',
+      headers: { ...storageHeaders, 'Content-Type': 'application/zip' },
+      body: zipBuffer,
+    });
+    if (!upRes.ok) {
+      const body = await upRes.text();
+      console.error('storage upload failed', upRes.status, body);
+      return new Response(JSON.stringify({ error: 'Storage upload failed', status: upRes.status, detail: body }), {
+        status: 500, headers: { ...CORS, 'Content-Type': 'application/json' },
+      });
     }
-    const zipBase64 = parts.join('');
-    // SendGrid caps the whole email at 30 MB; base64 inflates the zip by ~4/3.
-    const zipMb = bytes.byteLength / 1048576;
-    const emailMb = zipBase64.length / 1048576;
-    const msg = `prestige zip ${zipMb.toFixed(2)} MB (~${emailMb.toFixed(2)} MB base64, limit 30) project=${projectId}`;
-    if (emailMb > 20) console.warn('WARNING large', msg); else console.log(msg);
+
+    const eventIso = await eventDateIso(projectId);
+    const inHandIso = inHandDateIso(eventIso);
+    const { variationCount, flagCount } = await flagCounts(projectId);
+    const fields = {
+      storage_path: path, filename, size_bytes: zipBuffer.byteLength,
+      variation_count: variationCount, flag_count: flagCount, in_hand_date: inHandIso || null,
+      design_hash: designHash,
+    };
+    // One order per project, rebuilt in place by Prepare/Update/Publish/Send so
+    // the link stays the same forever and always serves the latest files - the
+    // same model as the review link. That includes an order that was already
+    // emailed: its sent_at is left alone on a prepare-only rebuild (no new email,
+    // the download page just shows its "newer version" banner), and a Send
+    // re-emails the same link and bumps sent_at.
+    const existing = (await (await fetch(
+      `${SUPABASE_URL}/rest/v1/prestige_orders?project_id=eq.${projectId}&select=id,storage_path&order=created_at.desc&limit=1`,
+      { headers: storageHeaders },
+    )).json().catch(() => []))?.[0];
+    const orderRes = existing
+      ? await fetch(`${SUPABASE_URL}/rest/v1/prestige_orders?id=eq.${existing.id}`, {
+          method: 'PATCH',
+          headers: { ...storageHeaders, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+          // created_at doubles as "files generated" and the page's version stamp.
+          body: JSON.stringify({ ...fields, created_at: new Date().toISOString() }),
+        })
+      : await fetch(`${SUPABASE_URL}/rest/v1/prestige_orders`, {
+          method: 'POST',
+          headers: { ...storageHeaders, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+          body: JSON.stringify({ project_id: projectId, ...fields }),
+        });
+    if (!orderRes.ok) {
+      const body = await orderRes.text();
+      console.error('prestige_orders write failed', orderRes.status, body);
+      return new Response(JSON.stringify({ error: 'Could not record order', detail: body }), {
+        status: 500, headers: { ...CORS, 'Content-Type': 'application/json' },
+      });
+    }
+    const [{ id: orderId }] = await orderRes.json();
+    // The replaced zip is no longer referenced by anything; best-effort cleanup.
+    if (existing?.storage_path) {
+      await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${existing.storage_path}`, {
+        method: 'DELETE', headers: storageHeaders,
+      }).catch(err => console.error('old zip cleanup failed', err));
+    }
+
+    // Permanent landing page link (no expiry). Origin comes from the client;
+    // require https (localhost only for test sends) so the endpoint can't mail
+    // an odd link.
+    let origin = '';
+    try {
+      const o = new URL(url.searchParams.get('origin') || '');
+      if (o.protocol === 'https:' || (isTest && o.hostname === 'localhost')) origin = o.origin;
+    } catch { /* fall through */ }
+    if (!origin) {
+      return new Response(JSON.stringify({ error: 'Invalid origin' }), {
+        status: 400, headers: { ...CORS, 'Content-Type': 'application/json' },
+      });
+    }
+    const landing = `${origin}/prestige-download?id=${orderId}`;
+    if (prepareOnly) {
+      return new Response(JSON.stringify({ ok: true, prepared: true, orderId, url: landing }), {
+        status: 200, headers: { ...CORS, 'Content-Type': 'application/json' },
+      });
+    }
 
     const name = projectName;
-    const dateLabel = await inHandDateLabel(projectId);
-    const subject = `${isTest ? '[TEST] ' : ''}${dateLabel ? dateLabel + ' ' : ''}-Golf Status Order- ${name}`;
-    const filename = `${name.replace(/[^a-zA-Z0-9_\- ]/g, '_')}-flags.zip`;
+    const dateLabel = inHandIso ? `${inHandIso.slice(5, 7)}/${inHandIso.slice(8, 10)}/${inHandIso.slice(2, 4)}` : '';
+    const subject = `${isTest ? '[TEST] ' : ''}${isRush(eventIso) ? 'RUSH - ' : ''}${dateLabel ? dateLabel + ' ' : ''}-Golf Status Order- ${name}`;
     const html = wrapEmailHtml({
       title: name,
       bodyHtml: `<p style="margin:0 0 20px;color:#333;font-size:15px;line-height:1.6;">
       Hey ${TO_NAME},<br><br>
-      Here's the flag order for <strong>${name}</strong>. The zip file is attached and includes everything you should need to know about the order.
+      Here's the flag order for <strong>${name}</strong>. Use the button below to download the files (${zipMb.toFixed(1)} MB zip). It includes everything you should need to know about the order.
     </p>
+    ${ctaButton(esc(landing), 'View Project', false)}
+    ${linkFallback(esc(landing))}
     <p style="margin:24px 0 0;color:#999;font-size:13px;line-height:1.6;">
       Let me know if you have any questions!
     </p>`,
     });
 
-    const text = `Hey ${TO_NAME},\n\nHere's the flag order for ${name}. The zip file is attached and includes everything you should need to know about the order.\n\nLet me know if you have any questions!`;
+    const text = `Hey ${TO_NAME},\n\nHere's the flag order for ${name}. Use the link below to download the files (${zipMb.toFixed(1)} MB zip). It includes everything you should need to know about the order.\n\nDownload files: ${landing}\n\nLet me know if you have any questions!`;
 
     const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
@@ -136,15 +254,16 @@ serve(async (req) => {
           { type: 'text/plain', value: text },
           { type: 'text/html', value: html },
         ],
-        attachments: [{
-          content: zipBase64,
-          type: 'application/zip',
-          filename,
-          disposition: 'attachment',
-        }],
       }),
     });
 
+    if (res.ok) {
+      await fetch(`${SUPABASE_URL}/rest/v1/prestige_orders?id=eq.${orderId}`, {
+        method: 'PATCH',
+        headers: { ...storageHeaders, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+        body: JSON.stringify({ sent_at: new Date().toISOString() }),
+      }).catch(err => console.error('sent_at update failed', err));
+    }
     if (res.ok) await logEmail({ kind: 'prestige-order', projectId: projectId, recipient: toEmail, ok: true, httpStatus: res.status });
     if (!res.ok) {
       const body = await res.text();

@@ -1,6 +1,66 @@
 import { HS_FONTS } from '../hole-sign-data.js';
 import { clipToCanvas } from '../image-box.js';
 import { findAxisSnap, hideAlignGuides, setAlignGuide } from '../align-guides.js';
+import { wrapText } from '../text-utils.js';
+
+// Template text is baked into the SVG by render.js's paintTextLayers: lines
+// from wrapText()'s 0.5em/char estimate, first baseline at y + 0.82em, 1.1em
+// line spacing. These helpers make the HTML overlay/editor reproduce exactly
+// that, so text doesn't jump or re-wrap when it swaps between the two.
+const _measureCtx = document.createElement('canvas').getContext('2d');
+
+function tlFont(layer, fsPx, family) {
+  return `${layer.bold ? 'bold' : 'normal'} ${fsPx}px ${family}`;
+}
+
+// px to nudge an HTML line box (line-height 1.1) so its first baseline lands
+// where the SVG puts it (0.82em below the box top).
+function svgBaselineShift(layer, fsPx, family) {
+  _measureCtx.font = tlFont(layer, fsPx, family);
+  const m = _measureCtx.measureText('Hg');
+  const asc = m.fontBoundingBoxAscent, desc = m.fontBoundingBoxDescent;
+  if (!(asc > 0) || !(desc >= 0)) return 0;
+  return 0.82 * fsPx - ((1.1 * fsPx - (asc + desc)) / 2 + asc);
+}
+
+// Lays out an overlay's static text exactly like the baked SVG: pre-wrapped
+// with wrapText() and shifted to the SVG baseline.
+function paintTlContent(overlay, layer, wrap) {
+  const div = overlay.querySelector('.hs-tl-content');
+  if (!div || !layer) return;
+  const fsPx = Math.max(8, (layer.fontSize / 100) * wrap.offsetHeight);
+  div.style.fontSize = fsPx + 'px';
+  div.style.whiteSpace = 'pre';
+  div.textContent = wrapText(layer.text || 'Text', overlay.offsetWidth, fsPx, layer.bold).join('\n');
+  div.style.position = 'relative';
+  div.style.top = svgBaselineShift(layer, fsPx, getComputedStyle(div).fontFamily) + 'px';
+  clipToCanvas(div, wrap);
+}
+
+// The editor must wrap by real glyph widths while typing, but the baked text
+// wraps at maxChars estimated chars. Sizing the editor to maxChars * the real
+// average char width makes both break at about the same place.
+function fitTlEditor(editor, editorWrap, layer, fsPx, boxW) {
+  const family = getComputedStyle(editor).fontFamily;
+  _measureCtx.font = tlFont(layer, fsPx, family);
+  const sample = String(layer.text || 'Text').replace(/\s+/g, ' ');
+  const avg = _measureCtx.measureText(sample).width / Math.max(1, sample.length);
+  const maxChars = Math.max(1, Math.floor(boxW / (fsPx * (layer.bold ? 0.55 : 0.5))));
+  editor.style.width = Math.max(fsPx, maxChars * avg) + 'px';
+  editor.style.flex = 'none';
+  editor.style.position = 'relative';
+  editor.style.top = svgBaselineShift(layer, fsPx, family) + 'px';
+  editorWrap.style.justifyContent = layer.align === 'left' ? 'flex-start' : layer.align === 'right' ? 'flex-end' : 'center';
+}
+
+// Webfonts may still be loading at first paint; re-lay out once they're in.
+function repaintTlWhenFontsReady(wrap, textLayers) {
+  document.fonts?.ready?.then(() => {
+    wrap.querySelectorAll('.flag-tl-overlay').forEach(overlay => {
+      paintTlContent(overlay, textLayers.find(l => l.id === overlay.dataset.tlId), wrap);
+    });
+  });
+}
 
 // Active and editing state
 let _activeFlagTlId = null;
@@ -80,6 +140,7 @@ function openFlagTlToolbar(id, anchorEl, textLayers, onChange) {
   const getWrap = () => _ctx?.wrapId ? document.getElementById(_ctx.wrapId) : null;
   const getOverlay = () => getWrap()?.querySelector(`.flag-tl-overlay[data-tl-id="${id}"]`);
   const getTextDiv = () => getOverlay()?.querySelector('.hs-tl-content');
+  const repaint = l => { const o = getOverlay(), w = getWrap(); if (o && w) paintTlContent(o, l, w); };
 
   tb.querySelector('#flagTlFont').addEventListener('change', e => {
     const l = textLayers.find(x => x.id === id); if (!l) return;
@@ -87,6 +148,7 @@ function openFlagTlToolbar(id, anchorEl, textLayers, onChange) {
     const family = HS_FONTS.find(f => f.id === l.font)?.family || "'DM Serif Display', serif";
     const div = getTextDiv();
     if (div) div.style.fontFamily = family;
+    repaint(l);
     onChange();
   });
 
@@ -97,6 +159,7 @@ function openFlagTlToolbar(id, anchorEl, textLayers, onChange) {
     boldBtn.classList.toggle('active', !!l.bold);
     const div = getTextDiv();
     if (div) div.style.fontWeight = l.bold ? 'bold' : 'normal';
+    repaint(l);
     const editor = getOverlay()?.querySelector('.hs-tl-editor');
     if (editor) editor.style.fontWeight = l.bold ? 'bold' : 'normal';
     onChange();
@@ -109,9 +172,7 @@ function openFlagTlToolbar(id, anchorEl, textLayers, onChange) {
     sizeVal.textContent = n + '%';
     const l = textLayers.find(x => x.id === id); if (!l) return;
     l.fontSize = n;
-    const wrap = getWrap();
-    const div = getTextDiv();
-    if (div && wrap) div.style.fontSize = Math.max(8, (n / 100) * wrap.offsetHeight) + 'px';
+    repaint(l);
     onChange();
   });
 
@@ -183,7 +244,7 @@ function enterFlagTlEditMode(id, overlay, textLayers) {
 
   const editorWrap = document.createElement('div');
   editorWrap.className = 'hs-tl-editor-wrap';
-  editorWrap.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.07);';
+  editorWrap.style.cssText = 'position:absolute;inset:0;display:flex;align-items:flex-start;justify-content:center;background:rgba(0,0,0,0.07);';
 
   const editor = document.createElement('div');
   editor.className = 'hs-tl-editor';
@@ -198,6 +259,7 @@ function enterFlagTlEditMode(id, overlay, textLayers) {
     `text-align:${layer.align || 'center'};`,
     'line-height:1.1;white-space:pre-wrap;word-break:break-word;cursor:text;',
   ].join('');
+  fitTlEditor(editor, editorWrap, layer, fsPx, overlay.offsetWidth);
 
   const contentDiv = overlay.querySelector('.hs-tl-content');
   if (contentDiv) contentDiv.style.visibility = 'hidden';
@@ -219,7 +281,8 @@ function enterFlagTlEditMode(id, overlay, textLayers) {
 
   editor.addEventListener('input', () => {
     layer.text = getText() || layer.text;
-    if (contentDiv) contentDiv.textContent = layer.text || 'Text';
+    paintTlContent(overlay, layer, wrap);
+    fitTlEditor(editor, editorWrap, layer, fsPx, overlay.offsetWidth);
   });
 
   const commit = () => {
@@ -228,6 +291,7 @@ function enterFlagTlEditMode(id, overlay, textLayers) {
     if (t) layer.text = t;
     editorWrap.remove();
     _editingFlagTlId = null;
+    paintTlContent(overlay, layer, wrap);
     if (contentDiv) contentDiv.style.visibility = '';
   };
 
@@ -254,10 +318,12 @@ function syncFlagTlFontSizes(wrap, textLayers) {
     const layer = textLayers.find(l => l.id === overlay.dataset.tlId);
     if (!layer) return;
     const fsPx = Math.max(8, (layer.fontSize / 100) * sc);
-    const div = overlay.querySelector('.hs-tl-content');
-    if (div) { div.style.fontSize = fsPx + 'px'; clipToCanvas(div, wrap); }
+    paintTlContent(overlay, layer, wrap);
     const editor = overlay.querySelector('.hs-tl-editor');
-    if (editor) editor.style.fontSize = fsPx + 'px';
+    if (editor) {
+      editor.style.fontSize = fsPx + 'px';
+      fitTlEditor(editor, overlay.querySelector('.hs-tl-editor-wrap'), layer, fsPx, overlay.offsetWidth);
+    }
   });
 }
 
@@ -288,8 +354,25 @@ export function pasteTextLayer(layer) {
   return true;
 }
 
+// Delete/Backspace removes the selected (not being edited) text layer.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (!_activeFlagTlId || _editingFlagTlId || !_ctx) return;
+  if (document.activeElement?.closest?.('input, textarea, select, [contenteditable]')) return;
+  const { textLayers, onChange, wrapId } = _ctx;
+  const idx = textLayers.findIndex(l => l.id === _activeFlagTlId);
+  if (idx < 0) return;
+  e.preventDefault();
+  textLayers.splice(idx, 1);
+  renderFlagTextOverlays(wrapId, textLayers, onChange); // clears selection + toolbar state with the old overlay
+  closeFlagTlToolbar();
+  _activeFlagTlId = null;
+  onChange();
+});
+
 export function clearFlagTextOverlays(wrapId) {
   closeFlagTlToolbar();
+  _ctx = null; // read-only canvas next — nothing to paste into
   _activeFlagTlId = null;
   _editingFlagTlId = null;
   const wrap = document.getElementById(wrapId);
@@ -314,14 +397,8 @@ export function renderFlagTextOverlaysStatic(wrapId, textLayers, mirror = false)
   if (!Array.isArray(textLayers) || !textLayers.length) return;
 
   const sync = () => {
-    const sc = wrap.offsetHeight;
     wrap.querySelectorAll('.flag-tl-overlay').forEach(overlay => {
-      const layer = textLayers.find(l => l.id === overlay.dataset.tlId);
-      const div = overlay.querySelector('.hs-tl-content');
-      if (layer && div) {
-        div.style.fontSize = Math.max(8, (layer.fontSize / 100) * sc) + 'px';
-        clipToCanvas(div, wrap);
-      }
+      paintTlContent(overlay, textLayers.find(l => l.id === overlay.dataset.tlId), wrap);
     });
   };
 
@@ -344,7 +421,7 @@ export function renderFlagTextOverlaysStatic(wrapId, textLayers, mirror = false)
       'width:100%;pointer-events:none;overflow:visible;',
       `font-family:${fontFamily};font-weight:${layer.bold ? 'bold' : 'normal'};`,
       `color:${layer.color};text-align:${align || 'center'};`,
-      'line-height:1.1;white-space:pre-wrap;word-break:break-word;',
+      'line-height:1.1;white-space:pre;',
     ].join('');
     textDiv.textContent = layer.text || 'Text';
     overlay.appendChild(textDiv);
@@ -352,6 +429,7 @@ export function renderFlagTextOverlaysStatic(wrapId, textLayers, mirror = false)
   });
 
   sync();
+  repaintTlWhenFontsReady(wrap, textLayers);
   wrap._flagTlRO = new ResizeObserver(sync);
   wrap._flagTlRO.observe(wrap);
 }
@@ -391,7 +469,7 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
       'width:100%;pointer-events:none;overflow:visible;',
       `font-family:${fontFamily};font-size:${fsPx}px;font-weight:${layer.bold ? 'bold' : 'normal'};`,
       `color:${layer.color};text-align:${layer.align || 'center'};`,
-      'line-height:1.1;white-space:pre-wrap;word-break:break-word;',
+      'line-height:1.1;white-space:pre;',
     ].join('');
     textDiv.textContent = layer.text || 'Text';
     overlay.appendChild(textDiv);
@@ -418,7 +496,7 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
       layer.x = rightEdge - newW; layer.w = newW;
       overlay.style.left = layer.x + '%';
       overlay.style.width = newW + '%';
-      clipToCanvas(textDiv, wrap);
+      paintTlContent(overlay, layer, wrap);
     });
     lh.addEventListener('pointerup', () => { document.body.style.cursor = ''; onChange(); });
     overlay.appendChild(lh);
@@ -441,7 +519,7 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
       const newW = Math.max(5, Math.min(100 - layer.x, rhStartW + (e.clientX - rhStartX) / sx));
       layer.w = newW;
       overlay.style.width = newW + '%';
-      clipToCanvas(textDiv, wrap);
+      paintTlContent(overlay, layer, wrap);
     });
     rh.addEventListener('pointerup', () => { document.body.style.cursor = ''; onChange(); });
     overlay.appendChild(rh);
@@ -468,7 +546,6 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
         const outward = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
         const newSize = Math.max(0.5, Math.min(40, parseFloat((chStartSize + outward * 0.05).toFixed(1))));
         layer.fontSize = newSize;
-        textDiv.style.fontSize = Math.max(8, (newSize / 100) * wrap.offsetHeight) + 'px';
 
         const ratio = newSize / chStartSize;
         // Growing from the center outward — cap so neither side crosses the
@@ -486,7 +563,7 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
         const val = document.getElementById('flagTlSizeVal');
         if (slider) slider.value = newSize;
         if (val) val.textContent = newSize + '%';
-        clipToCanvas(textDiv, wrap);
+        paintTlContent(overlay, layer, wrap);
       });
       ch.addEventListener('pointerup', () => { document.body.style.cursor = ''; onChange(); });
       return ch;
@@ -571,8 +648,10 @@ export function renderFlagTextOverlays(wrapId, textLayers, onChange) {
     });
 
     wrap.appendChild(overlay);
+    paintTlContent(overlay, layer, wrap);
     requestAnimationFrame(() => clipToCanvas(textDiv, wrap));
   });
+  repaintTlWhenFontsReady(wrap, textLayers);
 }
 
 export function addFlagTextLayer(textLayers, wrapId, onChange) {

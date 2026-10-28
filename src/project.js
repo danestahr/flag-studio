@@ -4,11 +4,12 @@ import { requireAuth, isStaffOrAdmin } from './auth.js';
 import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake,
          updateProject, deleteProject, upsertCustomerInfo,
          submitDesignForReview, adminRequestDesignChanges, adminReopenDesignReview, adminCancelDesignCompletion, adminSendDesignProof, adminMarkDesignSentToPrint,
-         sendProofReady, loadLatestEmailFailure, loadLatestChangeNote, loadLatestPrintAction, sendPrestigeOrder } from './supabase.js';
-import { FLAGS } from './data.js';
+         sendProofReady, loadLatestEmailFailure, loadLatestChangeNote, loadLatestPrintAction, sendPrestigeOrder, loadLatestPrestigeOrder, currentFlagDesignHash, loadLatestPrestigeDownload, loadLatestPrestigeDownloadError } from './supabase.js';
+import { FLAGS, LISTED_FLAGS } from './data.js';
 import { loadAllFlags } from './svgLoader.js';
 import { hydrateFlagStateForProject, buildFlagsPrintZip } from './flags/print-export.js';
 import { esc } from './dom-utils.js';
+import { calcEffectiveDeadline, formatDate } from './intake-shared.js';
 import { confirmPrestigeSend } from './prestige-send-modal.js';
 import { STATUS_LABEL } from './status-labels.js';
 
@@ -44,13 +45,13 @@ const DESIGN_TYPES = [
 // signs is one page that reads `panel` from the URL (see hs/app.js).
 const STEP_SECTIONS = {
   flags: [
-    { label: 'Design', href: p => `/flags?project=${p}` },
-    { label: 'Variations', href: p => `/flags-variations?project=${p}` },
+    { label: 'Template', href: p => `/flags?project=${p}` },
+    { label: 'Flags', href: p => `/flags-variations?project=${p}` },
     { label: 'Review', href: p => `/flags-gallery?project=${p}` },
   ],
   'hole-signs': [
-    { label: 'Design', href: p => `/hole-signs?project=${p}&panel=1` },
-    { label: 'Variations', href: p => `/hole-signs?project=${p}&panel=2` },
+    { label: 'Templates', href: p => `/hole-signs?project=${p}&panel=1` },
+    { label: 'Hole Signs', href: p => `/hole-signs?project=${p}&panel=2` },
     { label: 'Review', href: p => `/hole-signs?project=${p}&panel=3` },
   ],
 };
@@ -107,7 +108,9 @@ function designStarted(productType, cfg) {
 }
 
 function statsLineHtml(t, stats) {
-  const ordered = orderedFlagQty(t.productType);
+  // Ordered qty only before design starts; after that the project's own
+  // variation qtys are the source of truth so added flags stay in sync.
+  const ordered = designStarted(t.productType, cfgFor(t.productType)) ? 0 : orderedFlagQty(t.productType);
   const plural = (n, w) => `${n} ${w[0].toUpperCase()}${w.slice(1)}${n === 1 ? '' : 's'}`;
   if (!ordered) return `${plural(stats.count, 'variation')} &middot; ${plural(stats.qty, t.unit)} total`;
   return `${plural(ordered, t.unit)}${stats.count ? ` &middot; ${plural(stats.count, 'variation')}` : ''}`;
@@ -191,6 +194,17 @@ function renderToolCards() {
   DESIGN_TYPES.forEach(t => renderToolCardStatus(t));
 }
 
+// Flags only: an order inside the 17-day window is a rush and must be approved
+// 10 days before the working Friday instead. Hidden once approved.
+function rushBannerHtml(productType, status) {
+  if (productType !== 'flags' || ['approved', 'sent_to_print'].includes(status)) return '';
+  const eventIso = _project?.customer_info?.event_date || _intake?.event_date;
+  const dl = calcEffectiveDeadline(eventIso);
+  if (!dl?.rush) return '';
+  return `<div class="draft-card-meta"><span class="rush-badge">RUSH</span></div>
+    <div class="draft-card-meta">Approval due ${esc(dl.display)} for ${esc(formatDate(eventIso))} event</div>`;
+}
+
 // Refreshes one design type's status block - called from init() and from
 // every action that changes that design's status (submit, request changes,
 // send proof, mark sent to print), so only that card needs to re-render.
@@ -238,6 +252,7 @@ function renderToolCardStatus(t) {
   const stats = variationStats(t.productType, cfg);
   statusEl.innerHTML = `
     <div class="tool-card-group">
+      ${rushBannerHtml(t.productType, status)}
       <div class="tool-card-stats">${statsLineHtml(t, stats)}</div>
       <div id="statusBlock-${t.productType}" class="status-block">
         <div class="status-block-label">Status</div>
@@ -407,6 +422,28 @@ function renderReviewLinkSection(productType, status) {
   `;
 }
 
+// Prestige's side of the handoff, whatever the design status: the latest completed
+// download across the project's order pages, "not yet downloaded" while a Prestige
+// link exists but nothing has been downloaded, and a failure line if the newest
+// attempt failed. Nothing at all until a Prestige link has been generated.
+function fillPrestigeReceived() {
+  Promise.all([loadLatestPrestigeDownload(pid), loadLatestPrestigeDownloadError(pid), loadLatestPrestigeOrder(pid)]).then(([last, failed, order]) => {
+    const recvEl = document.getElementById('prestigeReceived');
+    if (!recvEl) return;
+    const fmt = iso => new Date(iso).toLocaleString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+    const lines = [];
+    if (last) lines.push(`<i class="fa-solid fa-circle-check" aria-hidden="true"></i> <strong>Downloaded by Prestige</strong> · latest ${fmt(last.downloaded_at)}`);
+    else if (order) lines.push('Not yet downloaded by Prestige');
+    // Only surface a failure that hasn't since been followed by a successful download.
+    if (failed && (!last || failed.created_at > last.downloaded_at)) {
+      lines.push(`<span style="color:#c0392b" title="${esc(`${failed.stage || 'unknown'}: ${failed.error || ''}`)}"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> <strong>Prestige download failed</strong> · ${fmt(failed.created_at)}</span>`);
+    }
+    recvEl.innerHTML = lines.join('<br>');
+  }).catch(err => console.error('Failed to load Prestige download', err));
+}
+
 // Full-width, divider-separated print action - split out from the other
 // (lighter-weight) review actions above since sending to print is the
 // irreversible, "this is really happening" step. Flags can still be
@@ -421,7 +458,11 @@ function renderPrintSection(productType, status, cfg) {
     : 'Mark sent to print';
   const show = status === 'approved' || (status === 'sent_to_print' && productType === 'flags');
   if (!show) {
-    el.innerHTML = '';
+    // Prestige may have downloaded a file even when the design isn't
+    // approved / sent (e.g. a prepared page, or an order sent outside the app),
+    // so the received line stands alone here.
+    el.innerHTML = productType === 'flags' ? `<div id="prestigeReceived" style="font-size:12px;color:var(--gray-400)"></div>` : '';
+    if (productType === 'flags') fillPrestigeReceived();
     return;
   }
 
@@ -439,7 +480,11 @@ function renderPrintSection(productType, status, cfg) {
     ${status === 'sent_to_print' ? `<div id="printMeta-${productType}" style="font-size:12px;color:var(--gray-400)"></div>` : ''}
     <button class="btn primary block" onclick="window.confirmMarkSentToPrint('${productType}')">${esc(label)}</button>
     ${productType === 'flags' && status === 'approved' ? `<button class="btn block" onclick="window.markSentToPrestigeManually()" title="Files were sent to Prestige outside the app - record it without emailing them">Mark as complete</button>` : ''}
+    ${productType === 'flags' ? `<div id="prestigeReceived" style="font-size:12px;color:var(--gray-400)"></div>` : ''}
   `;
+
+  // Prestige's side of the handoff: the latest download of any of this project's order pages.
+  if (productType === 'flags') fillPrestigeReceived();
 
   // Fetched separately (not awaited) so the button itself renders instantly
   // - the timestamp just fills in a beat later once the query resolves.
@@ -552,7 +597,7 @@ const CUSTOMER_FIELDS = [
   { key: 'state_province', label: 'State / Province', type: 'text', pair: true },
   { key: 'postal_code', label: 'Postal Code', type: 'text', pair: true },
   { key: 'country', label: 'Country', type: 'text', pair: true },
-  { key: 'flag_style', label: 'Flag Style', type: 'select', options: FLAGS.map(f => ({ value: f.id, label: f.name })) },
+  { key: 'flag_style', label: 'Flag Style', type: 'select', options: LISTED_FLAGS.map(f => ({ value: f.id, label: f.name })) },
   { key: 'flag_colors', label: 'Flag Colors', type: 'colors-display' },
   { key: 'flag_setup', label: 'Flag Setup', type: 'select', options: FLAG_SETUP_OPTIONS },
   { key: 'flag_qty', label: 'Quantity', type: 'number' },
@@ -907,9 +952,10 @@ window.confirmMarkSentToPrint = async function (productType) {
       setStatusValue(productType, status, 'Preparing print files…');
       await loadAllFlags(FLAGS);
       await hydrateFlagStateForProject(pid);
+      const designHash = await currentFlagDesignHash(pid);
       const { zipBlob } = await buildFlagsPrintZip(msg => setStatusValue(productType, status, msg));
       setStatusValue(productType, status, 'Sending to Prestige…');
-      await sendPrestigeOrder(pid, _project?.name || 'Flag Order', zipBlob);
+      await sendPrestigeOrder(pid, _project?.name || 'Flag Order', zipBlob, { designHash });
       prestigeSent = true;
     } else {
       setStatusValue(productType, status, 'Sending to print…');

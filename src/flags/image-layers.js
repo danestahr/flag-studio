@@ -14,15 +14,71 @@ import { createImageBox } from '../image-box.js';
 import { uploadLogo } from '../supabase.js';
 import { S } from '../state.js';
 
+// Copy/paste support (see flags/layer-clipboard.js): the image layers array on
+// screen (so a paste can target it even with nothing selected) and the id of
+// the selected layer. createImageBox leaves selection entirely to the caller.
+let _imgCtx = null; // { wrapId, imageLayers, onChange }
+let _selImgId = null;
+
+function selectImg(wrap, id) {
+  _selImgId = id;
+  wrap.querySelectorAll('.flag-img-layer').forEach(el => el.classList.toggle('selected', el.dataset.imgId === id));
+}
+
+document.addEventListener('pointerdown', e => {
+  if (!_selImgId || e.target.closest?.('.flag-img-layer')) return;
+  _selImgId = null;
+  document.querySelectorAll('.flag-img-layer.selected').forEach(el => el.classList.remove('selected'));
+}, true);
+
+// Delete/Backspace removes the selected image layer.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (!_imgCtx || !_selImgId) return;
+  if (document.activeElement?.closest?.('input, textarea, select, [contenteditable]')) return;
+  const { wrapId, imageLayers, onChange } = _imgCtx;
+  const idx = imageLayers.findIndex(l => l.id === _selImgId);
+  if (idx < 0) return;
+  e.preventDefault();
+  imageLayers.splice(idx, 1);
+  _selImgId = null;
+  renderFlagImageOverlays(wrapId, imageLayers, onChange);
+  onChange();
+});
+
+export function clearFlagImageOverlays(wrapId) {
+  _imgCtx = null;
+  _selImgId = null;
+  document.getElementById(wrapId)?.querySelectorAll('.flag-img-layer').forEach(el => el.remove());
+}
+
+export function getSelectedImageLayers() {
+  if (!_imgCtx || !_selImgId) return [];
+  const l = _imgCtx.imageLayers.find(x => x.id === _selImgId);
+  return l ? [JSON.parse(JSON.stringify(l))] : [];
+}
+
+export function pasteImageLayers(layers) {
+  if (!_imgCtx || !layers.length) return false;
+  const { wrapId, imageLayers, onChange } = _imgCtx;
+  imageLayers.push(...layers);
+  _selImgId = layers[layers.length - 1].id;
+  renderFlagImageOverlays(wrapId, imageLayers, onChange);
+  onChange();
+  return true;
+}
+
 export function renderFlagImageOverlays(wrapId, imageLayers, onChange) {
   const wrap = document.getElementById(wrapId);
   if (!wrap) return;
+  _imgCtx = { wrapId, imageLayers: imageLayers || [], onChange };
   wrap.querySelectorAll('.flag-img-layer').forEach(el => el.remove());
   (imageLayers || []).forEach(layer => {
     const box = createImageBox(wrap, wrap, layer, {
       src: layer.src,
       minW: 3,
       maxW: 150,
+      onClick: () => selectImg(wrap, layer.id),
       onCommit: onChange,
       onRemove: () => {
         const idx = imageLayers.findIndex(l => l.id === layer.id);
@@ -32,6 +88,8 @@ export function renderFlagImageOverlays(wrapId, imageLayers, onChange) {
       },
     });
     box.classList.add('flag-img-layer');
+    box.dataset.imgId = layer.id;
+    if (layer.id === _selImgId) box.classList.add('selected');
     wrap.appendChild(box);
   });
 }

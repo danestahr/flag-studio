@@ -1,4 +1,5 @@
 import { logEmail } from '../_shared/email-log.ts';
+import { testRedirect } from '../_shared/test-to.ts';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { esc, wrapEmailHtml, ctaButton, linkFallback, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
@@ -127,11 +128,11 @@ serve(async (req) => {
       method: 'POST',
       headers: { Authorization: `Bearer ${SENDGRID_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        personalizations: [{ to: [{ email: recipientEmail, name: recipientName || recipientEmail }] }],
+        personalizations: [{ to: [{ email: testRedirect(payload.testTo, recipientEmail).to, name: recipientName || recipientEmail }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         tracking_settings: { click_tracking: { enable: false } },
-        subject: `Print-ready ${productType === 'hole-signs' ? 'hole sign' : 'flag'} files — ${eventName || 'your event'}`,
+        subject: `${testRedirect(payload.testTo, recipientEmail).prefix}Print-ready ${productType === 'hole-signs' ? 'hole sign' : 'flag'} files — ${eventName || 'your event'}`,
         content: [
           {
             type: 'text/plain',

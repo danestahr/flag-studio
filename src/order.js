@@ -10,6 +10,7 @@ import { applyColors, showGsTagVariant, resolveColors } from './render.js';
 import { isDisplayableImage, fileTypeLabel } from './media-utils.js';
 import { extractDominantColors } from './color-extract.js';
 import { scrollToFirstError } from './dom-utils.js';
+import { calcApprovalDeadline, calcEffectiveDeadline } from './intake-shared.js';
 
 const SKIP_VALIDATION = false;
 
@@ -257,20 +258,6 @@ function formatDate(isoDate) {
   return months[month - 1] + ' ' + day + ', ' + year;
 }
 
-function calcApprovalDeadline(eventDateIso) {
-  if (!eventDateIso) return null;
-  const [y, m, d] = eventDateIso.split('-').map(Number);
-  // Weekend/Monday events count from the preceding Friday, then 17 days back.
-  const deadline = new Date(y, m - 1, d);
-  const dow = deadline.getDay();
-  if (dow === 6) deadline.setDate(deadline.getDate() - 1);
-  else if (dow === 0) deadline.setDate(deadline.getDate() - 2);
-  else if (dow === 1) deadline.setDate(deadline.getDate() - 3);
-  deadline.setDate(deadline.getDate() - 17);
-  const iso = `${deadline.getFullYear()}-${String(deadline.getMonth() + 1).padStart(2, '0')}-${String(deadline.getDate()).padStart(2, '0')}`;
-  return { iso, display: formatDate(iso) };
-}
-
 function req() {
   return '<span class="required-mark">*</span>';
 }
@@ -291,6 +278,10 @@ function validate(step) {
     if (!O.eventName.trim()) errors.eventName = 'Event name is required.';
     if (!O.courseName.trim()) errors.courseName = 'Course name is required.';
     if (!O.eventDate) errors.eventDate = 'Event date is required.';
+    else {
+      const dl = calcEffectiveDeadline(O.eventDate);
+      if (dl?.expired) errors.eventDate = `This order can't be completed in time. Artwork approval would have been due ${dl.display} (10 days before the event, counted from the preceding Friday). Please contact us to discuss options.`;
+    }
   }
   if (step === 2) {
     if (!O.contactName.trim()) errors.contactName = 'Full name is required.';
@@ -849,17 +840,21 @@ function renderStep5() {
   return `
     ${e.submit ? `<div class="submit-error-banner">${esc(e.submit)}</div>` : ''}
     ${(() => {
-      const dl = calcApprovalDeadline(O.eventDate);
+      const dl = calcEffectiveDeadline(O.eventDate);
       if (!dl) return '';
-      return `<div class="deadline-callout">
-        <div class="deadline-callout-label">Your artwork approval deadline</div>
+      return `<div class="deadline-callout${dl.rush ? ' rush' : ''}">
+        <div class="deadline-callout-label">${dl.rush ? 'Rush order — your artwork approval deadline' : 'Your artwork approval deadline'}</div>
         <div class="deadline-callout-date">${esc(dl.display)}</div>
-        <div class="deadline-callout-note">17 days before your event — counted from the preceding Friday if your event is on a Saturday, Sunday or Monday.</div>
+        <div class="deadline-callout-note">${dl.rush
+          ? '10 days before your event — counted from the preceding Friday if your event is on a Saturday, Sunday or Monday.'
+          : '17 days before your event — counted from the preceding Friday if your event is on a Saturday, Sunday or Monday.'}</div>
       </div>`;
     })()}
     <div class="${ack1Cls}" id="f-ackDeadline" onclick="window.toggleAck('deadline')">
       <div class="${ack1CheckCls}"></div>
-      <div class="ack-text">I acknowledge that final artwork approval is required at least 17 days before the event to avoid rush fees. If the event is on a Saturday, Sunday or Monday, the 17 days are counted from the preceding Friday.</div>
+      <div class="ack-text">${calcEffectiveDeadline(O.eventDate)?.rush
+        ? 'I acknowledge that this is a rush order and a rush fee will apply, because the artwork approval deadline falls between 10 and 16 days before the event instead of the 17 required. Final artwork must be approved by the date above. If the event is on a Saturday, Sunday or Monday, the days are counted from the preceding Friday.'
+        : 'I acknowledge that final artwork approval is required at least 17 days before the event to avoid rush fees. If the event is on a Saturday, Sunday or Monday, the 17 days are counted from the preceding Friday.'}</div>
     </div>
     ${e.ackDeadline ? `<div class="form-error">${esc(e.ackDeadline)}</div>` : ''}
 
@@ -1197,7 +1192,12 @@ function attachListeners() {
   if (evName) evName.addEventListener('input', e => { O.eventName = e.target.value; });
 
   const evDate = document.getElementById('f-eventDate');
-  if (evDate) evDate.addEventListener('change', e => { O.eventDate = e.target.value; });
+  if (evDate) evDate.addEventListener('change', e => {
+    O.eventDate = e.target.value;
+    // The deadline (and whether it's a rush) depends on the date, so a prior
+    // acknowledgment no longer covers what the customer will see on review.
+    O.ackDeadline = false;
+  });
 
   // Step 2 inputs
   const cName = document.getElementById('f-contactName');

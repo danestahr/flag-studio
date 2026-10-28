@@ -21,6 +21,9 @@ export const S = {
   // — see flags/variations.js's toggleSameSides/sameSidesOf), not a
   // project-wide flag here.
   logoLayout: 'single',
+  // Print pipeline pinned to this project: 'legacy' (every pre-existing
+  // project) or 'v2' (vendor print frames) - see flags/print-spec.js.
+  printSpec: 'legacy',
   shareToken: null,
   feedback: [],
   gsTag: true,
@@ -33,7 +36,47 @@ export const S = {
   // which stays per-variation and interactively editable from Step 4.
   textLayers: [],
   imageLayers: [],
+  // Template-level back face. Off (default) = the back's template layers are
+  // the front's, reflected. On = the back has its own standard text/images/
+  // logos below, applied to every variation's back; each variation's own
+  // content (mirrored front by default) still layers on top — see render.js's
+  // backSpecOf. Lets "different fronts, one standard back" be designed once.
+  separateBack: false,
+  backLogos: [],
+  backTextLayers: [],
+  backImageLayers: [],
+  // Per-face template locks (Templates step's lock button). A locked face
+  // can't have its template layers altered per variation (render.js's tplOf
+  // ignores v.tpl for it) and no logos can be added to it on the Variations
+  // step. Only one face may be locked at a time (see normalizeLocks).
+  frontLocked: false,
+  backLocked: false,
 };
+
+export const isFaceLocked = (face) => !!(face === 'back' ? S.backLocked : S.frontLocked);
+
+// Reads the template-back fields out of flag_config.variations (the JSON
+// blob saveFlagConfig writes) — shared by every page that hydrates S so a
+// new field only needs adding here and in saveFlagConfig.
+export function loadTemplateBack(varData) {
+  const d = Array.isArray(varData) ? {} : (varData || {});
+  S.separateBack = !!d.separateBack;
+  S.backLogos = d.backLogos || [];
+  S.backTextLayers = d.backTextLayers || [];
+  S.backImageLayers = d.backImageLayers || [];
+  S.frontLocked = !!d.frontLocked;
+  S.backLocked = !!d.backLocked;
+  normalizeLocks();
+}
+
+// Lock rules: only one face can be locked at a time, and the back can only be
+// locked when it's a template of its own (separateBack) — a back that just
+// reflects the front is the same template, so locking "both" is meaningless.
+// Applied on load so older saved configs that predate the rule come out valid.
+export function normalizeLocks() {
+  if (!S.separateBack) S.backLocked = false;
+  if (S.frontLocked && S.backLocked) S.backLocked = false;
+}
 
 export let _dragLogoId = null;
 export const setDragLogoId = (id) => { _dragLogoId = id; };

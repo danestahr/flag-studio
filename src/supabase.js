@@ -113,12 +113,26 @@ export async function createProject(name = '', customerInfo = null) {
   return data.id;
 }
 
+// Same-browser tabs: tell any open Review page that the saved design or contact data
+// changed, so its Publish button can react immediately instead of waiting for the
+// tab to be focused again. BroadcastChannel never delivers to the posting tab
+// itself, and only reaches this browser - other devices still catch up on focus/load.
+const designChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('flag-studio-design') : null;
+const notifyDesignChanged = projectId => { try { designChannel?.postMessage({ projectId }); } catch { /* best effort */ } };
+export function onDesignChanged(handler) {
+  if (typeof BroadcastChannel === 'undefined') return () => {};
+  const ch = new BroadcastChannel('flag-studio-design');
+  ch.onmessage = e => handler(e.data?.projectId);
+  return () => ch.close();
+}
+
 export async function updateProject(projectId, fields) {
   const { error } = await supabase
     .from('projects')
     .update({ ...fields, updated_at: new Date().toISOString() })
     .eq('id', projectId);
   if (error) throw error;
+  notifyDesignChanged(projectId); // project name / customer_info feed the print summary
 }
 
 export async function getMyRole(userId) {
@@ -368,7 +382,7 @@ export async function saveFlagConfig(projectId, state) {
       // same_logo_on_both_sides column is legacy (pre-per-variation) and
       // deliberately left untouched here; a variation saved before that
       // migration falls back to whatever value is already in it.
-      variations: { layout: state.logoLayout || 'single', items: state.variations, gsTag: state.gsTag ?? false, gsTagMode: state.gsTagMode ?? 'auto', gsTagColor: state.gsTagColor ?? '#ffffff', customColors: state.customColors || [], textLayers: state.textLayers || [], imageLayers: state.imageLayers || [] },
+      variations: { layout: state.logoLayout || 'single', items: state.variations, gsTag: state.gsTag ?? false, gsTagMode: state.gsTagMode ?? 'auto', gsTagColor: state.gsTagColor ?? '#ffffff', customColors: state.customColors || [], printSpec: state.printSpec ?? 'legacy', textLayers: state.textLayers || [], imageLayers: state.imageLayers || [], separateBack: !!state.separateBack, backLogos: state.backLogos || [], backTextLayers: state.backTextLayers || [], backImageLayers: state.backImageLayers || [], frontLocked: !!state.frontLocked, backLocked: !!state.backLocked },
       // status is NOT set here - it's an independent state machine owned by
       // the submit/review RPCs (submit_design_for_review, admin_send_design_proof,
       // client_approve_design_proof, etc. - see 20260913000000_per_design_status_workflow.sql).
@@ -380,6 +394,7 @@ export async function saveFlagConfig(projectId, state) {
     }, { onConflict: 'project_id' });
   if (error) throw error;
   await supabase.from('projects').update({ updated_at: new Date().toISOString() }).eq('id', projectId);
+  notifyDesignChanged(projectId);
 }
 
 // Patches one variation's qty in place (re-reading the row first) so the
@@ -392,6 +407,7 @@ export async function saveFlagVariationQty(projectId, variationId, qty) {
   const variations = Array.isArray(raw) ? items : { ...raw, items };
   const { error } = await supabase.from('flag_config').update({ variations, updated_at: new Date().toISOString() }).eq('project_id', projectId);
   if (error) throw error;
+  notifyDesignChanged(projectId);
 }
 
 export async function loadFlagConfig(projectId) {
@@ -645,6 +661,7 @@ export async function upsertCustomerInfo(projectId, info) {
     .update({ customer_info: info, updated_at: new Date().toISOString() })
     .eq('id', projectId);
   if (error) throw error;
+  notifyDesignChanged(projectId);
 }
 
 // ── Feedback ───────────────────────────────────────────────
@@ -694,6 +711,11 @@ export async function deleteFeedbackForVariation(projectId, productType, variati
 }
 
 // ── Edge functions ─────────────────────────────────────────
+// Local dev only: the email edge functions honor `testTo` (dane@danestahr.com
+// only) to redirect the send, so localhost testing never mails real recipients.
+const IS_LOCAL = ['localhost', '127.0.0.1'].includes(location.hostname);
+const TEST_TO = IS_LOCAL ? { testTo: 'dane@danestahr.com' } : {};
+
 async function callEdgeFunction(name, body) {
   const url = `${SUPABASE_URL}/functions/v1/${name}`;
   const res = await fetch(url, {
@@ -703,7 +725,7 @@ async function callEdgeFunction(name, body) {
       apikey: SUPABASE_ANON_KEY,
       Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, ...(name.startsWith('send-') ? TEST_TO : {}) }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -739,6 +761,7 @@ export async function saveOrderIntake(projectId, data, finalize = false) {
     p_finalize: finalize,
   });
   if (error) throw error;
+  notifyDesignChanged(projectId);
 }
 
 // Customer-facing "order started" email with the resume link - see
@@ -809,8 +832,39 @@ export async function sendApprovalConfirmation(payload) {
   return callEdgeFunction('send-approval-confirmation', payload);
 }
 
-export async function sendPrestigeOrder(projectId, projectName, zipBlob) {
-  const params = new URLSearchParams({ projectId, projectName });
+// Stable fingerprint of everything the Prestige print zip is built from: the
+// saved design (template flag_id + colors, variations incl. quantities and
+// layers) plus the customer-facing data the order summary prints (project name,
+// the editable customer_info contact record, and the original order intake it
+// falls back to). Status/approval/timestamps are deliberately excluded - they
+// don't change the files. Recorded on each prestige_orders row so staff can tell
+// a real change from a status-only save. Compute it BEFORE building the zip: an
+// edit that lands mid-build then leaves the hash older than the zip, which only
+// costs one harmless extra rebuild (never a missed one).
+const canonJson = v => Array.isArray(v) ? v.map(canonJson)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonJson(v[k])]))
+  : v;
+export async function currentFlagDesignHash(projectId) {
+  const [cfg, proj, intake] = await Promise.all([
+    loadFlagConfig(projectId),
+    supabase.from('projects').select('name, customer_info').eq('id', projectId).maybeSingle().then(r => r.data),
+    loadOrderIntake(projectId),
+  ]);
+  if (!cfg) return null;
+  const { flag_id, colors, variations, same_logo_on_both_sides } = cfg;
+  const { id: _i, project_id: _p, created_at: _c, submitted_at: _s, ...intakeFields } = intake || {};
+  const bytes = new TextEncoder().encode(JSON.stringify(canonJson({
+    flag_id, colors, variations, same_logo_on_both_sides,
+    name: proj?.name ?? null, customer_info: proj?.customer_info ?? null, intake: intakeFields,
+  })));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function sendPrestigeOrder(projectId, projectName, zipBlob, { prepareOnly = false, designHash = null } = {}) {
+  const params = new URLSearchParams({ projectId, projectName, origin: window.location.origin, ...TEST_TO });
+  if (prepareOnly) params.set('prepare', '1');
+  if (designHash) params.set('designHash', designHash);
   const url = `${SUPABASE_URL}/functions/v1/send-prestige-order?${params}`;
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || SUPABASE_ANON_KEY;
@@ -828,6 +882,90 @@ export async function sendPrestigeOrder(projectId, projectName, zipBlob) {
     throw new Error(`Prestige send failed (${res.status}): ${text}`);
   }
   return res.json();
+}
+
+// Latest Prestige order for a project plus everyone who has downloaded it
+// (staff/owner via RLS - see 20261014000000_prestige_orders.sql). Null when
+// nothing has been sent to Prestige yet.
+export async function loadLatestPrestigeOrder(projectId, { sentOnly = false, unsentOnly = false } = {}) {
+  let q = supabase
+    .from('prestige_orders')
+    .select('id, filename, size_bytes, variation_count, flag_count, in_hand_date, created_at, sent_at, design_hash')
+    .eq('project_id', projectId);
+  if (sentOnly) q = q.not('sent_at', 'is', null);
+  if (unsentOnly) q = q.is('sent_at', null);
+  const { data: order, error } = await q
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!order) return null;
+  const { data: downloads, error: dlErr } = await supabase
+    .from('prestige_downloads')
+    .select('downloaded_at')
+    .eq('order_id', order.id)
+    .order('downloaded_at', { ascending: true });
+  if (dlErr) throw dlErr;
+  return { ...order, downloads: downloads || [] };
+}
+
+// Most recent Prestige download across ALL of a project's orders - prepared-only
+// pages and orders sent outside the platform included, regardless of design status.
+// Null when Prestige has never downloaded anything.
+export async function loadLatestPrestigeDownload(projectId) {
+  const { data, error } = await supabase
+    .from('prestige_downloads')
+    .select('downloaded_at, prestige_orders!inner(project_id)')
+    .eq('prestige_orders.project_id', projectId)
+    .order('downloaded_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? { downloaded_at: data.downloaded_at } : null;
+}
+
+// Public download page backend. Without `download` returns metadata only; with
+// it, logs the download and returns { url } (see prestige-download function).
+export async function prestigeDownload(id, download = false) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/prestige-download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+    body: JSON.stringify({ id, download }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  // The function sees Supabase at its internal address (http://kong:8000 in local
+  // dev), which a browser can't reach - keep only path+query and use ours.
+  if (body.url) { const u = new URL(body.url); body.url = `${SUPABASE_URL}${u.pathname}${u.search}`; }
+  return body;
+}
+
+// Reports the outcome of a download attempt: event 'complete' logs a download,
+// 'error' logs a failure (stage = sign | fetch | write). Never throws - logging
+// must not turn a finished download into an error on the page.
+export async function logPrestigeDownloadEvent(id, event, { stage, message } = {}) {
+  try {
+    await fetch(`${SUPABASE_URL}/functions/v1/prestige-download`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      body: JSON.stringify({ id, event, stage, error: message }),
+    });
+  } catch (err) {
+    console.error('Could not log download event', err);
+  }
+}
+
+// Latest failed Prestige download across all of a project's orders, or null.
+export async function loadLatestPrestigeDownloadError(projectId) {
+  const { data, error } = await supabase
+    .from('prestige_download_errors')
+    .select('created_at, stage, error, prestige_orders!inner(project_id)')
+    .eq('prestige_orders.project_id', projectId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? { created_at: data.created_at, stage: data.stage, error: data.error } : null;
 }
 
 // ── Print sheet email (staff/admin only) ────────────────────
@@ -858,7 +996,7 @@ export async function sendPrintSheetReady(payload) {
       apikey: SUPABASE_ANON_KEY,
       Authorization: `Bearer ${session.access_token}`,
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, ...TEST_TO }),
   });
   if (!res.ok) {
     const text = await res.text();

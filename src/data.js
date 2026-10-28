@@ -1,3 +1,5 @@
+import { FLAG_LAYOUTS } from './flags/print-manifest.js';
+
 export const COLORS = [
   {hex:'#1A3A6B',name:'Navy'},{hex:'#C8102E',name:'Scarlet'},{hex:'#006747',name:'Masters Green'},
   {hex:'#C8972A',name:'Gold'},{hex:'#111110',name:'Black'},{hex:'#FFFFFF',name:'White'},
@@ -182,3 +184,26 @@ export const FLAGS = [
     svgContent: '', viewBox: '0 0 3900 2400', logoZones: [],
   },
 ];
+
+// Print layouts (flags/print-manifest.js). The flag's own id is its default
+// layout; every other layout becomes a hidden sibling entry (`layoutOf` = base
+// id) so per-flag lookups - render, export, saved flag_id - need no changes.
+// Listings that offer a style to pick use LISTED_FLAGS, not FLAGS.
+const layoutFlags = [];
+for (const base of FLAGS) {
+  const m = FLAG_LAYOUTS[base.id];
+  if (!m) continue;
+  const flagIdOf = l => (l === m.defaultLayout ? base.id : `${base.id}--${l}`);
+  const zonesOf = l => base.colorZones.filter(z => m.layouts.find(x => x.id === l).zones.includes(z.id));
+  const poleOf = l => m.layouts.find(x => x.id === l).pole;
+  const backBorderOf = l => !!m.layouts.find(x => x.id === l).backBorderPreviewOnly;
+  const layouts = m.layouts.map(l => ({ ...l, flagId: flagIdOf(l.id) }));
+  Object.assign(base, { v2TagKeyZone: m.tagKeyZone, printStyle: m.printStyle, printLayout: m.defaultLayout, poleName: poleOf(m.defaultLayout), backBorderPreviewOnly: backBorderOf(m.defaultLayout), layouts, colorZones: zonesOf(m.defaultLayout) });
+  for (const l of m.layouts) {
+    if (l.id === m.defaultLayout) continue;
+    layoutFlags.push({ ...base, id: flagIdOf(l.id), name: `${base.name} - ${l.label}`, layoutOf: base.id, printLayout: l.id, poleName: poleOf(l.id), backBorderPreviewOnly: backBorderOf(l.id), colorZones: zonesOf(l.id), svgContent: '', logoZones: [] });
+  }
+}
+FLAGS.push(...layoutFlags);
+export const LISTED_FLAGS = FLAGS.filter(f => !f.layoutOf);
+export const baseFlagId = (id) => FLAGS.find(f => f.id === id)?.layoutOf || id;

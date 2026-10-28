@@ -69,7 +69,9 @@ async function rpc<T>(fn: string, args: Record<string, unknown> = {}): Promise<T
     body: JSON.stringify(args),
   });
   if (!res.ok) throw new Error(`rpc ${fn} failed: ${res.status} ${await res.text()}`);
-  return res.json();
+  // void RPCs (mark_approval_reminder_sent) come back with an empty body
+  const text = await res.text();
+  return (text ? JSON.parse(text) : null) as T;
 }
 
 function formatDate(iso: string): string {

@@ -6,7 +6,7 @@ import { initHeaderForSession, injectHeaderCta } from './auth.js';
 import { listProjects, createProject, deleteProject, getMyRole } from './supabase.js';
 import { esc } from './dom-utils.js';
 import { STATUS_LABEL, STATUS_GROUPS } from './status-labels.js';
-import { calcApprovalDeadline, formatDate } from './intake-shared.js';
+import { calcApprovalDeadline, calcEffectiveDeadline, formatDate } from './intake-shared.js';
 import { renderTemplateGallery } from './template-gallery.js';
 
 const PAGE_SIZE = 30;
@@ -108,9 +108,12 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
   // "Approval due Sep 1, 2026 for Sep 18, 2026 event"
   function deadlineLine(p) {
     const eventIso = p.customer_info?.event_date || p.order_intakes?.[0]?.event_date;
-    const dl = calcApprovalDeadline(eventIso);
+    const dl = calcEffectiveDeadline(eventIso);
     if (!dl) return '';
-    return `<div class="draft-card-meta">Approval due ${esc(dl.display)} for ${esc(formatDate(eventIso))} event</div>`;
+    // Rush only matters while a design still needs approving.
+    const statuses = [cfgOf(p.flag_config)?.status, cfgOf(p.hole_sign_config)?.status].filter(Boolean);
+    const rush = dl.rush && !(statuses.length && statuses.every(st => DONE.includes(st)));
+    return `${rush ? '<div class="draft-card-meta"><span class="rush-badge">RUSH</span></div>' : ''}<div class="draft-card-meta">Approval due ${esc(dl.display)} for ${esc(formatDate(eventIso))} event</div>`;
   }
 
   function projectCardHtml(p) {

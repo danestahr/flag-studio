@@ -1,4 +1,5 @@
 import { logEmail } from '../_shared/email-log.ts';
+import { testRedirect } from '../_shared/test-to.ts';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { esc, wrapEmailHtml, ctaButton, linkFallback, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
@@ -63,6 +64,8 @@ interface OrderPayload {
   courseName?: string;
   eventName: string;
   eventDate: string;
+  testTo?: string;
+  approvalDeadline?: string; // ISO date (YYYY-MM-DD) — artwork approval deadline
   eventUrl?: string;
   shipping?: Shipping;
   flagStyle?: string;
@@ -137,6 +140,7 @@ function buildHtml(p: OrderPayload & { safeProjectUrl: string }): string {
       ${row('Event Name', esc(p.eventName))}
       ${p.courseName ? row('Course Name', esc(p.courseName)) : ''}
       ${row('Event Date', esc(formatDate(p.eventDate)))}
+      ${p.approvalDeadline ? row('Artwork Approval Date', esc(formatDate(p.approvalDeadline))) : ''}
       ${(() => {
         const url = safeUrl(p.eventUrl);
         return url ? row('Event URL', `<a href="${esc(url)}" style="color:#1a1a2e;">${esc(url)}</a>`) : '';
@@ -191,6 +195,7 @@ function buildText(p: OrderPayload & { safeProjectUrl: string }): string {
   lines.push(`Event Name: ${p.eventName}`);
   if (p.courseName) lines.push(`Course Name: ${p.courseName}`);
   lines.push(`Event Date: ${formatDate(p.eventDate)}`);
+  if (p.approvalDeadline) lines.push(`Artwork Approval Date: ${formatDate(p.approvalDeadline)}`);
   if (safeUrl(p.eventUrl)) lines.push(`Event URL: ${p.eventUrl!.trim()}`);
   lines.push('');
 
@@ -242,6 +247,8 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: 'Invalid project' }), { status: 403, headers: { ...CORS, 'Content-Type': 'application/json' } });
     }
 
+    const { to: toEmail, prefix } = testRedirect(payload.testTo, TO_EMAIL);
+
     let safeProjectUrl: string;
     try {
       const u = new URL(payload.projectUrl);
@@ -258,11 +265,11 @@ serve(async (req) => {
       method: 'POST',
       headers: { Authorization: `Bearer ${SENDGRID_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        personalizations: [{ to: [{ email: TO_EMAIL, name: TO_NAME }] }],
+        personalizations: [{ to: [{ email: toEmail, name: TO_NAME }] }],
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         tracking_settings: { click_tracking: { enable: false } },
-        subject: payload.stage === 'started' ? `Order started — ${payload.eventName}` : `New order submitted — ${payload.eventName}`,
+        subject: `${prefix}${payload.stage === 'started' ? 'Order started' : 'New order submitted'} — ${payload.eventName}`,
         content: [
           { type: 'text/plain', value: buildText({ ...payload, safeProjectUrl }) },
           { type: 'text/html', value: buildHtml({ ...payload, safeProjectUrl }) },
@@ -270,11 +277,11 @@ serve(async (req) => {
       }),
     });
 
-    if (res.ok) await logEmail({ kind: payload.stage === 'started' ? 'order-started-notification' : 'order-notification', projectId: payload.projectId, recipient: TO_EMAIL, ok: true, httpStatus: res.status });
+    if (res.ok) await logEmail({ kind: payload.stage === 'started' ? 'order-started-notification' : 'order-notification', projectId: payload.projectId, recipient: toEmail, ok: true, httpStatus: res.status });
     if (!res.ok) {
       const body = await res.text();
       console.error('SendGrid error', res.status, body);
-      await logEmail({ kind: payload.stage === 'started' ? 'order-started-notification' : 'order-notification', projectId: payload.projectId, recipient: TO_EMAIL, ok: false, httpStatus: res.status, error: body });
+      await logEmail({ kind: payload.stage === 'started' ? 'order-started-notification' : 'order-notification', projectId: payload.projectId, recipient: toEmail, ok: false, httpStatus: res.status, error: body });
       return new Response(JSON.stringify({ error: 'SendGrid failed', status: res.status }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
     }
 

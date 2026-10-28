@@ -4,9 +4,10 @@ import { requireAuth, isStaffOrAdmin } from '../auth.js';
 
 const session = await requireAuth();
 
-import { S, setDragLogoId, DEFAULT_COLORS, addCustomColor, allSwatches, navigateTo } from '../state.js';
-import { FLAGS } from '../data.js';
-import { getFlag, applyColors, showGsTagVariant, resolveColors } from '../render.js';
+import { S, isFaceLocked, _dragLogoId, loadTemplateBack, setDragLogoId, DEFAULT_COLORS, addCustomColor, allSwatches, navigateTo, normalizeLocks } from '../state.js';
+import { newProjectPrintSpec, usesV2Print } from './print-spec.js';
+import { FLAGS, LISTED_FLAGS, baseFlagId } from '../data.js';
+import { getFlag, applyColors, showGsTagVariant, resolveColors, flagFaceSource, canvasAspect, makeSvg, printOpts, syncWrapPole, paintFlagCardV2, tagKeyZoneOf } from '../render.js';
 import { loadAllFlags } from '../svgLoader.js';
 import {
   createProject, updateProject, loadProject,
@@ -15,12 +16,14 @@ import {
   loadOrderIntake,
 } from '../supabase.js';
 import { initDropZones, renderDropZones, hideZoneToolbar } from './drop-zones.js';
-import { addFlagTextLayer, renderFlagTextOverlays } from './text-layers.js';
-import { addFlagImageLayer, renderFlagImageOverlays } from './image-layers.js';
+import { addFlagTextLayer, renderFlagTextOverlays, clearFlagTextOverlays } from './text-layers.js';
+import { renderFlagImageOverlays, clearFlagImageOverlays } from './image-layers.js';
+import './layer-clipboard.js';
 import { eyedropperBtn, pickEyedropperColor } from '../eyedropper.js';
 import { esc } from '../dom-utils.js';
 import { logoThumbHtml, downloadLogo } from '../media-utils.js';
-import { renderSidebar, setSidebarProjectName, paintCachedProjectName } from '../sidebar.js';
+import { renderSidebar, renderLogosTileShell, setSidebarProjectName, paintCachedProjectName } from '../sidebar.js';
+import { renderLogoTray } from '../logo-tray.js';
 import { renderCanvasPanel } from '../canvas-panel.js';
 import { refreshImageBoxClips } from '../image-box.js';
 
@@ -30,19 +33,27 @@ let _flagExpZoom = 75;
 function safeHex(h) { return /^#[0-9A-Fa-f]{3,6}$/.test(h) ? h : '#cccccc'; }
 
 // Which Design-step submenu is drilled into — null shows the row list
-// (Style & Colors / Hole Numbers / Text / Images), mirroring hs/design.js's
+// (Style & Colors / Hole Numbers / Text), mirroring hs/design.js's
 // UI.hsMenu pattern. Purely ephemeral UI state, not persisted.
 let p1Menu = null;
 
-renderCanvasPanel(document.getElementById('flagExpCanvasPanel'), {
+const flagExpCanvas = renderCanvasPanel(document.getElementById('flagExpCanvasPanel'), {
   panelId: 'flagExpCanvasPanel',
   scrollId: 'flagExpScroll',
   wrapId: 'flagExpZoomWrap',
   zoomValueId: 'flagExpZoomValue',
   zoomResetId: 'flagExpZoomReset',
-  aspect: 7519 / 4669,
+  aspect: () => canvasAspect(getFlag()),
   getZoom: () => _flagExpZoom,
   setZoom: v => { _flagExpZoom = v; },
+  // Front/Back tabs + "Same Front & Back Design" toggle — same controls as the
+  // Variations editor, but for the template: off = one standard back that
+  // every variation inherits (see state.js's separateBack).
+  faceToggleHidden: false,
+  onFaceChange: face => window.setP1Face(face),
+  onToggleSameSides: checked => window.toggleSeparateBack(!checked),
+  sameSidesLabel: 'Same Front & Back Template',
+  extraBtn: { id: 'flagLockBtn', label: 'Lock template', icon: 'fa-lock-open', visible: true, onClick: () => window.toggleFaceLock() },
   canvasContentHtml: '<div class="flag-exp-preview" id="flagExpPreview"><div class="flag-exp-placeholder">Select a style →</div></div>',
 });
 
@@ -90,7 +101,7 @@ window.tryGoStep = (n) => goStep(n);
 // ── Step 1: Design style ───────────────────────────────────
 
 function renderFlagGrid() {
-  document.getElementById('flagGrid').innerHTML = FLAGS.map(f => `
+  document.getElementById('flagGrid').innerHTML = LISTED_FLAGS.map(f => `
     <div class="flag-card" id="fc-${f.id}" onclick="pickFlag('${f.id}')">
       <div class="flag-card-preview"><svg viewBox="${f.viewBox || '0 0 7519 4669'}" preserveAspectRatio="xMidYMid meet">${f.svgContent}</svg></div>
       <div class="flag-card-name">${f.name}</div>
@@ -101,24 +112,124 @@ function showFlagExpanded(id) {
   const flag = FLAGS.find(f => f.id === id);
   if (!flag) return;
   document.querySelectorAll('.flag-card').forEach(c => c.classList.remove('selected'));
-  document.getElementById('fc-' + id)?.classList.add('selected');
+  document.getElementById('fc-' + baseFlagId(id))?.classList.add('selected');
+  renderFlagLayoutRow();
+  refreshFlagPreviews();
   refreshFlagExpanded();
+}
+
+// Which face of the template Step 1's canvas shows. Ephemeral UI state.
+let p1Face = 'front';
+
+window.setP1Face = function (face) {
+  if (face === p1Face) return;
+  p1Face = face;
+  refreshFlagExpanded();
+};
+
+// Off (the default, "Same Front & Back Design" checked) the back is a
+// read-only reflection of the front. On, the back is its own standard design,
+// starting blank — turning it off again discards it, same as a variation's
+// own toggleSameSides.
+window.toggleSeparateBack = function (separate) {
+  if (!separate && (S.backLogos.length || S.backTextLayers.length || S.backImageLayers.length)
+      && !confirm('Remove the template back design? Variations will go back to mirroring their front.')) {
+    refreshFlagExpanded();
+    return;
+  }
+  S.separateBack = separate;
+  normalizeLocks();
+  S.backLogos = [];
+  S.backTextLayers = [];
+  S.backImageLayers = [];
+  refreshFlagExpanded();
+  markDirty();
+};
+
+// Locks/unlocks the face being viewed — see state.js's frontLocked/backLocked.
+window.toggleFaceLock = function () {
+  const key = p1Face === 'back' ? 'backLocked' : 'frontLocked';
+  if (p1Face === 'back' && !S.separateBack) return; // back is the front's reflection — nothing of its own to lock
+  S[key] = !S[key];
+  // Locking one side releases the other — only one can be locked at a time.
+  if (S[key]) S[p1Face === 'back' ? 'frontLocked' : 'backLocked'] = false;
+  syncP1FaceUI();
+  markDirty();
+};
+
+function syncP1FaceUI() {
+  const locked = isFaceLocked(p1Face);
+  const lockBtn = document.getElementById('flagLockBtn');
+  if (lockBtn) {
+    const name = p1Face === 'back' ? 'back' : 'front';
+    lockBtn.classList.toggle('active', locked);
+    lockBtn.title = locked ? `Unlock ${name} — variations can alter it and add logos to it again` : `Lock ${name} — variations can't alter it or add logos to it${p1Face === 'back' ? ' (their own logos stop mirroring onto the back)' : ''}`;
+    const mirroredBack = p1Face === 'back' && !S.separateBack;
+    if (mirroredBack) lockBtn.title = 'The back is the same template as the front — turn off "Same Front & Back Design" to give it its own template, or lock the front';
+    lockBtn.disabled = mirroredBack;
+    lockBtn.setAttribute('aria-label', lockBtn.title);
+    lockBtn.innerHTML = `<i class="fa-solid ${locked ? 'fa-lock' : 'fa-lock-open'}" aria-hidden="true"></i>`;
+  }
+  [['Front', 'front'], ['Back', 'back']].forEach(([label, face]) => {
+    const tab = document.getElementById('flagExpCanvasPanelFace' + label);
+    if (tab) tab.innerHTML = label + (isFaceLocked(face) ? ' <i class="fa-solid fa-lock" aria-hidden="true"></i>' : '');
+  });
+  document.getElementById('flagExpCanvasPanelFaceFront')?.classList.toggle('active', p1Face === 'front');
+  document.getElementById('flagExpCanvasPanelFaceBack')?.classList.toggle('active', p1Face === 'back');
+  const row = document.getElementById('flagExpCanvasPanelSidesRow');
+  if (row) row.style.display = p1Face === 'back' ? '' : 'none';
+  const check = document.getElementById('flagExpCanvasPanelSidesCheck');
+  if (check) check.checked = !S.separateBack;
 }
 
 function refreshFlagExpanded() {
   const preview = document.getElementById('flagExpPreview');
   if (!preview) return;
+  syncP1FaceUI();
   const flag = getFlag();
+  syncWrapPole(document.getElementById('flagExpZoomWrap'), flag, p1Face, S.colors);
   if (!flag) {
     preview.innerHTML = '<div class="flag-exp-placeholder">Select a style →</div>';
     return;
   }
-  preview.innerHTML = `<svg viewBox="${flag.viewBox || '0 0 7519 4669'}" width="100%" height="100%">${flag.svgContent}</svg>`;
+  const face = p1Face;
+  const src = flagFaceSource(flag, face);
+  preview.style.aspectRatio = src.v2 ? '6000 / 4050' : '';
+  requestAnimationFrame(flagExpCanvas.refit); // the panel's shape follows the flag (20:13.5 for v2)
+
+  if (face === 'back' && !S.separateBack) {
+    // Read-only reflection of the front through the canonical renderer, so it
+    // matches what variations/export produce — nothing here to edit.
+    clearFlagTextOverlays('flagExpPreview');
+    clearFlagImageOverlays('flagExpPreview');
+    preview.innerHTML = '';
+    const mirror = makeSvg([], '100%', '100%', 'back', true, flag, S.colors, S.textLayers || [], null, S.imageLayers || [], printOpts(flag));
+    if (mirror) {
+      preview.appendChild(mirror);
+      if (S.gsTag) {
+        const keyZone = tagKeyZoneOf(flag);
+        showGsTagVariant(mirror, 'back', S.gsTagMode, resolveColors(S.colors, flag)[keyZone], src.v2);
+      }
+    }
+    return;
+  }
+
+  // Legacy templates have one artboard, mirrored for the back; v2 print
+  // frames carry a dedicated back artboard (flagFaceSource) with no mirror.
+  const content = (face === 'back' && !src.v2)
+    ? `<g transform="translate(${src.viewBox.split(' ')[2]},0) scale(-1,1)">${src.svgContent}</g>`
+    : src.svgContent;
+  preview.innerHTML = `<svg viewBox="${src.viewBox}" width="100%" height="100%">${content}</svg>`;
   const svg = preview.querySelector('svg');
   applyColors(svg, S.colors, flag.noColors, flag);
   if (S.gsTag) {
-    const keyZone = flag.tagKeyZone || 'zone-primary';
-    showGsTagVariant(svg, 'front', S.gsTagMode, resolveColors(S.colors, flag)[keyZone]);
+    const keyZone = tagKeyZoneOf(flag);
+    showGsTagVariant(svg, face, S.gsTagMode, resolveColors(S.colors, flag)[keyZone], src.v2);
+  }
+  if (face === 'back') {
+    renderFlagTextOverlays('flagExpPreview', S.backTextLayers, onFlagLayersChange);
+    renderFlagImageOverlays('flagExpPreview', S.backImageLayers, onFlagLayersChange);
+    return;
   }
   // Template-level Text/Images layers (Step 1's own rows — see the submenu
   // below) — rebuilt on top of the fresh SVG every time it's replaced above,
@@ -129,9 +240,80 @@ function refreshFlagExpanded() {
 
 function onFlagLayersChange() { markDirty(); }
 
+// Dropping a library logo from the sidebar tile onto the step-1 canvas adds
+// it as an image layer on the face being edited.
+{
+  const panel = document.getElementById('flagExpCanvasPanel');
+  panel?.addEventListener('dragover', e => {
+    if (_dragLogoId) e.preventDefault();
+  });
+  panel?.addEventListener('drop', e => {
+    const logo = _dragLogoId && S.library.find(l => l.id === _dragLogoId);
+    if (!logo || logo.uploading) return;
+    e.preventDefault();
+    setDragLogoId(null);
+    const preview = document.getElementById('flagExpPreview');
+    const r = preview?.getBoundingClientRect();
+    const pct = (v, lo, size) => r && size ? Math.min(100, Math.max(0, ((v - lo) / size) * 100)) : 50;
+    p1EditableLayers().images.push({
+      id: 'fil-' + Date.now(), src: logo.src, storagePath: logo.storagePath,
+      x: pct(e.clientX, r?.left, r?.width), y: pct(e.clientY, r?.top, r?.height), w: 30,
+    });
+    renderFlagImageOverlays('flagExpPreview', p1EditableLayers().images, onFlagLayersChange);
+    markDirty();
+  });
+}
+
+// Layout choice for a style that ships several vendor print layouts (see
+// flags/print-manifest.js). Only offered to projects on the v2 print spec -
+// legacy projects have one artboard per style. A layout is its own flag id, so
+// switching just swaps S.flagId (colors/logos carry over; zones the new layout
+// lacks simply stop being drawn).
+function renderFlagLayoutRow() {
+  const host = document.getElementById('flagLayoutSection');
+  if (!host) return;
+  const flag = getFlag();
+  const layouts = flag?.layouts;
+  if (!layouts || layouts.length < 2 || !usesV2Print({ print_spec: S.printSpec }, flag)) {
+    host.style.display = 'none';
+    return;
+  }
+  host.style.display = '';
+  host.querySelector('.gs-mode-wrap').innerHTML = layouts.map(l =>
+    `<button class="gs-mode-btn${l.flagId === S.flagId ? ' active' : ''}" onclick="pickFlagLayout('${l.flagId}')">${l.label}</button>`).join('');
+}
+
+// A vendor layout with a border starts with a black one (the "Black" swatch)
+// rather than matching the primary - a border that blends into the field would
+// hide the very thing the layout adds. Only applies while the border is still
+// on its untouched "match" default (no zone-border key), so a color the user
+// already picked is never overridden. Also run once on load (see loadProject).
+function defaultLayoutBorder(flag) {
+  if (!flag?.printStyle && !flag?.layoutOf) return;
+  if ((flag.layouts?.length || 0) < 2) return; // a single-layout style's border is part of its design, not a layout choice
+  if (!usesV2Print({ print_spec: S.printSpec }, flag)) return;
+  if (!flag.colorZones?.some(z => z.id === 'zone-border')) return;
+  if ('zone-border' in S.colors) return;
+  S.colors['zone-border'] = '#111110';
+}
+
+window.pickFlagLayout = function (flagId) {
+  if (S.flagId === flagId) return;
+  S.flagId = flagId;
+  defaultLayoutBorder(getFlag());
+  renderFlagLayoutRow();
+  refreshFlagPreviews();
+  refreshFlagExpanded();
+  renderP1Colors();
+  checkStep1();
+  syncSidebar();
+  markDirty();
+};
+
 window.pickFlag = function (id) {
-  if (S.flagId === id) return;
+  if (baseFlagId(S.flagId) === id) return;
   S.flagId = id;
+  defaultLayoutBorder(getFlag());
   S.logoLayout = 'single';
   showFlagExpanded(id);
   renderP1Colors();
@@ -140,7 +322,7 @@ window.pickFlag = function (id) {
   markDirty();
 };
 
-// ── Step 1 submenu (Style & Colors / Hole Numbers / Text / Images) ─────────
+// ── Step 1 submenu (Style & Colors / Hole Numbers / Text) ─────────
 // Mirrors the row-list + drill-in section pattern in hs/design.js
 // (renderDesignMenuList/renderDesignSection), reimplemented locally rather
 // than imported since the two designers' sections have no shared logic —
@@ -190,7 +372,6 @@ function renderFlagP1MenuList() {
     flagP1MenuRow('colors', 'Style & Colors', colorHint, 'fa-palette'),
     flagP1MenuRow('holeNumbers', 'Hole Numbers', 'Coming soon', 'fa-hashtag'),
     flagP1AddRow('Text', 'addFlagP1Text()', 'fa-font'),
-    flagP1AddRow('Images', 'addFlagP1Image()', 'fa-image'),
   ];
   return `<div class="hs-menu-list">${rows.join('')}</div>`;
 }
@@ -201,11 +382,18 @@ function renderFlagP1MenuList() {
 // (flags/text-layers.js, flags/image-layers.js) are what gets edited next,
 // same as hs/design.js's addTextLayer()/addTplImage().
 window.addFlagP1Text = function () {
-  addFlagTextLayer(S.textLayers, 'flagExpPreview', onFlagLayersChange);
+  addFlagTextLayer(p1EditableLayers().text, 'flagExpPreview', onFlagLayersChange);
 };
-window.addFlagP1Image = function () {
-  addFlagImageLayer(S.imageLayers, 'flagExpPreview', onFlagLayersChange);
-};
+
+// The layer lists the canvas is currently editing. The mirrored back is a
+// read-only view, so adding there drops back to the front (same as the
+// Variations editor's add menu).
+function p1EditableLayers() {
+  if (p1Face === 'back' && !S.separateBack) window.setP1Face('front');
+  return p1Face === 'back'
+    ? { text: S.backTextLayers, images: S.backImageLayers }
+    : { text: S.textLayers, images: S.imageLayers };
+}
 
 function buildColorsSection() {
   return `
@@ -225,6 +413,10 @@ function buildColorsSection() {
           <button class="gs-mode-btn" id="gsMode-light" onclick="setGsTagMode('light')">White</button>
         </div>
       </div>
+    </div>
+    <div id="flagLayoutSection" class="p1-section p1-section-divided" style="display:none">
+      <div class="zlabel">Layout</div>
+      <div class="gs-mode-wrap" style="display:flex;flex-wrap:wrap"></div>
     </div>
     <div id="flagStylesSection" class="p1-section">
       <div class="zlabel">Flag Styles</div>
@@ -254,6 +446,7 @@ function renderFlagP1Controls() {
   body.classList.add('hs-controls-enter');
   if (p1Menu === 'colors') {
     renderFlagGrid();
+    renderFlagLayoutRow();
     renderP1Colors();
     syncGsTagUI();
     refreshFlagPreviews();
@@ -355,14 +548,23 @@ function syncGsTagUI() {
 }
 
 function refreshFlagPreviews() {
-  FLAGS.forEach(f => {
+  LISTED_FLAGS.forEach(f => {
     const card = document.getElementById('fc-' + f.id);
     if (!card) return;
+    const host = card.querySelector('.flag-card-preview');
+    // v2 projects show the new front view (with pole); the selected style's card
+    // follows the chosen layout, the others show their default.
+    const cardFlag = baseFlagId(S.flagId) === f.id ? (getFlag() || f) : f;
+    if (host && paintFlagCardV2(host, cardFlag, S.colors)) return;
+    if (host?.classList.contains('v2')) {
+      host.classList.remove('v2');
+      host.innerHTML = `<svg viewBox="${f.viewBox || '0 0 7519 4669'}" preserveAspectRatio="xMidYMid meet">${f.svgContent}</svg>`;
+    }
     const svg = card.querySelector('svg');
     if (!svg) return;
     applyColors(svg, S.colors, f.noColors, f);
     if (S.gsTag) {
-      const keyZone = f.tagKeyZone || 'zone-primary';
+      const keyZone = tagKeyZoneOf(f);
       showGsTagVariant(svg, 'front', S.gsTagMode, resolveColors(S.colors, f)[keyZone]);
     }
   });
@@ -472,12 +674,13 @@ function refreshColorPrev() {
   if (!flag) return;
   const box = document.getElementById('colorPrev');
   if (!box) return;
-  box.innerHTML = `<svg viewBox="${flag.viewBox || '0 0 7519 4669'}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${flag.svgContent}</svg>`;
+  const src = flagFaceSource(flag, 'front');
+  box.innerHTML = `<svg viewBox="${src.viewBox}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${src.svgContent}</svg>`;
   const svg = box.querySelector('svg');
   applyColors(svg, S.colors, flag.noColors, flag);
   if (S.gsTag) {
-    const keyZone = flag.tagKeyZone || 'zone-primary';
-    showGsTagVariant(svg, 'front', S.gsTagMode, resolveColors(S.colors, flag)[keyZone]);
+    const keyZone = tagKeyZoneOf(flag);
+    showGsTagVariant(svg, 'front', S.gsTagMode, resolveColors(S.colors, flag)[keyZone], src.v2);
   }
   refreshFlagExpanded();
 }
@@ -551,9 +754,9 @@ window.handleUpload = async function (e) {
 
 function renderLib() {
   const g = document.getElementById('libGrid');
-  if (!g) return;
-  if (!S.library.length) { g.innerHTML = '<div class="lib-empty">No logos yet</div>'; return; }
-  g.innerHTML = S.library.map(l => `
+  if (g) {
+    if (!S.library.length) g.innerHTML = '<div class="lib-empty">No logos yet</div>';
+    else g.innerHTML = S.library.map(l => `
     <div class="lib-item ${l.uploading ? 'uploading' : ''}" id="li-${l.id}" draggable="${!l.uploading}"
       ondragstart="dragStart(event,'${l.id}')" ondragend="dragEnd('${l.id}')">
       ${logoThumbHtml(l.src, l.name)}
@@ -561,6 +764,25 @@ function renderLib() {
       ${l.uploading ? '' : `<button class="lib-dl" onclick="downloadLibItem('${l.id}')"><i class="fa-solid fa-download" aria-hidden="true"></i></button>`}
       ${l.uploading ? '' : `<button class="lib-del" onclick="delLogo('${l.id}')"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>`}
     </div>`).join('');
+  }
+  renderLogosTile();
+}
+
+// Step 1's sidebar logos tile — same tray as the Variations step. Hidden
+// until at least one logo has been uploaded.
+function renderLogosTile() {
+  const tile = document.getElementById('sidebarLogosTile');
+  if (!tile) return;
+  if (!S.library.length) { tile.style.display = 'none'; tile.innerHTML = ''; return; }
+  renderLogosTileShell('Logos', 'designLogoStrip', S.projectId);
+  renderLogoTray(document.getElementById('designLogoStrip'), {
+    library: S.library,
+    fileInputId: 'designLogoFile',
+    accept: 'image/*,.pdf,.ai,.eps',
+    onUpload: files => window.handleUpload({ target: { files, value: '' } }),
+    onDragStart: l => setDragLogoId(l.id),
+    onDelete: l => window.delLogo(l.id),
+  });
 }
 
 window.downloadLibItem = function (id) {
@@ -578,7 +800,9 @@ window.delLogo = async function (id) {
   });
   hideZoneToolbar();
   renderLib();
-  renderDropZones('baseWrap', 'baseSvg', S.baseAssignment);
+  S.backLogos = (S.backLogos || []).filter(l => l.logoId !== id);
+  if (S.separateBack) renderDropZones('baseWrap', 'baseSvg', S.backLogos, 'back', markDirty, null, null, null, { text: S.backTextLayers, images: S.backImageLayers });
+  else renderDropZones('baseWrap', 'baseSvg', S.baseAssignment);
   syncSidebar();
   if (logo?.storagePath) {
     try {
@@ -603,10 +827,10 @@ function setupLibrary() {
     wrapId: 'baseZoomWrap',
     zoomValueId: 'baseZoomValue',
     zoomResetId: 'baseZoomReset',
-    aspect: 7519 / 4669,
+    aspect: () => canvasAspect(getFlag()),
     getZoom: () => _baseZoom,
     setZoom: v => { _baseZoom = v; },
-    headerName: 'Base assignment',
+    headerName: S.separateBack ? 'Template back' : 'Base assignment',
     onApply: () => {
       const wrap = document.getElementById('baseWrap');
       if (wrap) refreshImageBoxClips(wrap);
@@ -620,7 +844,13 @@ function setupLibrary() {
   svg.innerHTML = flag.svgContent;
   applyColors(svg, S.colors, flag.noColors, flag);
   renderLib();
-  renderDropZones('baseWrap', 'baseSvg', [], 'front', () => {});
+  if (S.separateBack) {
+    // The template back's logos are placed here — this is the step with the
+    // logo library. Front logos stay per-variation (Variations step).
+    renderDropZones('baseWrap', 'baseSvg', S.backLogos, 'back', markDirty, null, null, null, { text: S.backTextLayers, images: S.backImageLayers });
+  } else {
+    renderDropZones('baseWrap', 'baseSvg', [], 'front', () => {});
+  }
 }
 
 // ── Sidebar ────────────────────────────────────────────────
@@ -668,10 +898,12 @@ window.goToVariations = async function () {
 paintCachedProjectName(new URLSearchParams(window.location.search).get('project'));
 renderSidebar(document.getElementById('sidebar'), {
   activeStep: 1,
+  logosTile: true,
+  projectId: new URLSearchParams(window.location.search).get('project'),
   steps: [
-    { id: 'navDesign', label: 'Design', desc: 'Style, colors & logos' },
+    { id: 'navDesign', label: 'Template', desc: 'Style, colors & logos' },
     {
-      id: 'navVariations', label: 'Variations', desc: 'Build combinations',
+      id: 'navVariations', label: 'Flags', desc: 'Build combinations',
       onClick: async () => {
         const p = new URLSearchParams(window.location.search).get('project');
         if (!p) return;
@@ -693,12 +925,12 @@ renderSidebar(document.getElementById('sidebar'), {
 document.getElementById('sidebarPanelHeader').innerHTML = `
   <div class="p1-header hs-panel-header">
     <div>
-      <div class="ptitle">Design style</div>
+      <div class="ptitle">Template</div>
       <div class="psub">Pick your colors, then select a flag style.</div>
     </div>
     <div class="p1-header-actions">
       <span class="s1hint-text" id="s1hint">Pick colors and select a style</span>
-      <button class="btn primary" id="s1next" disabled onclick="goToVariations()">Next: Variations <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+      <button class="btn primary" id="s1next" disabled onclick="goToVariations()">Next: Flags <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
       <button class="btn sm save-draft-btn" id="saveDraftBtn" onclick="saveDraft()" title="Save draft" style="display:none">Save draft</button>
     </div>
   </div>`;
@@ -733,6 +965,8 @@ if (_urlProject) {
     S.projectId = project.id;
     S.projectName = project.name || '';
     S.library = logos;
+    renderLib();
+    S.printSpec = flagCfg ? (flagCfg.variations?.printSpec ?? 'legacy') : newProjectPrintSpec(); // pinned per project; no row yet = brand-new project
     if (flagCfg) {
       S.flagId = flagCfg.flag_id;
       S.colors = (flagCfg.colors && Object.keys(flagCfg.colors).length) ? flagCfg.colors : { ...DEFAULT_COLORS };
@@ -746,6 +980,7 @@ if (_urlProject) {
       S.gsTagColor = Array.isArray(varData) ? '#ffffff' : (varData.gsTagColor ?? '#ffffff');
       S.textLayers = Array.isArray(varData) ? [] : (varData.textLayers || []);
       S.imageLayers = Array.isArray(varData) ? [] : (varData.imageLayers || []);
+      loadTemplateBack(varData);
       S.baseAssignment = flagCfg.base_assignment || {};
       S.activeVarId = S.variations[0]?.id || null;
       const flag = getFlag();
@@ -781,6 +1016,9 @@ if (_urlProject) {
       const templateParam = new URLSearchParams(window.location.search).get('template');
       S.flagId = (templateParam && FLAGS.some(f => f.id === templateParam)) ? templateParam : 'plain';
     }
+    // Projects saved before layouts defaulted to a black border (or brand-new
+    // ones) get it here; it's in memory only until the next save.
+    defaultLayoutBorder(getFlag());
     showFlagExpanded(S.flagId);
     renderFlagP1Controls();
     checkStep1();

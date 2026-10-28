@@ -39,10 +39,10 @@ export function wrapEmailHtml(opts: { title: string; bodyHtml: string }): string
 </html>`;
 }
 
-export function ctaButton(href: string, label: string): string {
+export function ctaButton(href: string, label: string, arrow = true): string {
   return `<div style="text-align:center;margin:32px 0;">
         <a href="${href}" style="display:inline-block;background:#1a1a2e;color:#fff;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:15px;font-weight:600;">
-          ${label} &rarr;
+          ${label}${arrow ? ' &rarr;' : ''}
         </a>
       </div>`;
 }

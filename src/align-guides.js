@@ -17,11 +17,17 @@ export function ensureAlignGuides(container) {
 // Shows (or hides) one axis's guide line independently of the other. `axis`
 // is 'v' (vertical line, positioned via `valuePct` as a left offset) or 'h'
 // (horizontal line, positioned via `valuePct` as a top offset).
-export function setAlignGuide(container, axis, active, valuePct) {
+// `extent` ({ start, end }, percent of the container along the line's own
+// axis) confines the line to a sub-region (e.g. a logo placement zone)
+// instead of spanning the whole container.
+export function setAlignGuide(container, axis, active, valuePct, extent) {
   const { v, h } = ensureAlignGuides(container);
   const el = axis === 'v' ? v : h;
   if (active) {
     el.style[axis === 'v' ? 'left' : 'top'] = valuePct;
+    const [a, b] = axis === 'v' ? ['top', 'bottom'] : ['left', 'right'];
+    el.style[a] = extent ? extent.start + '%' : '';
+    el.style[b] = extent ? (100 - extent.end) + '%' : '';
     el.classList.add('show');
   } else {
     el.classList.remove('show');
