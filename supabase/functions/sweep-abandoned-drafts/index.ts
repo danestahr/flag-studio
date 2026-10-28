@@ -9,11 +9,11 @@ const APP_URL = Deno.env.get('APP_URL')!;
 const FROM_EMAIL = 'design@gsds.space';
 const FROM_NAME = 'Design Studio';
 
-// Warn at 53 days of inactivity, delete 7 days after that if still
-// untouched - a 60-day total window. Only pg_cron calls this (see the
+// Warn at 358 days of inactivity, delete 7 days after that if still
+// untouched - a 365-day (1 year) total window. Only pg_cron calls this (see the
 // cron.schedule() entries in supabase/migrations), authenticated with the
 // service role key, so there's no user-facing auth to check here.
-const WARN_AFTER_DAYS = 53;
+const WARN_AFTER_DAYS = 358;
 const DELETE_AFTER_WARN_DAYS = 7;
 
 function esc(s: unknown): string {
