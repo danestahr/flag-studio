@@ -861,22 +861,25 @@ export async function currentFlagDesignHash(projectId) {
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function sendPrestigeOrder(projectId, projectName, zipBlob, { prepareOnly = false, designHash = null } = {}) {
+export async function sendPrestigeOrder(projectId, projectName, zipBlob, { prepareOnly = false, designHash = null, summaryPdf = null } = {}) {
   const params = new URLSearchParams({ projectId, projectName, origin: window.location.origin, ...TEST_TO });
   if (prepareOnly) params.set('prepare', '1');
   if (designHash) params.set('designHash', designHash);
   const url = `${SUPABASE_URL}/functions/v1/send-prestige-order?${params}`;
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || SUPABASE_ANON_KEY;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${token}`,
-    },
-    body: zipBlob,
-  });
+  // With a summary PDF the body is multipart (zip + summary, which the email
+  // attaches); otherwise the raw zip, as before.
+  let body = zipBlob;
+  const headers = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` };
+  if (summaryPdf) {
+    body = new FormData();
+    body.append('zip', zipBlob, 'order.zip');
+    body.append('summary', new Blob([summaryPdf], { type: 'application/pdf' }), 'Order Summary.pdf');
+  } else {
+    headers['Content-Type'] = 'application/octet-stream';
+  }
+  const res = await fetch(url, { method: 'POST', headers, body });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Prestige send failed (${res.status}): ${text}`);

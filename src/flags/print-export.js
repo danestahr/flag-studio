@@ -376,7 +376,7 @@ export async function buildFlagsPrintZip(setStatus = () => {}) {
   });
   zip.file('!_Order Summary.pdf', summaryPdf); // "!_" sorts it (and !_Logos) to the top
   setStatus('Zipping…');
-  return { zipBlob: await zip.generateAsync({ type: 'blob' }), flag };
+  return { zipBlob: await zip.generateAsync({ type: 'blob' }), summaryPdf, flag };
 }
 
 // ── v2 vendor print sheets (see flags/print-spec.js) ─────────────────────
