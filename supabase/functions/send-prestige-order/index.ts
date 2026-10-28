@@ -129,6 +129,8 @@ serve(async (req) => {
         from: { email: FROM_EMAIL, name: FROM_NAME },
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         tracking_settings: { click_tracking: { enable: false } },
+        // Echoed back on Event Webhook events so sendgrid-events can alert on a bounce.
+        custom_args: { kind: 'prestige-order', project_id: projectId },
         subject,
         content: [
           { type: 'text/plain', value: text },
