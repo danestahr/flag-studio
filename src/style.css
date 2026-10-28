@@ -36,11 +36,24 @@
      track. Not theme-branched, since the white thumb doesn't change either. */
   --toggle-on: #0E7490;
 
+
+  /* Frosted side panels (.sidebar-tile, .hs-design-controls): follow the theme
+     — light glass with dark text in light mode, dark glass with light text in
+     dark mode. Derived from --black/--white so the dark-mode blocks below
+     retheme them with no extra overrides. */
+  --tile-bg: color-mix(in srgb, var(--white) 80%, transparent);
+  --tile-fg: var(--black);
+  --tile-fg-2: color-mix(in srgb, var(--black) 70%, transparent);
+  --tile-fg-3: color-mix(in srgb, var(--black) 55%, transparent);
+  --tile-line: color-mix(in srgb, var(--black) 30%, transparent);
+  --tile-line-soft: color-mix(in srgb, var(--black) 14%, transparent);
+  --tile-hover: color-mix(in srgb, var(--black) 8%, transparent);
+
   --r: 10px; --rl: 16px;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --black: #F2F2EE; --white: #1E1E1B;
     --gray-50: #171714; --gray-100: #2A2A26; --gray-200: #3B3B36; --gray-300: #4D4D46;
     --gray-400: #8C8C81; --gray-500: #A3A397; --gray-600: #B8B8AB; --gray-700: #CBCBBE;
@@ -50,6 +63,17 @@
     --accent-tint: rgba(255,255,255,.08);
   }
 }
+:root[data-theme="dark"] {
+  --black: #F2F2EE; --white: #1E1E1B;
+  --gray-50: #171714; --gray-100: #2A2A26; --gray-200: #3B3B36; --gray-300: #4D4D46;
+  --gray-400: #8C8C81; --gray-500: #A3A397; --gray-600: #B8B8AB; --gray-700: #CBCBBE;
+  --gray-800: #DEDED0; --gray-900: #EDEDE0;
+
+  --accent: #EDEDEA; --accent-hover: #FFFFFF; --accent-contrast: #171714;
+  --accent-tint: rgba(255,255,255,.08);
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 body { font-family:'Proxima Nova', 'DM Sans', sans-serif; background:var(--gray-50); color:var(--black); min-height:100vh; font-size:15px; line-height:1.6; }
 
 header { background:var(--chrome-bg); padding:0 1.5rem; height:80px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:100; }
@@ -89,12 +113,13 @@ header { background:var(--chrome-bg); padding:0 1.5rem; height:80px; display:fle
    overflow:hidden is required here (not just border-radius) — backdrop-
    filter doesn't reliably respect border-radius clipping on its own, and
    without it the blurred backdrop shows square past the rounded corners.
-   Always the fixed dark chrome tone (not the theme-branched --white) since
-   its light-text overrides below (.hs-panel-header .ptitle/.psub/.btn,
-   .step-label) assume a dark backdrop in both themes. Collapsing (see
+   Themed via the --tile-* tokens (light glass/dark text in light mode, dark
+   glass/light text in dark mode) — the text overrides below
+   (.hs-panel-header .ptitle/.psub/.btn, .step-label) use those same
+   tokens, never hardcoded white. Collapsing (see
    .sidebar.collapsed below) is just a narrower version of this same tile,
    not a different design. */
-.sidebar-tile { width:100%; background:rgba(35,35,35,.72); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,.12); border-radius:var(--rl); overflow:hidden; display:flex; flex-direction:column; min-width:0; }
+.sidebar-tile { width:100%; background:var(--tile-bg);color:var(--tile-fg); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); border:1px solid var(--tile-line-soft); border-radius:var(--rl); overflow:hidden; display:flex; flex-direction:column; min-width:0; }
 /* .main no longer scrolls — it's exactly one viewport tall and clips.
    Scrolling is confined to individual components inside each panel (the
    canvas/list side-panels below, sized live by fitCanvas/fitSidePanel in
@@ -111,28 +136,28 @@ header { background:var(--chrome-bg); padding:0 1.5rem; height:80px; display:fle
    shrink to icon-only width. */
 .steps-nav { width:max-content; flex:0 0 auto; padding:1.5rem; display:flex; flex-direction:column; align-items:stretch; gap:0; transition:padding .25s ease; }
 .step-item { display:flex; flex-direction:column; align-items:flex-start; gap:6px; width:100%; min-width:0; box-sizing:border-box; padding:8px 16px; border-radius:var(--r); cursor:pointer; transition:background .15s; }
-.step-item:hover { background:rgba(255,255,255,.08); }
+.step-item:hover { background:var(--tile-hover); }
 .step-num { width:28px; height:28px; border-radius:50%; border:1.5px solid var(--gray-200); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:500; color:var(--gray-400); flex-shrink:0; transition:all .2s; }
 .step-item.active .step-num { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
-.step-item.done .step-num { background:transparent; border-color:rgba(255,255,255,.9); color:rgba(255,255,255,.9); font-size:10px; }
+.step-item.done .step-num { background:transparent; border-color:var(--tile-fg); color:var(--tile-fg); font-size:10px; }
 .step-item.done .step-num::before { font-family:"Font Awesome 7 Free"; font-weight:900; content:"\f00c"; }
 .step-item.done .step-num span { display:none; }
-.step-label { font-size:11px; font-weight:500; color:rgba(255,255,255,.5); text-align:left; line-height:1.25; }
-.step-item.active .step-label { color:var(--chrome-text); font-weight:700; }
-.step-item.done .step-label { color:rgba(255,255,255,.5); }
+.step-label { font-size:11px; font-weight:500; color:var(--tile-fg-3); text-align:left; line-height:1.25; }
+.step-item.active .step-label { color:var(--tile-fg); font-weight:700; }
+.step-item.done .step-label { color:var(--tile-fg-3); }
 /* Still the active step (you're looking at it) but also complete (e.g. sent
    to print) - keep the accent circle/highlighted label of .active, just swap
    in .done's checkmark instead of the step number. */
 .step-item.active.done .step-num { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
-.step-item.active.done .step-label { color:var(--chrome-text); font-weight:700; }
+.step-item.active.done .step-label { color:var(--tile-fg); font-weight:700; }
 /* Only surfaced when the sidebar is collapsed (see .sidebar.collapsed
    .step-forward-btn below) — with the labels and #sidebarPanelHeader's
    "Save & Continue"/"Gallery & export" action hidden in that state, this is
    the only way left to advance without expanding the rail back out. Reads
    the currently-active .step-item at click time (not a captured index) so
    it stays correct across goStep()'s direct active/done class toggling. */
-.step-forward-btn { display:none; width:28px; height:28px; margin-top:8px; border-radius:50%; border:1.5px solid rgba(255,255,255,.9); background:transparent; color:rgba(255,255,255,.9); align-items:center; justify-content:center; font-size:12px; cursor:pointer; transition:background .15s; }
-.step-forward-btn:hover { background:rgba(255,255,255,.12); }
+.step-forward-btn { display:none; width:28px; height:28px; margin-top:8px; border-radius:50%; border:1.5px solid var(--tile-fg); background:transparent; color:var(--tile-fg); align-items:center; justify-content:center; font-size:12px; cursor:pointer; transition:background .15s; }
+.step-forward-btn:hover { background:var(--tile-hover); }
 .sdivider { height:1px; background:var(--gray-100); margin:1rem 1.5rem; }
 
 /* A sibling of .sidebar-tile (not nested inside it), positioned via
@@ -151,8 +176,8 @@ header { background:var(--chrome-bg); padding:0 1.5rem; height:80px; display:fle
 .sidebar-bar { display:flex; align-items:center; gap:10px; padding:1rem 1.5rem 0; }
 .sidebar-collapse-btn { width:30px; height:30px; flex:0 0 auto; border-radius:50%; border:1.5px solid var(--gray-200); background:var(--white); color:var(--gray-400); display:flex; align-items:center; justify-content:center; font-size:12px; cursor:pointer; transition:all .15s; }
 .sidebar-collapse-btn:hover { background:var(--gray-50); color:var(--gray-600); }
-.sidebar-overview-link { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:var(--r); font-size:12px; font-weight:500; color:rgba(255,255,255,.7); text-decoration:none; transition:background .15s,color .15s; }
-.sidebar-overview-link:hover { background:rgba(255,255,255,.08); color:var(--chrome-text); }
+.sidebar-overview-link { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:var(--r); font-size:12px; font-weight:500; color:var(--tile-fg-2); text-decoration:none; transition:background .15s,color .15s; }
+.sidebar-overview-link:hover { background:var(--tile-hover); color:var(--tile-fg); }
 .sidebar.collapsed .sidebar-bar { flex-direction:column; padding:1rem 1rem 0; }
 .sidebar.collapsed .sidebar-overview-link span { display:none; }
 /* Collapsed: same floating, borderless-background, hugging card as
@@ -907,6 +932,12 @@ input[type=file] { display:none; }
 
 /* Share section */
 .share-section { border-top:1px solid var(--gray-100); padding-top:1rem; display:flex; flex-direction:column; gap:8px; }
+/* Publish and Status lead the sidebar, so they carry no top divider; Publish gets
+   a bottom one to set it apart from what follows. */
+#publishSection { border-top:0; padding-top:0; padding-bottom:1rem; border-bottom:1px solid var(--gray-100); }
+#statusSection { border-top:0; padding-top:0; }
+/* Transient status lines take no space (or flex gap) until they have text. */
+#expPrintStatus:empty, #prestigeStatus:empty, #publishStatus:empty { display:none; }
 .share-link-box { display:flex; gap:6px; }
 .share-link-input { flex:1; font-size:11px; border:1px solid var(--gray-200); border-radius:var(--r); padding:6px 10px; color:var(--gray-600); background:var(--gray-50); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; outline:none; }
 
@@ -963,12 +994,12 @@ input[type=file] { display:none; }
    counterpart (.cs-title) uses. */
 #sidebarLogosTile { padding:20px 24px; }
 .hslt-header { display:flex; align-items:center; justify-content:space-between; cursor:pointer; user-select:none; margin-bottom:10px; }
-.hslt-title { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.06em; color:rgba(255,255,255,.6); }
+.hslt-title { font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.06em; color:var(--tile-fg-2); }
 /* "Copy upload link" action in the header, next to .hslt-title — same
    light-on-dark treatment as .var-upload-btn below rather than the default
    .btn (built for light page backgrounds). */
-.hslt-link-btn { display:inline-flex; align-items:center; gap:5px; padding:0 9px; height:24px; border-radius:6px; border:1px solid rgba(255,255,255,.25); background:transparent; color:rgba(255,255,255,.7); font-family:inherit; font-size:11px; cursor:pointer; transition:border-color .15s, color .15s; }
-.hslt-link-btn:hover { border-color:rgba(255,255,255,.5); color:#fff; }
+.hslt-link-btn { display:inline-flex; align-items:center; gap:5px; padding:0 9px; height:24px; border-radius:6px; border:1px solid var(--tile-line); background:transparent; color:var(--tile-fg-2); font-family:inherit; font-size:11px; cursor:pointer; transition:border-color .15s, color .15s; }
+.hslt-link-btn:hover { border-color:var(--tile-fg-3); color:var(--tile-fg); }
 /* Expanded (default): a real multi-column grid — the tile is far wider than
    the old 104px rail column, so a single vertical stack would waste most of
    that width. Collapsed: back to a single-column vertical scroll list (not
@@ -988,9 +1019,9 @@ input[type=file] { display:none; }
    light-on-dark treatment as .hs-panel-header's overrides above — not a
    theme-branched token, since this tile's background never changes with
    the OS/browser theme either. */
-#sidebarLogosTile .var-lib-item { border-color:rgba(255,255,255,.2); }
-#sidebarLogosTile .var-lib-item:hover { border-color:rgba(255,255,255,.4); }
-#sidebarLogosTile .var-upload-btn { border-color:rgba(255,255,255,.25); color:rgba(255,255,255,.5); }
+#sidebarLogosTile .var-lib-item { border-color:var(--tile-line-soft); }
+#sidebarLogosTile .var-lib-item:hover { border-color:var(--tile-line); }
+#sidebarLogosTile .var-upload-btn { border-color:var(--tile-line); color:var(--tile-fg-3); }
 #sidebarLogosTile .var-upload-btn:hover { border-color:var(--accent-hover); color:var(--accent); }
 /* Placeholder shown in place of the thumbnail while a logo upload is in
    flight (see logo-tray.js) — reuses the same loading tile as the custom-
@@ -1036,12 +1067,12 @@ input[type=file] { display:none; }
    Master colors/Logo library steps, still on their normal light panel
    background), so those base rules stay untouched. */
 #sidebarPanelHeader { flex:1 1 auto; min-width:0; }
-.hs-panel-header { flex-direction:column; align-items:stretch; justify-content:center; position:static; padding:24px; margin:0; height:100%; box-sizing:border-box; }
-.hs-panel-header .ptitle { color:var(--chrome-text); }
-.hs-panel-header .psub { color:rgba(255,255,255,.6); }
-.hs-panel-header .btn:not(.primary) { color:var(--chrome-text); border-color:rgba(255,255,255,.35); }
-.hs-panel-header .btn:not(.primary):hover { background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.5); }
-.hs-panel-header .s1hint-text { color:rgba(255,255,255,.5); }
+.hs-panel-header { flex-direction:column; align-items:stretch; justify-content:center; position:static; padding:24px; margin:0; height:100%; box-sizing:border-box; background:transparent; }
+.hs-panel-header .ptitle { color:var(--tile-fg); }
+.hs-panel-header .psub { color:var(--tile-fg-2); }
+.hs-panel-header .btn:not(.primary) { color:var(--tile-fg); border-color:var(--tile-line); }
+.hs-panel-header .btn:not(.primary):hover { background:var(--tile-hover); border-color:var(--tile-fg-3); }
+.hs-panel-header .s1hint-text { color:var(--tile-fg-3); }
 .hs-panel-header .p1-header-actions { padding-top:.75rem; flex-wrap:wrap; }
 /* Only .hs-design-controls-body scrolls — .hs-panel-header above stays put
    outside that scroll region, so the scrollbar/scroll boundary only ever
@@ -1050,7 +1081,7 @@ input[type=file] { display:none; }
    closeHsMenuSection swap between the menu list and a drilled-into section
    — kept separate from .hs-panel-header above so those swaps never wipe out
    the header. */
-.hs-design-controls { position:absolute; top:0; right:0; bottom:0; z-index:10; width:320px; display:flex; flex-direction:column; gap:16px; min-height:0; margin:24px; padding:24px; background:rgba(35,35,35,.72); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,.12); border-radius:var(--rl); overflow:hidden; }
+.hs-design-controls { position:absolute; top:0; right:0; bottom:0; z-index:10; width:320px; display:flex; flex-direction:column; gap:16px; min-height:0; margin:24px; padding:24px; background:var(--tile-bg);color:var(--tile-fg); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); border:1px solid var(--tile-line-soft); border-radius:var(--rl); overflow:hidden; }
 .hs-design-controls-body { display:flex; flex-direction:column; gap:1rem; flex:1; min-height:0; overflow-y:auto; }
 /* Strips the canvas card's own border/background/padding for Steps 1 and 2,
    so the sign fills the whole preview column (fitCanvas still finds this
@@ -1148,7 +1179,7 @@ input[type=file] { display:none; }
    scrolls past it. Reuses .hs-design-controls' own dark-glass recipe (color
    + blur) rather than a solid fill, so it reads as part of that same card
    instead of a flat bar dropped on top of it. */
-.hs-menu-section-header { display:flex; flex-direction:column; align-items:flex-start; gap:6px; margin-bottom:2px; position:sticky; top:0; z-index:2; background:rgba(35,35,35,.72); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); padding-bottom:6px; }
+.hs-menu-section-header { display:flex; flex-direction:column; align-items:flex-start; gap:6px; margin-bottom:2px; position:sticky; top:0; z-index:2; background:var(--tile-bg); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); padding-bottom:6px; }
 .hs-menu-back { background:none; border:none; padding:4px 0; font-family:inherit; font-size:13px; font-weight:500; color:var(--gray-600); cursor:pointer; }
 .hs-menu-back:hover { color:var(--black); }
 .hs-menu-section-title { font-size:17px; font-weight:600; flex:1; }
@@ -1893,3 +1924,28 @@ input[type=file] { display:none; }
 .var-card-qty-stepper .qty-btn { flex:none; min-width:0; width:26px; height:26px; padding:0; border:none; border-radius:0; background:var(--white); font-size:10px; }
 .var-card-qty-stepper .qty-btn:hover { background:var(--gray-50); }
 .var-card-qty-stepper .var-qty-input { width:40px; }
+
+.flag-img-layer.selected { outline:1.5px solid var(--guides); }
+.flag-img-layer.selected .dz-resize { display:block; }
+
+/* Variation canvas while its template layers are the live, editable ones. */
+#varWrap.tpl-editing { outline:2px dashed var(--accent); outline-offset:-2px; }
+
+/* "Template is locked" notice when a logo is dropped on a locked face. */
+.dz-locked-notice { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.45); }
+.dz-locked-notice-box { display:flex; flex-direction:column; align-items:center; gap:12px; max-width:320px; padding:24px 28px; border-radius:12px; background:var(--gray-50); color:var(--gray-900); text-align:center; box-shadow:0 12px 40px rgba(0,0,0,.35); font-size:14px; }
+.dz-locked-notice-box > i { font-size:22px; color:var(--gray-500); }
+
+/* v2 flag pole beside a canvas (render.js syncWrapPole). Hangs just outside the
+   art box - 400/6000 of its width - so overlay positions keyed to the art box
+   are unaffected; canvas-panel's fit reserves the room as a margin. */
+.canvas-zoom-wrap { position:relative; }
+.flag-pole-dom { position:absolute; top:0; height:100%; width:6.6667%; pointer-events:none; }
+.flag-pole-dom.left { right:100%; }
+.flag-pole-dom.right { left:100%; transform:rotate(180deg); }
+.flag-pole-dom svg { display:block; width:100%; height:100%; }
+
+/* Style-picker card showing a v2 front view (render.js paintFlagCardV2): the
+   view is wider than the card's 4:3 box, so center it instead of stretching. */
+.flag-card-preview.v2 { display:flex; align-items:center; justify-content:center; }
+.flag-card-preview.v2 > div { width:100%; }

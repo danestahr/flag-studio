@@ -1,4 +1,5 @@
 import { getSession, signOut, supabase, claimMyProjects, getMyRole } from './supabase.js';
+import { createThemeToggle } from './theme.js';
 
 export async function requireAuth() {
   const session = await getSession();
@@ -134,6 +135,7 @@ function injectHeaderActions(session) {
     window.location.href = '/login';
   });
   wrap.appendChild(btn);
+  wrap.appendChild(createThemeToggle());
 
   header.appendChild(wrap);
   linkLogo('/');
