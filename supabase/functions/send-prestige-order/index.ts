@@ -118,19 +118,28 @@ serve(async (req) => {
     const isTest = IS_LOCAL_SUPABASE || url.searchParams.get('testTo')?.toLowerCase() === TEST_TO_EMAIL;
     const toEmail = isTest ? TEST_TO_EMAIL : TO_EMAIL;
     // Multipart (zip + summary PDF to attach) or a raw zip body.
-    let zipBuffer: ArrayBuffer;
+    // ?zipPath= (+ zipSize): the client already uploaded the zip straight to
+    // storage, so the function never holds it in memory (large zips blew the
+    // worker's resource limit). Otherwise the zip arrives in the body (legacy).
+    const clientZipPath = url.searchParams.get('zipPath');
+    const clientZipSize = Number(url.searchParams.get('zipSize')) || 0;
+    const prestigePrefix = `prestige/${projectId}/`;
+    const directUpload = !!clientZipPath && clientZipPath.startsWith(prestigePrefix)
+      && !clientZipPath.includes('..') && clientZipSize > 0;
+    let zipBuffer: ArrayBuffer = new ArrayBuffer(0);
     let summaryBuffer: ArrayBuffer | null = null;
     if ((req.headers.get('content-type') ?? '').startsWith('multipart/form-data')) {
       const form = await req.formData();
       const zipPart = form.get('zip');
       const summaryPart = form.get('summary');
-      zipBuffer = zipPart instanceof File ? await zipPart.arrayBuffer() : new ArrayBuffer(0);
+      if (!directUpload) zipBuffer = zipPart instanceof File ? await zipPart.arrayBuffer() : new ArrayBuffer(0);
       if (summaryPart instanceof File && summaryPart.size) summaryBuffer = await summaryPart.arrayBuffer();
-    } else {
+    } else if (!directUpload) {
       zipBuffer = await req.arrayBuffer();
     }
+    const zipBytes = directUpload ? clientZipSize : zipBuffer.byteLength;
 
-    if (!projectId || !zipBuffer.byteLength) {
+    if (!projectId || !zipBytes) {
       return new Response(JSON.stringify({ error: 'Missing zip or projectId' }), {
         status: 400, headers: { ...CORS, 'Content-Type': 'application/json' },
       });
@@ -143,21 +152,21 @@ serve(async (req) => {
     }
 
     // Store the zip privately and email a link to the landing page (no attachment).
-    const zipMb = zipBuffer.byteLength / 1048576;
+    const zipMb = zipBytes / 1048576;
     console.log(`prestige zip ${zipMb.toFixed(2)} MB project=${projectId}`);
 
     const rawName = projectName;
     const safeName = rawName.replace(/[^a-zA-Z0-9_\- ]/g, '_');
     const filename = `${safeName}-flags.zip`;
-    const path = `prestige/${projectId}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.zip`;
+    const path = directUpload ? clientZipPath! : `${prestigePrefix}${Date.now()}-${crypto.randomUUID().slice(0, 8)}.zip`;
     const storageHeaders = { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` };
 
-    const upRes = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, {
+    const upRes = directUpload ? null : await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, {
       method: 'POST',
       headers: { ...storageHeaders, 'Content-Type': 'application/zip' },
       body: zipBuffer,
     });
-    if (!upRes.ok) {
+    if (upRes && !upRes.ok) {
       const body = await upRes.text();
       console.error('storage upload failed', upRes.status, body);
       return new Response(JSON.stringify({ error: 'Storage upload failed', status: upRes.status, detail: body }), {
@@ -169,7 +178,7 @@ serve(async (req) => {
     const inHandIso = inHandDateIso(eventIso);
     const { variationCount, flagCount } = await flagCounts(projectId);
     const fields = {
-      storage_path: path, filename, size_bytes: zipBuffer.byteLength,
+      storage_path: path, filename, size_bytes: zipBytes,
       variation_count: variationCount, flag_count: flagCount, in_hand_date: inHandIso || null,
       design_hash: designHash,
     };

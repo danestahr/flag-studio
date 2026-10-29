@@ -865,16 +865,27 @@ export async function sendPrestigeOrder(projectId, projectName, zipBlob, { prepa
   const params = new URLSearchParams({ projectId, projectName, origin: window.location.origin, ...TEST_TO });
   if (prepareOnly) params.set('prepare', '1');
   if (designHash) params.set('designHash', designHash);
-  const url = `${SUPABASE_URL}/functions/v1/send-prestige-order?${params}`;
   const { data: { session } } = await supabase.auth.getSession();
+  // Upload the zip straight to storage (staff RLS) so the edge function never
+  // buffers it - big zips hit WORKER_LIMIT. Falls back to sending it in the body.
+  let zipSent = false;
+  if (session) {
+    const zipPath = `prestige/${projectId}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}.zip`;
+    const { error: upErr } = await supabase.storage
+      .from(PRINT_SHEETS_BUCKET)
+      .upload(zipPath, zipBlob, { upsert: false, contentType: 'application/zip' });
+    if (upErr) console.warn('Direct zip upload failed, sending via function', upErr);
+    else { params.set('zipPath', zipPath); params.set('zipSize', String(zipBlob.size)); zipSent = true; }
+  }
+  const url = `${SUPABASE_URL}/functions/v1/send-prestige-order?${params}`;
   const token = session?.access_token || SUPABASE_ANON_KEY;
   // With a summary PDF the body is multipart (zip + summary, which the email
   // attaches); otherwise the raw zip, as before.
-  let body = zipBlob;
+  let body = zipSent ? new Blob([]) : zipBlob;
   const headers = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` };
   if (summaryPdf) {
     body = new FormData();
-    body.append('zip', zipBlob, 'order.zip');
+    if (!zipSent) body.append('zip', zipBlob, 'order.zip');
     body.append('summary', new Blob([summaryPdf], { type: 'application/pdf' }), 'Order Summary.pdf');
   } else {
     headers['Content-Type'] = 'application/octet-stream';
