@@ -661,6 +661,12 @@ export async function upsertCustomerInfo(projectId, info) {
     .update({ customer_info: info, updated_at: new Date().toISOString() })
     .eq('id', projectId);
   if (error) throw error;
+  // order_intakes has no UPDATE policy; keep its event_date (which drives
+  // approval_deadline and the reminder emails) in step with the correction.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(info?.event_date || '')) {
+    const { error: syncErr } = await supabase.rpc('sync_intake_event_date', { p_project_id: projectId, p_event_date: info.event_date });
+    if (syncErr) throw syncErr;
+  }
   notifyDesignChanged(projectId);
 }
 
