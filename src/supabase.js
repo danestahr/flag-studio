@@ -163,7 +163,7 @@ export async function getMyRole(userId) {
 export async function listProjects({ userId, role, cursor = null, pageSize = 30, q = '' } = {}) {
   let query = supabase
     .from('projects')
-    .select(`id, name, status, updated_at, created_by, customer_info, profiles(email, first_name, last_name, role), order_intakes(contact_email, event_date), flag_config(id, flag_id, status), hole_sign_config(id, template_style, status)`)
+    .select(`id, name, status, updated_at, created_by, customer_info, profiles(email, first_name, last_name, role), order_intakes(contact_email, event_date, country), flag_config(id, flag_id, status), hole_sign_config(id, template_style, status)`)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(pageSize);

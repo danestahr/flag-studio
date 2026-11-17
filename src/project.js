@@ -9,7 +9,7 @@ import { FLAGS, LISTED_FLAGS } from './data.js';
 import { loadAllFlags } from './svgLoader.js';
 import { hydrateFlagStateForProject, buildFlagsPrintZip } from './flags/print-export.js';
 import { esc } from './dom-utils.js';
-import { calcEffectiveDeadline, formatDate } from './intake-shared.js';
+import { calcEffectiveDeadline, leadExtraFor, formatDate } from './intake-shared.js';
 import { confirmPrestigeSend } from './prestige-send-modal.js';
 import { STATUS_LABEL } from './status-labels.js';
 
@@ -199,10 +199,10 @@ function renderToolCards() {
 function rushBannerHtml(productType, status) {
   if (productType !== 'flags' || ['approved', 'sent_to_print'].includes(status)) return '';
   const eventIso = _project?.customer_info?.event_date || _intake?.event_date;
-  const dl = calcEffectiveDeadline(eventIso);
+  const dl = calcEffectiveDeadline(eventIso, new Date(), leadExtraFor(_project?.customer_info?.country || _intake?.country));
   if (!dl?.rush) return '';
   return `<div class="draft-card-meta"><span class="rush-badge">RUSH</span></div>
-    <div class="draft-card-meta">Approval due ${esc(dl.display)} for ${esc(formatDate(eventIso))} event</div>`;
+    <div class="draft-card-meta">Approval due ${esc(dl.display)} for ${esc(formatDate(eventIso))} delivery</div>`;
 }
 
 // Refreshes one design type's status block - called from init() and from
@@ -585,7 +585,7 @@ const FLAG_SETUP_OPTIONS = [
 const CUSTOMER_FIELDS = [
   { key: 'event_name', label: 'Event Name', type: 'text' },
   { key: 'course_name', label: 'Course Name', type: 'text' },
-  { key: 'event_date', label: 'Event Date', type: 'date' },
+  { key: 'event_date', label: 'Delivery Date', type: 'date' },
   { key: 'event_source_url', label: 'Event Site Link', type: 'url' },
   { key: 'contact_name', label: 'Contact Name', type: 'text' },
   { key: 'contact_email', label: 'Contact Email', type: 'email' },
@@ -601,7 +601,9 @@ const CUSTOMER_FIELDS = [
   { key: 'flag_colors', label: 'Flag Colors', type: 'colors-display' },
   { key: 'flag_setup', label: 'Flag Setup', type: 'select', options: FLAG_SETUP_OPTIONS },
   { key: 'flag_qty', label: 'Quantity', type: 'number' },
-  { key: 'design_notes', label: 'Design Description', type: 'textarea' },
+  { key: 'design_source', label: 'Design Source', type: 'select', options: [{ value: 'new', label: 'New design' }, { value: 'repeat', label: 'Reuse past design' }] },
+  { key: 'repeat_event_name', label: 'Reusing Design From', type: 'text' },
+  { key: 'design_notes', label: 'Design Description / Changes', type: 'textarea' },
   { key: 'front_design_notes', label: 'Front Design Notes', type: 'textarea' },
   { key: 'back_design_notes', label: 'Back Design Notes', type: 'textarea' },
 ];

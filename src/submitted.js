@@ -26,7 +26,7 @@ function renderConfirmation(ci) {
         <div class="confirm-title">Submitted for review!</div>
         <div class="confirm-sub">Your designer will be in touch once your proof is ready for review.</div>
         ${detailRows ? `<div class="confirm-detail">${detailRows}</div>` : ''}
-        ${ci.event_date ? `<div style="margin-top:1.25rem;text-align:left">${renderDeadlineCallout(ci.event_date)}</div>` : ''}
+        ${ci.event_date ? `<div style="margin-top:1.25rem;text-align:left">${renderDeadlineCallout(ci.event_date, ci.country)}</div>` : ''}
         <a class="btn primary" style="margin-top:1.5rem;justify-content:center" href="/project?project=${encodeURIComponent(pid)}">View project</a>
       </div>
     </div>`;

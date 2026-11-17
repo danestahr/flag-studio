@@ -75,9 +75,13 @@ function formatDate(iso: string): string {
 }
 
 // ── Approval deadline ─────────────────────────────────────
-// If the event falls on a Saturday, Sunday, or Monday, count from the preceding
-// Friday instead; the deadline is 17 days before that date.
-function calcApprovalDeadline(eventDateIso: string): { iso: string; display: string } | null {
+// eventDate is the customer's delivery date. If it falls on a Saturday, Sunday, or
+// Monday, count from the preceding Friday instead; the deadline is 17 days before that
+// date, 24 for Canada (an extra week for customs). Mirrors calcApprovalDeadline() in
+// src/intake-shared.js.
+function daysBefore(country?: string): number { return 17 + (country === 'CA' ? 7 : 0); }
+
+function calcApprovalDeadline(eventDateIso: string, country?: string): { iso: string; display: string } | null {
   if (!eventDateIso) return null;
   const [y, m, d] = eventDateIso.split('-').map(Number);
   const deadline = new Date(y, m - 1, d);
@@ -86,7 +90,7 @@ function calcApprovalDeadline(eventDateIso: string): { iso: string; display: str
   if (dow === 6) deadline.setDate(deadline.getDate() - 1);      // Sat → Fri
   else if (dow === 0) deadline.setDate(deadline.getDate() - 2); // Sun → Fri
   else if (dow === 1) deadline.setDate(deadline.getDate() - 3); // Mon → Fri
-  deadline.setDate(deadline.getDate() - 17);
+  deadline.setDate(deadline.getDate() - daysBefore(country));
 
   const iso = `${deadline.getFullYear()}-${String(deadline.getMonth() + 1).padStart(2, '0')}-${String(deadline.getDate()).padStart(2, '0')}`;
   const display = deadline.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
@@ -120,7 +124,7 @@ function formatSetup(s: string | undefined): string {
 }
 
 function buildHtml(p: OrderPayload): string {
-  const deadline = calcApprovalDeadline(p.eventDate);
+  const deadline = calcApprovalDeadline(p.eventDate, p.shipping?.country);
   const days = deadline ? daysUntil(deadline.iso) : null;
   const isUrgent = days !== null && days <= 21;
 
@@ -156,8 +160,8 @@ function buildHtml(p: OrderPayload): string {
       </p>
       <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:${deadlineColor};">${esc(deadline.display)}</p>
       <p style="margin:0;font-size:13px;color:#666;line-height:1.5;">
-        Final artwork must be approved by this date to avoid rush fees. This is 17 days before your event${
-          [0, 1, 6].includes(new Date(p.eventDate + 'T00:00:00').getDay()) ? ' (counted from the Friday before your event, since it falls on a weekend or Monday)' : ''
+        Final artwork must be approved by this date to avoid rush fees. This is ${daysBefore(p.shipping?.country)} days before your delivery date${
+          [0, 1, 6].includes(new Date(p.eventDate + 'T00:00:00').getDay()) ? ' (counted from the Friday before your delivery date, since it falls on a weekend or Monday)' : ''
         }.
       </p>
     </div>` : ''}
@@ -170,7 +174,7 @@ function buildHtml(p: OrderPayload): string {
       <tr><td colspan="2" style="padding:6px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Event Details</td></tr>
       ${row('Event Name', esc(p.eventName))}
       ${p.courseName ? row('Course Name', esc(p.courseName)) : ''}
-      ${row('Event Date', esc(formatDate(p.eventDate)))}
+      ${row('Delivery Date', esc(formatDate(p.eventDate)))}
       ${(() => {
         const url = safeUrl(p.eventUrl);
         return url ? row('Event URL', `<a href="${esc(url)}" style="color:#1a1a2e;">${esc(url)}</a>`) : '';
@@ -224,7 +228,7 @@ function buildHtml(p: OrderPayload): string {
 }
 
 function buildText(p: OrderPayload): string {
-  const deadline = calcApprovalDeadline(p.eventDate);
+  const deadline = calcApprovalDeadline(p.eventDate, p.shipping?.country);
   const lines = [
     `Hi ${p.contactName}, thanks for submitting your order!`,
     `We've received everything and will be in touch once your proof is ready for review.`,
@@ -234,7 +238,7 @@ function buildText(p: OrderPayload): string {
   if (deadline) {
     lines.push(
       `Artwork approval deadline: ${deadline.display}`,
-      `(17 days before your event; final artwork must be approved by this date to avoid rush fees.)`,
+      `(${daysBefore(p.shipping?.country)} days before your delivery date; final artwork must be approved by this date to avoid rush fees.)`,
       '',
     );
   }
@@ -243,7 +247,7 @@ function buildText(p: OrderPayload): string {
   lines.push('EVENT DETAILS');
   lines.push(`Event Name: ${p.eventName}`);
   if (p.courseName) lines.push(`Course Name: ${p.courseName}`);
-  lines.push(`Event Date: ${formatDate(p.eventDate)}`);
+  lines.push(`Delivery Date: ${formatDate(p.eventDate)}`);
   if (safeUrl(p.eventUrl)) lines.push(`Event URL: ${p.eventUrl!.trim()}`);
   lines.push('');
 

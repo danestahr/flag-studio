@@ -139,7 +139,7 @@ function buildHtml(p: OrderPayload & { safeProjectUrl: string }): string {
       <tr><td colspan="2" style="padding:6px 0 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#bbb;">Event Details</td></tr>
       ${row('Event Name', esc(p.eventName))}
       ${p.courseName ? row('Course Name', esc(p.courseName)) : ''}
-      ${row('Event Date', esc(formatDate(p.eventDate)))}
+      ${row('Delivery Date', esc(formatDate(p.eventDate)))}
       ${p.approvalDeadline ? row('Artwork Approval Date', esc(formatDate(p.approvalDeadline))) : ''}
       ${(() => {
         const url = safeUrl(p.eventUrl);
@@ -194,7 +194,7 @@ function buildText(p: OrderPayload & { safeProjectUrl: string }): string {
   lines.push('EVENT DETAILS');
   lines.push(`Event Name: ${p.eventName}`);
   if (p.courseName) lines.push(`Course Name: ${p.courseName}`);
-  lines.push(`Event Date: ${formatDate(p.eventDate)}`);
+  lines.push(`Delivery Date: ${formatDate(p.eventDate)}`);
   if (p.approvalDeadline) lines.push(`Artwork Approval Date: ${formatDate(p.approvalDeadline)}`);
   if (safeUrl(p.eventUrl)) lines.push(`Event URL: ${p.eventUrl!.trim()}`);
   lines.push('');

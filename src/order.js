@@ -10,7 +10,7 @@ import { applyColors, showGsTagVariant, resolveColors } from './render.js';
 import { isDisplayableImage, fileTypeLabel } from './media-utils.js';
 import { extractDominantColors } from './color-extract.js';
 import { scrollToFirstError } from './dom-utils.js';
-import { calcApprovalDeadline, calcEffectiveDeadline } from './intake-shared.js';
+import { calcApprovalDeadline, calcEffectiveDeadline, subtractBusinessDays, previousFriday, leadExtraFor, earliestDeliveryDate, renderDeliveryAssessment, deliveryAckText, assessAcks, renderRushAck, renderLateAck, attachAckListeners, RUSH_FEE } from './intake-shared.js';
 
 const SKIP_VALIDATION = false;
 
@@ -98,6 +98,10 @@ const O = {
   flagSetup: 'same',
   flagQty: 0,             // no default — customer must pick a quantity on purpose
   flagQtyCustom: false,
+  // 'new' = describe a fresh design; 'repeat' = reuse a past event's design,
+  // so the notes fields below hold only "what needs to change".
+  designSource: 'new',
+  repeatEventName: '',
   designNotes: '',
   // Only shown/required when flagSetup === 'different' — a single shared
   // designNotes can't describe two distinct designs (see renderStep3/validate).
@@ -109,6 +113,12 @@ const O = {
                    // uploadLogo(); used to make retrying orderSubmit() idempotent.
   // Step 5
   ackDeadline: false,
+  // Rush-fee and late / after-event acknowledgments (see assessAcks); each is only required when it applies.
+  ackRush: false,
+  ackLate: false,
+  // The event's own date when the event sync supplied it (eventDate is the delivery date). Lets the
+  // review step tell when the delivery date is late for, or after, the event.
+  syncedEventDate: '',
   // Submit state
   submitting: false,
   submitted: false,
@@ -139,9 +149,9 @@ const DRAFT_FIELDS = [
   'contactName', 'contactEmail', 'shipTo', 'attn', 'country',
   'addressLine1', 'addressLine2', 'city', 'stateProvince', 'postalCode',
   'shipMode', 'courseAddress',
-  'flagStyle', 'flagColors', 'gsTag', 'gsTagMode', 'flagSetup', 'flagQty', 'flagQtyCustom', 'designNotes',
+  'flagStyle', 'flagColors', 'gsTag', 'gsTagMode', 'flagSetup', 'flagQty', 'flagQtyCustom', 'designSource', 'repeatEventName', 'designNotes',
   'frontDesignNotes', 'backDesignNotes',
-  'ackDeadline', 'ackBeta',
+  'ackDeadline', 'ackRush', 'ackLate', 'syncedEventDate', 'ackBeta',
   // Persisted so a refresh after Step 2 keeps updating the same project
   // instead of creating a duplicate (and re-sending the "order started" email).
   'projectId', 'startedNotified',
@@ -277,11 +287,6 @@ function validate(step) {
   if (step === 1) {
     if (!O.eventName.trim()) errors.eventName = 'Event name is required.';
     if (!O.courseName.trim()) errors.courseName = 'Course name is required.';
-    if (!O.eventDate) errors.eventDate = 'Event date is required.';
-    else {
-      const dl = calcEffectiveDeadline(O.eventDate);
-      if (dl?.expired) errors.eventDate = `This order can't be completed in time. Artwork approval would have been due ${dl.display} (10 days before the event, counted from the preceding Friday). Please contact us to discuss options.`;
-    }
   }
   if (step === 2) {
     if (!O.contactName.trim()) errors.contactName = 'Full name is required.';
@@ -292,23 +297,35 @@ function validate(step) {
     if (!O.city.trim()) errors.city = 'City is required.';
     if (!O.stateProvince) errors.stateProvince = (O.country === 'CA' ? 'Province' : 'State') + ' is required.';
     if (!O.postalCode.trim()) errors.postalCode = (O.country === 'CA' ? 'Postal code' : 'ZIP code') + ' is required.';
+    // The delivery date is stored as event_date: everything downstream treats it as the date the
+    // flags are needed by. Its deadline depends on the shipping country, so it's validated here.
+    if (!O.eventDate) errors.eventDate = 'Delivery date is required.';
+    else {
+      const dl = calcEffectiveDeadline(O.eventDate, new Date(), leadExtraFor(O.country));
+      if (dl?.expired) errors.eventDate = `This delivery date can't be met. Artwork approval would have been due ${dl.display}, even as a rush. Please choose a later date or contact us to discuss options.`;
+    }
   }
   if (step === 3) {
-    if (!O.flagStyle) errors.flagStyle = 'Please select a flag style.';
+    const repeat = O.designSource === 'repeat';
+    if (!repeat && !O.flagStyle) errors.flagStyle = 'Please select a flag style.';
     if (O.flagQtyCustom) {
       if (!O.flagQty || O.flagQty < 10) errors.flagQty = 'Custom quantity must be at least 10.';
     } else if (!O.flagQty) {
       errors.flagQty = 'Please select a quantity.';
     }
-    if (O.flagSetup === 'different') {
+    if (repeat && !O.repeatEventName.trim()) errors.repeatEventName = 'Please tell us which event this design was used for.';
+    if (!repeat && O.flagSetup === 'different') {
       if (!O.frontDesignNotes.trim()) errors.frontDesignNotes = 'Front design notes are required.';
       if (!O.backDesignNotes.trim()) errors.backDesignNotes = 'Back design notes are required.';
     } else if (!O.designNotes.trim()) {
-      errors.designNotes = 'Flag design is required.';
+      errors.designNotes = repeat ? 'Please describe the changes needed (or enter "No changes").' : 'Flag design is required.';
     }
   }
   if (step === 5) {
     if (!O.ackDeadline) errors.ackDeadline = 'Please acknowledge the deadline policy.';
+    const acks = assessAcks(O, new Date());
+    if (acks.rush && !O.ackRush) errors.ackRush = `Please accept the ${RUSH_FEE} rush fee to submit your order.`;
+    if (acks.late && !O.ackLate) errors.ackLate = 'Please acknowledge the delivery date.';
   }
   return errors;
 }
@@ -319,7 +336,7 @@ function validate(step) {
 // same way as the sync pre-step's.
 const STEP_HEADERS = {
   1: { title: 'Event Details', sub: "We'll use this to name your project and schedule your proof." },
-  2: { title: 'Contact & Shipping', sub: "We'll use this to know where to ship your flags." },
+  2: { title: 'Contact & Shipping', sub: "We'll use this to know where to ship your flags and when you need them." },
   3: { title: 'Flag & Colors', sub: "We'll use this to understand your vision for the flags." },
   4: { title: 'Logo Upload', sub: "We'll use your logos to bring the design to life." },
   5: { title: 'Review & Submit', sub: "We'll use this to lock in your order — double-check everything below before you submit." },
@@ -403,7 +420,8 @@ function renderInner() {
   }
 
   const progressDots = renderProgressDots();
-  const header = STEP_HEADERS[O.step];
+  const header = { ...STEP_HEADERS[O.step] };
+  if (O.step === 4 && O.designSource === 'repeat') header.sub = "Upload last year's flag design and any updated logos you'd like to use.";
 
   let stepHtml = '';
   if (O.step === 1) stepHtml = renderStep1();
@@ -558,7 +576,12 @@ async function handleSync() {
 async function applySyncedInfo(result) {
   O.eventName = result.eventName || '';
   O.courseName = result.courseName || '';
-  O.eventDate = result.eventDate || '';
+  // The synced date is the event itself; the delivery date defaults to two business days before it
+  // (the same rule Prestige uses to set the in-hand date, which is then taken from this date again).
+  // It is plugged in even if that date can't be fulfilled: the delivery group then offers new ones.
+  O.eventDate = result.eventDate ? subtractBusinessDays(result.eventDate, 2) : '';
+  O.syncedEventDate = result.eventDate || '';
+  resetAcks();
 
   if (result.courseAddressLine1 && result.courseCity) {
     O.courseAddress = {
@@ -628,11 +651,7 @@ function renderStep1() {
       <input class="form-input" id="f-courseName" type="text" value="${esc(O.courseName)}" placeholder="e.g. Augusta National Golf Club" autocomplete="off">
       ${e.courseName ? `<div class="form-error">${esc(e.courseName)}</div>` : ''}
     </div>
-    <div class="form-field">
-      <label class="form-label" for="f-eventDate">Event Date${req()}</label>
-      <input class="form-input" id="f-eventDate" type="date" value="${esc(O.eventDate)}">
-      ${e.eventDate ? `<div class="form-error">${esc(e.eventDate)}</div>` : ''}
-    </div>`;
+    `;
 }
 
 function renderStep2() {
@@ -725,13 +744,72 @@ function renderStep2() {
     </div>
     `}
     </div>
+    </div>
+    <div class="order-group">
+    <div class="form-section-label">Delivery</div>
+    <div class="order-section">
+    <div class="form-field">
+      <label class="form-label" for="f-deliveryDate">Delivery Date${req()}</label>
+      <input class="form-input" id="f-deliveryDate" type="date" value="${esc(O.eventDate)}" min="${esc(earliestDeliveryDate(new Date(), leadExtraFor(O.country)) || '')}">
+      ${e.eventDate && !O.eventDate ? `<div class="form-error">${esc(e.eventDate)}</div>` : ''}
+    </div>
+    <div id="deliveryWeekendNote"></div>
+    <div id="deliveryAssess">${renderDeliveryAssessment(O.eventDate, O.country, new Date(), null, true, !!(e.eventDate && O.eventDate))}</div>
+    </div>
     </div>`;
 }
 
 function renderStep3() {
   const e = O.errors;
   const flag = FLAGS.find(f => f.id === O.flagStyle);
+  const repeat = O.designSource === 'repeat';
+  const repeatPlaceholder = 'Describe what needs to change from last time — dates, logos, sponsors, text, colors, etc.';
+  const toggle = `
+    <div class="form-field">
+      <div class="setup-toggle">
+        <button class="setup-btn${!repeat ? ' active' : ''}" onclick="window.selectDesignSource('new')">New Design</button>
+        <button class="setup-btn${repeat ? ' active' : ''}" onclick="window.selectDesignSource('repeat')">Reuse Past Design</button>
+      </div>
+    </div>
+  `;
+  if (repeat) {
+    // Reuse = deliberately light intake: no style, colors, or front/back
+    // setup — the designer starts from the past design and adds colors.
+    return `
+${toggle}
+    <div class="form-field">
+      <label class="form-label" for="f-repeatEvent">Event Name${req()}</label>
+      <input class="form-input" type="text" id="f-repeatEvent" value="${esc(O.repeatEventName)}" placeholder="e.g. 2025 Member-Guest Invitational">
+      ${e.repeatEventName ? `<div class="form-error">${esc(e.repeatEventName)}</div>` : ''}
+    </div>
+
+    <div class="form-field">
+      <label class="form-label">Quantity${req()}</label>
+      <div class="qty-toggle">
+        <div class="qty-num-group">
+          ${[9, 18, 27, 36].map(n => `
+            <button class="qty-btn${!O.flagQtyCustom && O.flagQty === n ? ' active' : ''}" onclick="window.selectQty(${n})">${n}</button>`).join('')}
+        </div>
+        <button class="qty-btn${O.flagQtyCustom ? ' active' : ''}" onclick="window.selectQtyCustom()">Custom</button>
+      </div>
+      ${O.flagQtyCustom ? `
+        <div class="form-field qty-custom-field">
+          <label class="form-label" for="f-qty">Custom Quantity${req()}</label>
+          <input class="form-input" type="number" min="10" step="1" id="f-qty" value="${O.flagQty}" required
+            placeholder="Minimum 10" oninput="window.setQtyValue(this.value)">
+        </div>` : ''}
+      ${e.flagQty ? `<div class="form-error">${esc(e.flagQty)}</div>` : ''}
+    </div>
+
+    <div class="form-field">
+      <label class="form-label" for="f-notes">Changes needed${req()}</label>
+      <textarea class="form-input" id="f-notes" placeholder="${esc(repeatPlaceholder)}">${esc(O.designNotes)}</textarea>
+      ${e.designNotes ? `<div class="form-error">${esc(e.designNotes)}</div>` : ''}
+    </div>`;
+  }
   return `
+${toggle}
+
     ${renderZoneColorSection(flag)}
 
     <div class="form-field">
@@ -829,7 +907,8 @@ function renderStep5() {
   ].filter(Boolean);
 
   const setupLabel = O.flagSetup === 'different' ? 'Different Front & Back' : 'Same Front & Back';
-  const selectedFlag = FLAGS.find(f => f.id === O.flagStyle);
+  const isRepeat = O.designSource === 'repeat';
+  const selectedFlag = isRepeat ? undefined : FLAGS.find(f => f.id === O.flagStyle);
   const styleLabel = selectedFlag ? `${selectedFlag.name} - ${flagDimensions(selectedFlag)}` : (O.flagStyle || null);
   const flagPreviewHtml = selectedFlag ? buildFlagSvgHtml(selectedFlag) : '';
   // Border isn't user-configurable right now (SHOW_BORDER_COLOR_TOGGLE is off
@@ -839,24 +918,16 @@ function renderStep5() {
 
   return `
     ${e.submit ? `<div class="submit-error-banner">${esc(e.submit)}</div>` : ''}
-    ${(() => {
-      const dl = calcEffectiveDeadline(O.eventDate);
-      if (!dl) return '';
-      return `<div class="deadline-callout${dl.rush ? ' rush' : ''}">
-        <div class="deadline-callout-label">${dl.rush ? 'Rush order — your artwork approval deadline' : 'Your artwork approval deadline'}</div>
-        <div class="deadline-callout-date">${esc(dl.display)}</div>
-        <div class="deadline-callout-note">${dl.rush
-          ? '10 days before your event — counted from the preceding Friday if your event is on a Saturday, Sunday or Monday.'
-          : '17 days before your event — counted from the preceding Friday if your event is on a Saturday, Sunday or Monday.'}</div>
-      </div>`;
-    })()}
+    ${renderDeliveryAssessment(O.eventDate, O.country)}
+    <div class="review-ack-group">
     <div class="${ack1Cls}" id="f-ackDeadline" onclick="window.toggleAck('deadline')">
       <div class="${ack1CheckCls}"></div>
-      <div class="ack-text">${calcEffectiveDeadline(O.eventDate)?.rush
-        ? 'I acknowledge that this is a rush order and a rush fee will apply, because the artwork approval deadline falls between 10 and 16 days before the event instead of the 17 required. Final artwork must be approved by the date above. If the event is on a Saturday, Sunday or Monday, the days are counted from the preceding Friday.'
-        : 'I acknowledge that final artwork approval is required at least 17 days before the event to avoid rush fees. If the event is on a Saturday, Sunday or Monday, the 17 days are counted from the preceding Friday.'}</div>
+      <div class="ack-text">${esc(deliveryAckText(O.eventDate, O.country))}</div>
     </div>
     ${e.ackDeadline ? `<div class="form-error">${esc(e.ackDeadline)}</div>` : ''}
+    ${renderRushAck(O, e)}
+    ${renderLateAck(O, e)}
+    </div>
 
     <div class="rs-divider"></div>
 
@@ -868,7 +939,6 @@ function renderStep5() {
       <div class="rs-rows">
         <div class="rs-row"><span class="rs-label">Event Name</span><span class="rs-value">${O.eventName ? esc(O.eventName) : '<span style="color:var(--gray-400)">—</span>'}</span></div>
         <div class="rs-row"><span class="rs-label">Course Name</span><span class="rs-value">${O.courseName ? esc(O.courseName) : '<span style="color:var(--gray-400)">—</span>'}</span></div>
-        <div class="rs-row"><span class="rs-label">Event Date</span><span class="rs-value">${formatDate(O.eventDate) || '<span style="color:var(--gray-400)">—</span>'}</span></div>
         ${O.syncUrl.trim() ? `<div class="rs-row"><span class="rs-label">Event URL</span><span class="rs-value"><a href="${esc(O.syncUrl.trim())}" target="_blank" rel="noopener noreferrer">${esc(O.syncUrl.trim())}</a></span></div>` : ''}
       </div>
     </div>
@@ -887,6 +957,17 @@ function renderStep5() {
 
     <div class="rs-section">
       <div class="rs-section-header">
+        <div class="rs-section-title">Delivery</div>
+        <button class="rs-edit-btn" onclick="window.editStep(2)">Edit</button>
+      </div>
+      <div class="rs-rows">
+        <div class="rs-row"><span class="rs-label">Delivery Date</span><span class="rs-value">${formatDate(O.eventDate) || '<span style="color:var(--gray-400)">—</span>'}</span></div>
+        <div class="rs-row"><span class="rs-label">Artwork approval due</span><span class="rs-value">${esc(calcEffectiveDeadline(O.eventDate, new Date(), leadExtraFor(O.country))?.display || '')}</span></div>
+      </div>
+    </div>
+
+    <div class="rs-section">
+      <div class="rs-section-header">
         <div class="rs-section-title">Flag &amp; Colors</div>
         <button class="rs-edit-btn" onclick="window.editStep(3)">Edit</button>
       </div>
@@ -895,11 +976,14 @@ function renderStep5() {
         ${colorZones.map(z =>
           `<div class="rs-row"><span class="rs-label">${esc(z.label || z.id)}</span><span class="rs-value">${colorChip(O.flagColors[z.id])}</span></div>`
         ).join('')}
-        <div class="rs-row"><span class="rs-label">Flag</span><span class="rs-value">${styleLabel ? esc(styleLabel) : '<span style="color:var(--gray-400)">—</span>'}</span></div>
-        <div class="rs-row"><span class="rs-label">Quantity</span><span class="rs-value">${O.flagQty} Flag${O.flagQty === 1 ? '' : 's'}</span></div>
-        <div class="rs-row"><span class="rs-label">Flag Setup</span><span class="rs-value">${setupLabel}</span></div>
-        ${O.designNotes ? `<div class="rs-row"><span class="rs-label">Flag Design</span><span class="rs-value">${esc(O.designNotes)}</span></div>` : ''}
-        ${O.flagSetup === 'different' ? `<div class="rs-row"><span class="rs-label">Flag Design - Front</span><span class="rs-value">${O.frontDesignNotes ? esc(O.frontDesignNotes) : '<span style="color:var(--gray-400)">—</span>'}</span></div>
+        ${isRepeat ? '' : `<div class="rs-row"><span class="rs-label">Flag</span><span class="rs-value">${styleLabel ? esc(styleLabel) : '<span style="color:var(--gray-400)">—</span>'}</span></div>`}
+        ${isRepeat ? '' : `<div class="rs-row"><span class="rs-label">Quantity</span><span class="rs-value">${O.flagQty} Flag${O.flagQty === 1 ? '' : 's'}</span></div>`}
+        ${isRepeat ? '' : `<div class="rs-row"><span class="rs-label">Flag Setup</span><span class="rs-value">${setupLabel}</span></div>`}
+        ${isRepeat ? `<div class="rs-row"><span class="rs-label">Design</span><span class="rs-value">Reuse Past Design</span></div>` : ''}
+        ${isRepeat ? `<div class="rs-row"><span class="rs-label">Event Name</span><span class="rs-value">${esc(O.repeatEventName)}</span></div>` : ''}
+        ${isRepeat ? `<div class="rs-row"><span class="rs-label">Quantity</span><span class="rs-value">${O.flagQty} Flag${O.flagQty === 1 ? '' : 's'}</span></div>` : ''}
+        ${O.designNotes ? `<div class="rs-row"><span class="rs-label">${isRepeat ? 'Changes needed' : 'Flag Design'}</span><span class="rs-value">${esc(O.designNotes)}</span></div>` : ''}
+        ${!isRepeat && O.flagSetup === 'different' ? `<div class="rs-row"><span class="rs-label">Flag Design - Front</span><span class="rs-value">${O.frontDesignNotes ? esc(O.frontDesignNotes) : '<span style="color:var(--gray-400)">—</span>'}</span></div>
         <div class="rs-row"><span class="rs-label">Flag Design - Back</span><span class="rs-value">${O.backDesignNotes ? esc(O.backDesignNotes) : '<span style="color:var(--gray-400)">—</span>'}</span></div>` : ''}
       </div>
     </div>
@@ -931,7 +1015,7 @@ function renderConfirmation() {
         <div class="confirm-sub">You'll receive an email with a link to review the flag, once the design is complete.</div>
         <div class="confirm-detail">
           <div><strong>${esc(O.eventName)}</strong></div>
-          <div>${esc(formatDate(O.eventDate))}</div>
+          <div>Delivery by ${esc(formatDate(O.eventDate))}</div>
         </div>
         ${O.confirmationEmailFailed ? `<div class="confirm-email-warning">Your order was received, but we couldn't send a confirmation email${O.contactEmail ? ' to ' + esc(O.contactEmail) : ''} just now. If you don't hear from us soon, please reach out so we can confirm it went through.</div>` : ''}
       </div>
@@ -954,6 +1038,14 @@ function colorsForRender() {
   }
   return out;
 }
+
+// Reuse orders skip the style/color pickers: they start on the Plain template
+// in white and the designer rebuilds from the past design (see renderStep3).
+const REPEAT_FLAG_STYLE = 'plain';
+const REPEAT_COLOR_ENTRIES = [
+  { zone: 'zone-primary', label: 'Primary Color', hex: '#FFFFFF', name: 'White' },
+  { zone: 'zone-border', label: 'Border', hex: '#FFFFFF', name: 'White' },
+];
 
 // Resolves each zone to its chosen color — including the border zone's
 // "match" mode, which has no entry of its own in O.flagColors — for
@@ -1184,6 +1276,8 @@ function renderZoneColorPicker(zoneId) {
 
 // ── Attach listeners ───────────────────────────────────────
 function attachListeners() {
+  // Review step: the rush and late acknowledgments are data-ack items (the deadline one has its own onclick).
+  if (O.step === 5) attachAckListeners(document.getElementById('orderApp'), O, () => render());
   // Step 1 inputs
   const courseName = document.getElementById('f-courseName');
   if (courseName) courseName.addEventListener('input', e => { O.courseName = e.target.value; });
@@ -1191,12 +1285,48 @@ function attachListeners() {
   const evName = document.getElementById('f-eventName');
   if (evName) evName.addEventListener('input', e => { O.eventName = e.target.value; });
 
-  const evDate = document.getElementById('f-eventDate');
-  if (evDate) evDate.addEventListener('change', e => {
-    O.eventDate = e.target.value;
+  const deliveryDate = document.getElementById('f-deliveryDate');
+  if (deliveryDate) deliveryDate.addEventListener('change', e => {
+    // The picker already greys out earlier dates, but a typed one still arrives here. A date
+    // that can't be fulfilled is never accepted by hand: keep the previous value (which may
+    // be one the event sync filled in) and say why. Typed dates are the only way in, hence the check.
+    // No weekend delivery: a Saturday or Sunday pick moves to the preceding Friday, and says so
+    // under the field. (The Friday is then checked like any other pick.)
+    const weekendNote = document.getElementById('deliveryWeekendNote');
+    let picked = e.target.value;
+    if (picked && previousFriday(picked) !== picked) {
+      picked = previousFriday(picked);
+      e.target.value = picked;
+      if (weekendNote) weekendNote.textContent = `Delivery isn't available on weekends, so your delivery date has been moved to the preceding Friday, ${formatDate(picked)}.`;
+    } else if (weekendNote) weekendNote.textContent = '';
+    const earliest = earliestDeliveryDate(new Date(), leadExtraFor(O.country));
+    if (picked && earliest && picked < earliest) {
+      const typed = picked;
+      e.target.value = O.eventDate;
+      const box = document.getElementById('deliveryAssess');
+      if (box) box.innerHTML = renderDeliveryAssessment(O.eventDate, O.country, new Date(), typed, true);
+      return;
+    }
+    O.eventDate = picked;
     // The deadline (and whether it's a rush) depends on the date, so a prior
     // acknowledgment no longer covers what the customer will see on review.
-    O.ackDeadline = false;
+    resetAcks();
+    delete O.errors.eventDate;
+    const box = document.getElementById('deliveryAssess');
+    if (box) box.innerHTML = renderDeliveryAssessment(O.eventDate, O.country, new Date(), null, true);
+  });
+
+  // "Fastest delivery" / "Avoid rush fees" buttons (the tile is re-rendered, so listen on its container).
+  const assessBox = document.getElementById('deliveryAssess');
+  if (assessBox) assessBox.addEventListener('click', e => {
+    const btn = e.target.closest('[data-use-date]');
+    if (!btn) return;
+    O.eventDate = btn.dataset.useDate;
+    resetAcks();
+    delete O.errors.eventDate;
+    const input = document.getElementById('f-deliveryDate');
+    if (input) input.value = O.eventDate;
+    assessBox.innerHTML = renderDeliveryAssessment(O.eventDate, O.country, new Date(), null, true);
   });
 
   // Step 2 inputs
@@ -1235,6 +1365,9 @@ function attachListeners() {
   // Step 3 notes
   const notes = document.getElementById('f-notes');
   if (notes) notes.addEventListener('input', e => { O.designNotes = e.target.value; });
+
+  const repeatEvent = document.getElementById('f-repeatEvent');
+  if (repeatEvent) repeatEvent.addEventListener('input', e => { O.repeatEventName = e.target.value; });
 
   const frontNotes = document.getElementById('f-frontNotes');
   if (frontNotes) frontNotes.addEventListener('input', e => { O.frontDesignNotes = e.target.value; });
@@ -1316,17 +1449,22 @@ function buildIntakePayload() {
     state_province: O.stateProvince,
     postal_code: O.postalCode,
     country: O.country,
-    flag_style: O.flagStyle || null,
+    flag_style: O.designSource === 'repeat' ? REPEAT_FLAG_STYLE : (O.flagStyle || null),
     // { zones: [{zone,label,hex,name}], gsTag, gsTagMode } — zone-tagged so
     // the design page can map colors back to the right zone (not just
     // positional primary/secondary), and carries the GS tag choice through.
-    flag_colors: { zones: buildFlagColorEntries(FLAGS.find(f => f.id === O.flagStyle)), gsTag: O.gsTag, gsTagMode: O.gsTagMode },
-    flag_setup: O.flagSetup,
+    flag_colors: { zones: O.designSource === 'repeat' ? REPEAT_COLOR_ENTRIES : buildFlagColorEntries(FLAGS.find(f => f.id === O.flagStyle)), gsTag: O.gsTag, gsTagMode: O.gsTagMode },
+    flag_setup: O.designSource === 'repeat' ? 'same' : O.flagSetup,
     flag_qty: O.flagQty || null,
+    design_source: O.designSource,
+    repeat_event_name: O.designSource === 'repeat' ? (O.repeatEventName.trim() || null) : null,
     design_notes: O.designNotes || null,
-    front_design_notes: O.flagSetup === 'different' ? (O.frontDesignNotes || null) : null,
-    back_design_notes: O.flagSetup === 'different' ? (O.backDesignNotes || null) : null,
+    front_design_notes: O.designSource !== 'repeat' && O.flagSetup === 'different' ? (O.frontDesignNotes || null) : null,
+    back_design_notes: O.designSource !== 'repeat' && O.flagSetup === 'different' ? (O.backDesignNotes || null) : null,
     ack_deadline: O.ackDeadline,
+    // Only recorded when that scenario applied to the delivery date actually submitted.
+    ack_late: !!(O.ackLate && assessAcks(O).late),
+    ack_rush: !!(O.ackRush && assessAcks(O).rush),
   };
 }
 
@@ -1380,7 +1518,7 @@ async function saveStartedOrder() {
         shipping: buildShipping(),
         projectId,
         projectUrl: `${window.location.origin}/project?project=${projectId}`,
-      approvalDeadline: calcApprovalDeadline(O.eventDate)?.iso || '',
+      approvalDeadline: calcApprovalDeadline(O.eventDate, leadExtraFor(O.country))?.iso || '',
       }).catch(err => console.warn('Order started notification failed', err));
       // Customer-facing copy with the "continue your order" link.
       sendOrderStarted(projectId).catch(err => console.warn('Order started email failed', err));
@@ -1396,6 +1534,8 @@ window.orderNext = async function () {
     O.errors = errors;
     render();
     scrollToFirstError();
+    // An unmeetable delivery date has no .form-error; its tile carries the alert instead.
+    requestAnimationFrame(() => document.querySelector('.deadline-callout-alert')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
     return;
   }
   O.errors = {};
@@ -1453,8 +1593,8 @@ window.orderSubmit = async function () {
       lf.logoRecord = await uploadLogo(projectId, lf.file);
     }
 
-    const selectedFlagForEmail = FLAGS.find(f => f.id === O.flagStyle);
-    const flagColorEntries = buildFlagColorEntries(selectedFlagForEmail);
+    const selectedFlagForEmail = O.designSource === 'repeat' ? undefined : FLAGS.find(f => f.id === O.flagStyle);
+    const flagColorEntries = O.designSource === 'repeat' ? REPEAT_COLOR_ENTRIES : buildFlagColorEntries(selectedFlagForEmail);
 
     // Best-effort — a failed render/upload here shouldn't block the order
     // itself; the email just goes out without the preview image (same
@@ -1481,15 +1621,15 @@ window.orderSubmit = async function () {
       eventDate: O.eventDate,
       eventUrl: O.syncUrl.trim() || '',
       shipping: buildShipping(),
-      flagStyle: O.flagStyle,
-      flagStyleName: selectedFlagForEmail ? `${selectedFlagForEmail.name} - ${flagDimensions(selectedFlagForEmail)}` : O.flagStyle,
+      flagStyle: O.designSource === 'repeat' ? REPEAT_FLAG_STYLE : O.flagStyle,
+      flagStyleName: selectedFlagForEmail ? `${selectedFlagForEmail.name} - ${flagDimensions(selectedFlagForEmail)}` : (O.designSource === 'repeat' ? 'Plain (reuse order)' : O.flagStyle),
       flagPreviewUrl,
       flagColors: flagColorEntries,
-      flagSetup: O.flagSetup,
+      flagSetup: O.designSource === 'repeat' ? 'same' : O.flagSetup,
       flagQty: O.flagQty,
-      designNotes: O.designNotes || '',
-      frontDesignNotes: O.flagSetup === 'different' ? (O.frontDesignNotes || '') : '',
-      backDesignNotes: O.flagSetup === 'different' ? (O.backDesignNotes || '') : '',
+      designNotes: emailDesignNotes(O.designNotes),
+      frontDesignNotes: O.designSource !== 'repeat' && O.flagSetup === 'different' ? (O.frontDesignNotes || '') : '',
+      backDesignNotes: O.designSource !== 'repeat' && O.flagSetup === 'different' ? (O.backDesignNotes || '') : '',
       logoFileNames: O.logoFiles.map(lf => lf.file?.name).filter(Boolean),
       projectId,
       uploadLogosUrl: `${window.location.origin}/upload-logos?project=${projectId}`,
@@ -1513,15 +1653,15 @@ window.orderSubmit = async function () {
       eventDate: O.eventDate,
       eventUrl: O.syncUrl.trim() || '',
       shipping: buildShipping(),
-      flagStyle: O.flagStyle,
-      flagStyleName: selectedFlagForEmail ? `${selectedFlagForEmail.name} - ${flagDimensions(selectedFlagForEmail)}` : O.flagStyle,
+      flagStyle: O.designSource === 'repeat' ? REPEAT_FLAG_STYLE : O.flagStyle,
+      flagStyleName: selectedFlagForEmail ? `${selectedFlagForEmail.name} - ${flagDimensions(selectedFlagForEmail)}` : (O.designSource === 'repeat' ? 'Plain (reuse order)' : O.flagStyle),
       flagPreviewUrl,
       flagColors: flagColorEntries,
-      flagSetup: O.flagSetup,
+      flagSetup: O.designSource === 'repeat' ? 'same' : O.flagSetup,
       flagQty: O.flagQty,
-      designNotes: O.designNotes || '',
-      frontDesignNotes: O.flagSetup === 'different' ? (O.frontDesignNotes || '') : '',
-      backDesignNotes: O.flagSetup === 'different' ? (O.backDesignNotes || '') : '',
+      designNotes: emailDesignNotes(O.designNotes),
+      frontDesignNotes: O.designSource !== 'repeat' && O.flagSetup === 'different' ? (O.frontDesignNotes || '') : '',
+      backDesignNotes: O.designSource !== 'repeat' && O.flagSetup === 'different' ? (O.backDesignNotes || '') : '',
       logoFileNames: O.logoFiles.map(lf => lf.file?.name).filter(Boolean),
       projectId,
       projectUrl: `${window.location.origin}/project?project=${projectId}`,
@@ -1541,6 +1681,14 @@ window.orderSubmit = async function () {
     window.scrollTo(0, 0);
   }
 };
+
+// The acknowledgments depend on the delivery date and country: when either changes, none of
+// them still covers what the customer will see on the review step.
+function resetAcks() {
+  O.ackDeadline = false;
+  O.ackRush = false;
+  O.ackLate = false;
+}
 
 window.toggleAck = function (which) {
   if (which === 'deadline') O.ackDeadline = !O.ackDeadline;
@@ -1645,6 +1793,20 @@ window.setQtyValue = function (val) {
   O.flagQty = isNaN(n) ? 0 : n;
 };
 
+window.selectDesignSource = function (src) {
+  O.designSource = src;
+  O.errors = {};
+  render();
+};
+
+// Emails only carry designNotes, so a repeat order's "changes" text gets the
+// source event prepended to stay meaningful on its own.
+function emailDesignNotes(text) {
+  if (O.designSource !== 'repeat') return text || '';
+  const head = `Repeat of ${O.repeatEventName.trim() || 'a past design'}`;
+  return text ? `${head} — changes: ${text}` : head;
+}
+
 window.selectSetup = function (setup) {
   O.flagSetup = setup;
   render();
@@ -1665,6 +1827,7 @@ window.selectShipMode = function (mode) {
 
 window.selectCountry = function (country) {
   O.country = country;
+  resetAcks(); // Canada's deadline is a week earlier, so prior acknowledgments no longer apply
   O.stateProvince = '';
   O.errors = {};
   render();
@@ -1733,6 +1896,8 @@ async function resumeOrder(projectId) {
   if (typeof fc.gsTag === 'boolean') O.gsTag = fc.gsTag;
   if (fc.gsTagMode) O.gsTagMode = fc.gsTagMode;
   O.flagSetup = row.flag_setup || 'same';
+  O.designSource = row.design_source === 'repeat' ? 'repeat' : 'new';
+  O.repeatEventName = row.repeat_event_name || '';
   if (row.flag_qty) {
     O.flagQty = row.flag_qty;
     O.flagQtyCustom = ![9, 18, 27, 36].includes(row.flag_qty);
@@ -1741,6 +1906,8 @@ async function resumeOrder(projectId) {
   O.frontDesignNotes = row.front_design_notes || '';
   O.backDesignNotes = row.back_design_notes || '';
   O.ackDeadline = !!row.ack_deadline;
+  O.ackLate = !!row.ack_late;
+  O.ackRush = !!row.ack_rush;
   O.syncedColorApplied = true;   // colors are the customer's own now
   O.syncStep = false;
   O.betaStep = false;

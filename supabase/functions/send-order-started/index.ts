@@ -46,7 +46,7 @@ function formatDate(iso: string): string {
 function buildHtml(p: { name: string; eventName: string; eventDate: string; resumeUrl: string }): string {
   const body = `<p style="margin:0 0 20px;color:#333;font-size:16px;">Hi ${esc(p.name)},</p>
     <p style="margin:0 0 20px;color:#555;font-size:15px;line-height:1.6;">
-      Thanks for starting your order for <strong>${esc(p.eventName)}</strong>${p.eventDate ? ` (${esc(formatDate(p.eventDate))})` : ''}.
+      Thanks for starting your order for <strong>${esc(p.eventName)}</strong>${p.eventDate ? `, to be delivered by ${esc(formatDate(p.eventDate))}` : ''}.
       We've saved your event and shipping details, and our team can already see your order.
     </p>
     <p style="margin:0 0 8px;color:#555;font-size:15px;line-height:1.6;">
@@ -64,7 +64,7 @@ function buildText(p: { name: string; eventName: string; eventDate: string; resu
   return [
     `Hi ${p.name},`,
     '',
-    `Thanks for starting your order for ${p.eventName}${p.eventDate ? ` (${formatDate(p.eventDate)})` : ''}. We've saved your event and shipping details, and our team can already see your order.`,
+    `Thanks for starting your order for ${p.eventName}${p.eventDate ? `, to be delivered by ${formatDate(p.eventDate)}` : ''}. We've saved your event and shipping details, and our team can already see your order.`,
     '',
     "You haven't submitted it yet. Pick up where you left off any time, on any device, using the link below. Your changes are saved to the same order.",
     '',

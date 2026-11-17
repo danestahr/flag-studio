@@ -64,18 +64,50 @@ function daysBeforeWorkingFriday(eventDateIso, days) {
   return { iso, display: formatDate(iso) };
 }
 
-export function calcApprovalDeadline(eventDateIso) {
-  return daysBeforeWorkingFriday(eventDateIso, 17);
+// Saturday/Sunday -> the Friday before; a weekday comes back unchanged.
+export function previousFriday(iso) {
+  if (!iso) return iso;
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dow = dt.getUTCDay();
+  if (dow === 6) dt.setUTCDate(dt.getUTCDate() - 1);
+  else if (dow === 0) dt.setUTCDate(dt.getUTCDate() - 2);
+  return dt.toISOString().slice(0, 10);
+}
+
+// Mon-Fri only (no holidays), n business days before the date. Same logic Prestige uses for
+// the in-hand date: subtractBusinessDays() in src/orderSummaryPdf.js and send-prestige-order.
+export function subtractBusinessDays(iso, n) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  while (n > 0) {
+    dt.setUTCDate(dt.getUTCDate() - 1);
+    const dow = dt.getUTCDay();
+    if (dow !== 0 && dow !== 6) n--;
+  }
+  return dt.toISOString().slice(0, 10);
+}
+
+// Canadian orders need an extra week for customs, so every deadline moves 7 days
+// earlier. Mirrors compute_approval_deadline(date, country) in the DB and the copies
+// in send-order-confirmation / send-prestige-order: keep them in sync.
+export const CANADA_EXTRA_DAYS = 7;
+export const leadExtraFor = country => (country === 'CA' ? CANADA_EXTRA_DAYS : 0);
+
+// The date passed in is the customer's delivery date (stored as order_intakes.event_date).
+export function calcApprovalDeadline(eventDateIso, extra = 0) {
+  return daysBeforeWorkingFriday(eventDateIso, 17 + extra);
 }
 
 // Standard deadline, or the rush one (10 days before the working Friday) once
 // today is past the standard deadline. Mirrors rush logic in send-prestige-order.
-export function calcEffectiveDeadline(eventDateIso, now = new Date()) {
-  const std = calcApprovalDeadline(eventDateIso);
+export function calcEffectiveDeadline(eventDateIso, now = new Date(), extra = 0) {
+  const std = calcApprovalDeadline(eventDateIso, extra);
   if (!std) return null;
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   if (today <= std.iso) return { ...std, rush: false };
-  const rush = daysBeforeWorkingFriday(eventDateIso, 10);
+  const rush = daysBeforeWorkingFriday(eventDateIso, 10 + extra);
   // expired: even the rush deadline has passed, so the order can't be turned around in time.
   return { ...rush, rush: true, expired: rush.iso < today };
 }
@@ -244,13 +276,158 @@ export function attachAckListeners(container, acks, onChange) {
   });
 }
 
-export function renderDeadlineCallout(eventDateIso) {
-  const dl = calcApprovalDeadline(eventDateIso);
+// First date (today or later) that can still be fulfilled, even as a rush. The delivery
+// date picker doesn't offer anything earlier. null if none in the next ~13 months.
+export function earliestDeliveryDate(now = new Date(), extra = 0) {
+  const pad = n => String(n).padStart(2, '0');
+  for (let i = 0; i < 400; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+    const iso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    if (!calcEffectiveDeadline(iso, now, extra)?.expired) return iso;
+  }
+  return null;
+}
+
+// Names the date itself rather than saying "this date".
+const unmeetableMessage = iso => `${formatDate(iso)} is within the standard production window, flags can't be produced for an on-time delivery for ${formatDate(iso)}. We apologize for any inconvenience.`;
+
+// "Today" / "Tomorrow" when the deadline is that close, else the date.
+function deadlineText(iso, display, now) {
+  const pad = n => String(n).padStart(2, '0');
+  const day = off => { const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + off); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+  return iso === day(0) ? 'Today' : iso === day(1) ? 'Tomorrow' : display;
+}
+
+const COUNTED_FROM_FRIDAY = 'counted from the preceding Friday if your delivery date is on a Saturday, Sunday or Monday';
+
+// First date (today or later) whose standard approval deadline hasn't passed, i.e. the earliest
+// delivery date that avoids the rush fee.
+export function earliestStandardDate(now = new Date(), extra = 0) {
+  const pad = n => String(n).padStart(2, '0');
+  for (let i = 0; i < 400; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+    const iso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    if (!calcEffectiveDeadline(iso, now, extra)?.rush) return iso;
+  }
+  return null;
+}
+
+// Two ways out of a date that can't be met, each of which sets an applicable date (the order
+// form's step 2 handles the click via [data-use-date]).
+function renderDateOptions(now, extra, withTitle = true) {
+  const fastest = earliestDeliveryDate(now, extra), standard = earliestStandardDate(now, extra);
+  const btn = (iso, label) => iso ? `<button type="button" class="btn deadline-callout-btn" data-use-date="${esc(iso)}">${label}: ${esc(formatDate(iso))}</button>` : '';
+  return `<div class="delivery-options">
+    ${withTitle ? '<div class="delivery-options-title">Select a new delivery date</div>' : ''}
+    ${btn(fastest, 'Fastest Delivery')}${btn(standard, 'Avoid Rush Fees')}
+  </div>`;
+}
+
+// The callout under the delivery date (order form step 2 and the review step): the approval
+// deadline, whether the order is a rush, and the disclaimers that go with it.
+// withButtons (step 2): when the date can't be met, show nothing but the two buttons (fastest
+// delivery / avoid rush fees) instead of a tile; the same buttons follow the notice shown when a
+// typed date is rejected. Without it (the review step) an unmeetable date gets a plain message.
+export function renderDeliveryAssessment(deliveryDateIso, country, now = new Date(), rejectedDateIso = null, withButtons = false, alert = false) {
+  const extra = leadExtraFor(country);
+  const options = withButtons ? renderDateOptions(now, extra) : '';
+  const dl = deliveryDateIso ? calcEffectiveDeadline(deliveryDateIso, now, extra) : null;
+  // The customer typed a date (rejectedDateIso) earlier than the earliest we can fulfil: the field
+  // kept its previous value, and the same tile says why, above that value's own message.
+  const notice = rejectedDateIso
+    ? `<div class="deadline-callout-note">${esc(unmeetableMessage(rejectedDateIso))}</div>`
+    : '';
+  // A date that can't be met (synced, or typed and rejected) hides the approval deadline, its
+  // label, rule and note: all that's left is the way forward. A typed, rejected date keeps its
+  // explanation above the buttons, inside one tile.
+  // In that tile the header leads, in the tile's orange label style, above the message.
+  if (withButtons && notice) return `<div class="deadline-callout rush">
+    <div class="deadline-callout-label">Select a new delivery date</div>
+    ${notice}${renderDateOptions(now, extra, false)}
+  </div>`;
+  if (!dl) return '';
+  // A date that can't be met (e.g. filled in by the event sync) gets the same tile: the message,
+  // then the two ways out. `alert` (Continue was pressed) adds a line asking for a new date.
+  if (withButtons && dl.expired) return `<div class="deadline-callout rush" id="deliveryUnmeetable">
+    <div class="deadline-callout-label">Select a new delivery date</div>
+    <div class="deadline-callout-note">${esc(unmeetableMessage(deliveryDateIso))}${extra ? ' Canadian orders include an extra 7 days for customs.' : ''}</div>
+    ${alert ? '<div class="deadline-callout-alert">Please select a new delivery date to continue.</div>' : ''}
+    ${renderDateOptions(now, extra, false)}
+  </div>`;
+  const canada = extra ? ' Canadian orders include an extra 7 days for customs.' : '';
+  if (dl.expired) {
+    if (withButtons) return options;
+    return `<div class="deadline-callout rush expired">
+      <div class="deadline-callout-label">This delivery date can't be met</div>
+      <div class="deadline-callout-note">${esc(unmeetableMessage(deliveryDateIso))}${canada}</div>
+    </div>`;
+  }
+  const when = deadlineText(dl.iso, dl.display, now);
+  const by = when === 'Today' || when === 'Tomorrow' ? when.toLowerCase() : when; // "approved by today" / "by November 22, 2026"
+  return `<div class="deadline-callout${dl.rush ? ' rush' : ''}">
+    <div class="deadline-callout-label">${dl.rush ? 'Rush Order — Artwork Approval Deadline' : 'Artwork Approval Deadline'}</div>
+    <div class="deadline-callout-date">${esc(deadlineText(dl.iso, dl.display, now))}</div>
+    <div class="deadline-callout-note">${dl.rush
+      ? `Flags must be approved by ${esc(by)} and will have an additional $199 rush fee to ensure an on-time delivery.${canada}`
+      : `Flags must be approved by ${esc(by)} to avoid a rush fee and ensure an on-time delivery.${canada}`}</div>
+  </div>`;
+}
+
+// Flat fee added to orders inside the standard production window.
+export const RUSH_FEE = '$199';
+
+// Which acknowledgments apply to this delivery date. `eventDate` here is the delivery date as stored;
+// syncedEventDate is the event itself, known only when the event sync supplied it.
+//   rush       the delivery date is inside the standard window (rush fee applies)
+//   late       the delivery date is later than our standard delivery date for the event (2 business
+//              days before it): little or no buffer before the event
+//   afterEvent the delivery date is after the event itself (a subset of late)
+// A date that can't be met at all gets none of these: it can't be submitted.
+export function assessAcks({ eventDate, syncedEventDate, country } = {}, now = new Date()) {
+  const dl = eventDate ? calcEffectiveDeadline(eventDate, now, leadExtraFor(country)) : null;
+  const usable = !!dl && !dl.expired;
+  const standard = syncedEventDate ? subtractBusinessDays(syncedEventDate, 2) : null;
+  return {
+    deadline: dl,
+    rush: usable && !!dl.rush,
+    late: usable && !!(standard && eventDate > standard),
+    afterEvent: usable && !!(syncedEventDate && eventDate > syncedEventDate),
+  };
+}
+
+// Wording of the review step's deadline acknowledgment (always shown).
+export function deliveryAckText(deliveryDateIso, country, now = new Date()) {
+  const dl = deliveryDateIso ? calcEffectiveDeadline(deliveryDateIso, now, leadExtraFor(country)) : null;
+  return `I understand that final artwork must be approved by ${dl ? deadlineText(dl.iso, dl.display, now).replace(/^(Today|Tomorrow)$/, m => m.toLowerCase()) : 'the date above'} for my flags to arrive by my delivery date${deliveryDateIso ? ` on ${formatDate(deliveryDateIso)}` : ''}.`;
+}
+
+// Rush fee acknowledgment: shown (and required) only when the order is a rush.
+export function renderRushAck(state, errors = {}, now = new Date()) {
+  if (!assessAcks(state, now).rush) return '';
+  return renderAckItem('ackRush', !!state.ackRush, `I understand that this is a rush order and will incur an additional <strong>${RUSH_FEE} rush fee</strong>.`)
+    + (errors.ackRush ? `<div class="form-error">${esc(errors.ackRush)}</div>` : '');
+}
+
+// Late / after-event acknowledgment: shown (and required) only when the event is known and the
+// delivery date leaves little or no buffer before it, or lands after it.
+export function renderLateAck(state, errors = {}, now = new Date()) {
+  const a = assessAcks(state, now);
+  if (!a.late) return '';
+  const text = a.afterEvent
+    ? `I understand my flags will arrive on <strong>${esc(formatDate(state.eventDate))}</strong>, after my event on ${esc(formatDate(state.syncedEventDate))}, and will not be available for the event.`
+    : `I understand my flags will arrive on <strong>${esc(formatDate(state.eventDate))}</strong>, later than our standard delivery date of ${esc(formatDate(subtractBusinessDays(state.syncedEventDate, 2)))} (2 business days before my event), leaving little or no buffer before the event.`;
+  return renderAckItem('ackLate', !!state.ackLate, text)
+    + (errors.ackLate ? `<div class="form-error">${esc(errors.ackLate)}</div>` : '');
+}
+
+// Used by the "submitted" page, which only has the saved date and country.
+export function renderDeadlineCallout(deliveryDateIso, country) {
+  const dl = calcApprovalDeadline(deliveryDateIso, leadExtraFor(country));
   if (!dl) return '';
   return `<div class="deadline-callout">
-    <div class="deadline-callout-label">Your artwork approval deadline</div>
+    <div class="deadline-callout-label">Artwork Approval Deadline</div>
     <div class="deadline-callout-date">${esc(dl.display)}</div>
-    <div class="deadline-callout-note">17 days before your event — counted from the preceding Friday if your event is on a Saturday, Sunday or Monday.</div>
+    <div class="deadline-callout-note">${17 + leadExtraFor(country)} days before your delivery date — ${COUNTED_FROM_FRIDAY}.</div>
   </div>`;
 }
 

@@ -71,16 +71,20 @@ function subtractBusinessDays(y: number, m: number, d: number, n: number): Date 
   return dt;
 }
 
-// Event date for the project (staff-corrected customer_info first), or ''.
-async function eventDateIso(projectId: string): Promise<string> {
+// Event (delivery) date and shipping country for the project (staff-corrected
+// customer_info first). The date is '' when there isn't one; the country defaults to US.
+async function eventDateAndCountry(projectId: string): Promise<{ iso: string; country: string }> {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}&select=customer_info,order_intakes(event_date)&limit=1`,
+    `${SUPABASE_URL}/rest/v1/projects?id=eq.${encodeURIComponent(projectId)}&select=customer_info,order_intakes(event_date,country)&limit=1`,
     { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } },
   );
-  if (!res.ok) return '';
+  if (!res.ok) return { iso: '', country: 'US' };
   const [row] = await res.json();
   const iso = (row?.customer_info?.event_date || row?.order_intakes?.[0]?.event_date || '').slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : '';
+  return {
+    iso: /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : '',
+    country: row?.customer_info?.country || row?.order_intakes?.[0]?.country || 'US',
+  };
 }
 
 // In-hand date (event date - 2 business days) as YYYY-MM-DD, or '' when the
@@ -92,14 +96,15 @@ function inHandDateIso(iso: string): string {
 }
 
 // Rush = sent inside the standard approval window: the event (moved back to the
-// preceding Friday if Sat/Sun/Mon) is less than 17 days away. Mirrors
-// calcEffectiveDeadline() in src/intake-shared.js. Compared in UTC.
-function isRush(iso: string): boolean {
+// preceding Friday if Sat/Sun/Mon) is less than 17 days away, 24 for Canada (an
+// extra week for customs). Mirrors calcEffectiveDeadline() in src/intake-shared.js.
+// Compared in UTC.
+function isRush(iso: string, country = 'US'): boolean {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   if (!m) return false;
   const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
   const back = { 6: 1, 0: 2, 1: 3 }[dt.getUTCDay() as 0 | 1 | 6] ?? 0;
-  dt.setUTCDate(dt.getUTCDate() - back - 17);
+  dt.setUTCDate(dt.getUTCDate() - back - 17 - (country === 'CA' ? 7 : 0));
   return new Date().toISOString().slice(0, 10) > dt.toISOString().slice(0, 10);
 }
 
@@ -174,7 +179,7 @@ serve(async (req) => {
       });
     }
 
-    const eventIso = await eventDateIso(projectId);
+    const { iso: eventIso, country } = await eventDateAndCountry(projectId);
     const inHandIso = inHandDateIso(eventIso);
     const { variationCount, flagCount } = await flagCounts(projectId);
     const fields = {
@@ -241,7 +246,7 @@ serve(async (req) => {
 
     const name = projectName;
     const dateLabel = inHandIso ? `${inHandIso.slice(5, 7)}/${inHandIso.slice(8, 10)}/${inHandIso.slice(2, 4)}` : '';
-    const subject = `${isTest ? '[TEST] ' : ''}${isRush(eventIso) ? 'RUSH - ' : ''}${dateLabel ? dateLabel + ' ' : ''}-Golf Status Order- ${name}`;
+    const subject = `${isTest ? '[TEST] ' : ''}${isRush(eventIso, country) ? 'RUSH - ' : ''}${dateLabel ? dateLabel + ' ' : ''}-Golf Status Order- ${name}`;
     const html = wrapEmailHtml({
       title: name,
       bodyHtml: `<p style="margin:0 0 20px;color:#333;font-size:15px;line-height:1.6;">

@@ -278,10 +278,21 @@ select.form-input { appearance:none; background-image:url("data:image/svg+xml,%3
 
 /* Approval deadline callout on review step */
 .deadline-callout { display:flex; flex-direction:column; gap:4px; background:var(--accent-tint); border:1.5px solid var(--gray-300); border-radius:10px; padding:16px 18px; }
-.deadline-callout.rush { border-color:#c0392b; }
-.deadline-callout.rush .deadline-callout-label { color:#c0392b; }
+/* Rush and can't-be-met are warnings, not errors: orange, not the red used for form errors. */
+.deadline-callout.rush { border-color:#d97706; }
+.deadline-callout.rush .deadline-callout-label { color:#d97706; }
+.review-ack-group { display:flex; flex-direction:column; gap:12px; }
+.deadline-callout-btn { width:100%; justify-content:center; margin-top:10px; }
+.delivery-options { display:flex; flex-direction:column; gap:8px; }
+.delivery-options .deadline-callout-btn { margin-top:0; }
+#deliveryWeekendNote { font-size:12px; color:var(--gray-600); line-height:1.5; margin-top:-6px; }
+#deliveryWeekendNote:empty { display:none; }
+.delivery-options-title { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color:var(--black); }
+.deadline-callout .delivery-options { margin-top:10px; }
+.deadline-callout-rule { border-top:1px solid var(--gray-300); margin:8px 0 4px; }
 .deadline-callout-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color:var(--black); }
 .deadline-callout-date { font-size:20px; font-weight:700; color:var(--black); }
+.deadline-callout-alert { font-size:13px; font-weight:600; color:#d97706; margin-top:8px; }
 .deadline-callout-note { font-size:12px; color:var(--gray-600); line-height:1.4; }
 
 /* Mobile: header content (logo/title + beta tag + the dev reset button) was
