@@ -150,10 +150,12 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     const clickHref = (!p.name && intendedType && intendedTemplate)
       ? `/login?${new URLSearchParams({ type: intendedType, template: intendedTemplate, project: p.id })}`
       : `/project?project=${p.id}`;
+    // Staff/admin only - the deal link is internal CRM info.
+    const pdLinked = (role === 'staff' || role === 'admin') && !!(p.pipedrive_flags_deal_id || p.pipedrive_hs_deal_id);
     const statusPills = [designStatusPill(p.flag_config, 'Flags'), designStatusPill(p.hole_sign_config, 'Hole Signs')].filter(Boolean).join('') || '<span class="status-pill" style="flex-shrink:0">Not started</span>';
     return `<div class="draft-card" onclick="window.location.href='${clickHref}'">
       <div class="draft-card-main">
-        <div class="draft-card-name">${esc(name)}</div>
+        <div class="draft-card-name">${esc(name)}${pdLinked ? ' <i class="fa-solid fa-link" style="font-size:.75em;opacity:.6;margin-left:4px" title="Linked to Pipedrive" aria-label="Linked to Pipedrive"></i>' : ''}</div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0 2px">${statusPills}</div>
         ${deadlineLine(p)}
         ${creator ? `<div class="draft-card-meta">Created by ${esc(creator)}</div>` : ''}

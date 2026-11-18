@@ -4,7 +4,8 @@ import { requireAuth, isStaffOrAdmin } from './auth.js';
 import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake,
          updateProject, deleteProject, upsertCustomerInfo,
          submitDesignForReview, adminRequestDesignChanges, adminReopenDesignReview, adminCancelDesignCompletion, adminSendDesignProof, adminMarkDesignSentToPrint,
-         sendProofReady, loadLatestEmailFailure, loadLatestChangeNote, loadLatestPrintAction, sendPrestigeOrder, loadLatestPrestigeOrder, currentFlagDesignHash, loadLatestPrestigeDownload, loadLatestPrestigeDownloadError } from './supabase.js';
+         sendProofReady, loadLatestEmailFailure, loadLatestChangeNote, loadLatestPrintAction, sendPrestigeOrder, loadLatestPrestigeOrder, currentFlagDesignHash, loadLatestPrestigeDownload, loadLatestPrestigeDownloadError,
+         pipedriveSearchDeals, pipedriveGetDeal, pipedriveLinkDeal, loadLatestPipedriveSync, pipedriveMoveDeal } from './supabase.js';
 import { FLAGS, LISTED_FLAGS } from './data.js';
 import { loadAllFlags } from './svgLoader.js';
 import { hydrateFlagStateForProject, buildFlagsPrintZip } from './flags/print-export.js';
@@ -191,6 +192,19 @@ function renderToolCards() {
       <div id="toolCardStatus-${t.productType}" class="tool-card-status"></div>
     </div>`).join('');
 
+  // Pipedrive deal links live in their own staff-only section under Customer Info.
+  const pdSection = document.getElementById('pipedriveSection');
+  if (pdSection) {
+    pdSection.style.display = isAdmin ? '' : 'none';
+    if (isAdmin) {
+      document.getElementById('pipedriveRows').innerHTML = DESIGN_TYPES.map(t => `
+        <div class="tool-card" style="padding:1.25rem 1.5rem">
+          <div class="tool-card-name" style="font-size:16px">${esc(t.name)}</div>
+          <div id="pipedriveRow-${t.productType}"></div>
+        </div>`).join('');
+    }
+  }
+
   DESIGN_TYPES.forEach(t => renderToolCardStatus(t));
 }
 
@@ -225,6 +239,7 @@ function renderToolCardStatus(t) {
           <a class="btn primary block" href="${esc(t.editorHref)}">Start designing</a>
         </div>
       </div>`;
+    if (isAdmin) renderPipedriveRow(t);
     return;
   }
 
@@ -283,7 +298,7 @@ function renderToolCardStatus(t) {
 
   setStatusValue(t.productType, status);
 
-  if (isAdmin) renderDesignAdminActions(t, cfg, status);
+  if (isAdmin) { renderDesignAdminActions(t, cfg, status); renderPipedriveRow(t); }
   else renderCustomerDesignBody(t, cfg, status);
 }
 
@@ -434,6 +449,8 @@ function fillPrestigeReceived() {
       month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
     });
     const lines = [];
+    const delivery = deliveryLineHtml(order);
+    if (delivery) lines.push(delivery);
     if (last) lines.push(`<i class="fa-solid fa-circle-check" aria-hidden="true"></i> <strong>Downloaded by Prestige</strong> · latest ${fmt(last.downloaded_at)}`);
     else if (order) lines.push('Not yet downloaded by Prestige');
     // Only surface a failure that hasn't since been followed by a successful download.
@@ -449,8 +466,6 @@ function fillPrestigeReceived() {
 // irreversible, "this is really happening" step. Flags can still be
 // tweaked and resent after going to print (a client-requested change
 // caught late, a vendor-flagged issue) - see
-    const delivery = deliveryLineHtml(order);
-    if (delivery) lines.push(delivery);
 // 20260915000000_allow_resend_to_print.sql. Hole signs go through a
 // separate, non-automated print process, so there's nothing to resend.
 function renderPrintSection(productType, status, cfg) {
@@ -546,6 +561,182 @@ function approvedByLine(cfg) {
 // staff-submit action below (submit_design_for_review's RPC already permits
 // staff/admin to call this for any project, not just ones they own - see
 // 20260913000000_per_design_status_workflow.sql).
+// ── Pipedrive deal link (staff/admin only) ────────────────────
+// Studio moves the linked deal through Pipedrive stages as this design's status
+// changes (DB trigger -> `pipedrive` edge function; see
+// supabase/migrations/20261117010000_pipedrive_status_sync_trigger.sql). Staff
+// link a deal manually, one per design type. UI-convenience only: the deal-id
+// columns are guarded by a DB trigger and the edge function re-checks the role.
+const PIPEDRIVE_DEAL_COLUMN = { flags: 'pipedrive_flags_deal_id', 'hole-signs': 'pipedrive_hs_deal_id' };
+const _dealCache = new Map(); // dealId -> { deal } | { missing: true } | { unavailable: true }
+
+async function lookupDeal(dealId) {
+  if (_dealCache.has(dealId)) return _dealCache.get(dealId);
+  let result;
+  try {
+    result = await pipedriveGetDeal(dealId);
+  } catch (err) {
+    result = err.status === 404 ? { missing: true } : { unavailable: true };
+  }
+  _dealCache.set(dealId, result);
+  return result;
+}
+
+async function renderPipedriveRow(t, { searching = false } = {}) {
+  const el = document.getElementById(`pipedriveRow-${t.productType}`);
+  if (!el) return;
+  const pt = t.productType;
+  const dealId = _project?.[PIPEDRIVE_DEAL_COLUMN[pt]];
+  const label = '<div style="font-size:12px;color:var(--gray-400);margin-bottom:6px">Pipedrive deal</div>';
+  const wrap = inner => `${label}${inner}`;
+
+  if (searching) {
+    el.innerHTML = wrap(`
+      <input class="ci-input" id="pdSearch-${pt}" type="text" placeholder="Search deals by title…" autocomplete="off">
+      <div id="pdResults-${pt}" style="margin-top:6px;font-size:13px"></div>
+      <button class="btn-secondary" style="margin-top:8px" onclick="window.cancelPipedriveSearch('${pt}')">Cancel</button>`);
+    const input = document.getElementById(`pdSearch-${pt}`);
+    input.focus();
+    let timer;
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => runPipedriveSearch(pt, input.value), 300);
+    });
+    return;
+  }
+
+  if (!dealId) {
+    el.innerHTML = wrap(`<button class="btn block" onclick="window.startPipedriveSearch('${pt}')">Link Pipedrive deal</button>`);
+    return;
+  }
+
+  el.innerHTML = wrap(`<div style="font-size:13px;color:var(--gray-400)">Deal #${esc(String(dealId))}…</div>`);
+  const info = await lookupDeal(dealId);
+  // Re-check: the row may have been re-rendered/unlinked while the lookup was in flight.
+  if (_project?.[PIPEDRIVE_DEAL_COLUMN[pt]] !== dealId) return;
+  const name = info.deal
+    ? `<a href="${esc(info.deal.url)}" target="_blank" rel="noopener">${esc(info.deal.title)} ↗</a>`
+    : info.missing
+      ? `Deal #${esc(String(dealId))} <span style="color:var(--gray-400)">(not found in Pipedrive - it may have been deleted or merged)</span>`
+      : `Deal #${esc(String(dealId))} <span style="color:var(--gray-400)">(couldn't reach Pipedrive)</span>`;
+  el.innerHTML = wrap(`
+    <div style="font-size:13px;margin-bottom:8px;word-break:break-word">${name}</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn-secondary" onclick="window.startPipedriveSearch('${pt}')">Change</button>
+      <button class="btn-secondary" onclick="window.unlinkPipedriveDeal('${pt}')">Unlink</button>
+    </div>
+    <div id="pdSync-${pt}" style="margin-top:8px;font-size:12px;line-height:1.4"></div>`);
+  renderPipedriveSync(t);
+}
+
+// Pipedrive's error bodies are JSON ("Pipedrive 403: {...,"error":"Cannot update..."}"); show just the message.
+function prettySyncError(raw) {
+  const m = /"error":"([^"]+)"/.exec(raw || '');
+  return m ? m[1] : (raw || 'Unknown error');
+}
+
+const SYNC_MAX_ATTEMPTS = 5; // keep in sync with pipedrive_retry_due() in the sync_log migration
+
+// Shows the outcome of the last sync of this design's status to its Pipedrive deal: a spinner while
+// in flight, a quiet "synced" line on success, and an explicit failure (with Retry now) otherwise.
+async function renderPipedriveSync(t, polls = 0) {
+  const pt = t.productType;
+  const el = document.getElementById(`pdSync-${pt}`);
+  if (!el) return;
+  let row;
+  try { row = await loadLatestPipedriveSync(pid, pt); } catch { return; }
+  // Re-check: the row may have been re-rendered (unlinked/changed) while the query was in flight.
+  const el2 = document.getElementById(`pdSync-${pt}`);
+  if (!el2) return;
+  const muted = txt => `<span style="color:var(--gray-400)">${txt}</span>`;
+  const retryBtn = `<button class="btn-secondary" style="margin-top:6px" onclick="window.retryPipedriveSync('${pt}')">Retry now</button>`;
+  if (!row) { el2.innerHTML = ''; return; }
+
+  if (row.state === 'pending') {
+    el2.innerHTML = muted('<span class="spinner-sm"></span>Syncing to Pipedrive…');
+    if (polls < 5) setTimeout(() => renderPipedriveSync(t, polls + 1), 4000);
+  } else if (row.state === 'ok') {
+    el2.innerHTML = muted(`Synced to Pipedrive ${esc(new Date(row.updated_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }))}`);
+  } else if (row.state === 'skipped') {
+    el2.innerHTML = row.last_error === 'no_stage_mapped'
+      ? muted(`No Pipedrive stage is mapped for this status, so the deal wasn't moved.`)
+      : '';
+  } else if (row.state === 'failed') {
+    const retrying = row.retryable && row.attempts < SYNC_MAX_ATTEMPTS;
+    el2.innerHTML = `
+      <div style="color:var(--red, #b3261e)">Pipedrive sync failed: ${esc(prettySyncError(row.last_error))}</div>
+      <div>${retrying
+        ? muted(`Retrying automatically (attempt ${row.attempts} of ${SYNC_MAX_ATTEMPTS}).`)
+        : muted(row.retryable ? `Gave up after ${SYNC_MAX_ATTEMPTS} attempts.` : `This won't succeed on retry - check the linked deal.`)}</div>
+      ${retryBtn}`;
+  }
+}
+
+window.retryPipedriveSync = async function (pt) {
+  const t = DESIGN_TYPES.find(x => x.productType === pt);
+  const el = document.getElementById(`pdSync-${pt}`);
+  if (el) el.innerHTML = '<span class="spinner-sm"></span>Retrying…';
+  try { await pipedriveMoveDeal(pid, pt); } catch { /* the failure is recorded on the sync_log row and shown below */ }
+  renderPipedriveSync(t);
+};
+
+async function runPipedriveSearch(pt, term) {
+  const out = document.getElementById(`pdResults-${pt}`);
+  if (!out) return;
+  if (term.trim().length < 2) { out.innerHTML = ''; return; }
+  out.innerHTML = '<span class="spinner-sm"></span>Searching…';
+  try {
+    const { deals } = await pipedriveSearchDeals(term);
+    // Drop a stale response if the user kept typing.
+    if (document.getElementById(`pdSearch-${pt}`)?.value !== term) return;
+    out.innerHTML = deals.length
+      ? deals.map(d => `<button class="btn-secondary block" style="text-align:left;margin-bottom:4px" data-deal="${esc(String(d.id))}">${esc(d.title)} <span style="color:var(--gray-400)">#${esc(String(d.id))}${d.status && d.status !== 'open' ? ' · ' + esc(d.status) : ''}</span></button>`).join('')
+      : '<span style="color:var(--gray-400)">No matching deals</span>';
+    out.querySelectorAll('[data-deal]').forEach(b => {
+      b.onclick = () => linkPipedriveDeal(pt, Number(b.dataset.deal));
+    });
+  } catch (err) {
+    out.innerHTML = `<span style="color:var(--red, #b3261e)">${esc(err.message)}</span>`;
+  }
+}
+
+async function linkPipedriveDeal(pt, dealId) {
+  const t = DESIGN_TYPES.find(x => x.productType === pt);
+  const out = document.getElementById(`pdResults-${pt}`);
+  if (out) out.innerHTML = '<span class="spinner-sm"></span>Linking…';
+  try {
+    const { deal } = await pipedriveLinkDeal(pid, pt, dealId);
+    _project[PIPEDRIVE_DEAL_COLUMN[pt]] = dealId;
+    if (deal) _dealCache.set(dealId, { deal });
+    renderPipedriveRow(t);
+  } catch (err) {
+    if (out) out.innerHTML = `<span style="color:var(--red, #b3261e)">${esc(err.message)}</span>`;
+    return;
+  }
+  // Sync immediately so the deal lands on the stage for the design's current status instead of
+  // waiting for the next status change. Failures are recorded on the sync_log row and shown by
+  // renderPipedriveSync, so they're swallowed here.
+  try { await pipedriveMoveDeal(pid, pt); } catch { /* shown below */ }
+  renderPipedriveRow(t);
+}
+
+window.startPipedriveSearch = function (pt) {
+  renderPipedriveRow(DESIGN_TYPES.find(x => x.productType === pt), { searching: true });
+};
+window.cancelPipedriveSearch = function (pt) {
+  renderPipedriveRow(DESIGN_TYPES.find(x => x.productType === pt));
+};
+window.unlinkPipedriveDeal = async function (pt) {
+  const t = DESIGN_TYPES.find(x => x.productType === pt);
+  try {
+    await pipedriveLinkDeal(pid, pt, null);
+    _project[PIPEDRIVE_DEAL_COLUMN[pt]] = null;
+  } catch (err) {
+    alert(`Couldn't unlink: ${err.message}`);
+  }
+  renderPipedriveRow(t);
+};
+
 window.submitForReview = async function (productType) {
   try {
     await submitDesignForReview(pid, productType);

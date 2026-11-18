@@ -1,6 +1,6 @@
 import './landing.css';
 import './icons.js';
-import { requireAuth } from './auth.js';
+import { requireAuth, isStaffOrAdmin } from './auth.js';
 import { getMyProfile, updateMyProfile, updateMyEmail, updatePassword } from './supabase.js';
 
 const session = await requireAuth();
@@ -20,6 +20,9 @@ function updateAvatar() {
   const initials = ((firstEl.value[0] || '') + (lastEl.value[0] || '')).toUpperCase() || (session.user.email || '?')[0].toUpperCase();
   avatarEl.textContent = initials;
 }
+
+// UI-convenience only: the settings page and its table are staff-gated by RLS.
+if (await isStaffOrAdmin(session)) document.getElementById('staffTools').style.display = '';
 
 const profile = await getMyProfile(userId);
 firstEl.value = profile.first_name || '';

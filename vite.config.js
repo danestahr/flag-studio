@@ -38,6 +38,7 @@ export default defineConfig({
         'reset-password': resolve(__dirname, 'reset-password.html'),
         project: resolve(__dirname, 'project.html'),
         profile: resolve(__dirname, 'profile.html'),
+        'pipedrive-settings': resolve(__dirname, 'pipedrive-settings.html'),
         'browse-flags': resolve(__dirname, 'browse-flags.html'),
 flags: resolve(__dirname, 'flags.html'),
         'flags-variations': resolve(__dirname, 'flags-variations.html'),

@@ -163,7 +163,7 @@ export async function getMyRole(userId) {
 export async function listProjects({ userId, role, cursor = null, pageSize = 30, q = '' } = {}) {
   let query = supabase
     .from('projects')
-    .select(`id, name, status, updated_at, created_by, customer_info, profiles(email, first_name, last_name, role), order_intakes(contact_email, event_date, country), flag_config(id, flag_id, status), hole_sign_config(id, template_style, status)`)
+    .select(`id, name, status, updated_at, created_by, customer_info, pipedrive_flags_deal_id, pipedrive_hs_deal_id, profiles(email, first_name, last_name, role), order_intakes(contact_email, event_date, country), flag_config(id, flag_id, status), hole_sign_config(id, template_style, status)`)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(pageSize);
@@ -1045,3 +1045,84 @@ export async function getPrintSheetDownloadUrl(path, expiresIn = 300) {
   if (error) throw error;
   return data.signedUrl;
 }
+
+// ── Pipedrive (staff/admin only) ─────────────────────────────
+// Forwards the caller's real JWT so the `pipedrive` edge function re-derives
+// role itself (same as sendPrintSheetReady) - never the anon key, never a
+// client-asserted role. Pipelines/stages are managed in Pipedrive; Studio only
+// writes deals, so the one thing stored here is the status -> stage mapping.
+async function callPipedrive(action, body = {}) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Not signed in');
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/pipedrive`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({ action, ...body }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `Pipedrive request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+export const pipedriveListPipelines = () => callPipedrive('list-pipelines');
+export const pipedriveSearchDeals = (term) => callPipedrive('search-deals', { term });
+export const pipedriveGetDeal = (dealId) => callPipedrive('get-deal', { dealId });
+// dealId = null unlinks. productType is 'flags' | 'hole-signs'.
+export const pipedriveLinkDeal = (projectId, productType, dealId) =>
+  callPipedrive('link-deal', { projectId, productType, dealId });
+
+export async function loadPipedriveStageMap() {
+  const { data, error } = await supabase
+    .from('pipedrive_stage_map')
+    .select('product_type, studio_status, pipeline_id, stage_id');
+  if (error) throw error;
+  return data;
+}
+
+// rows: [{ product_type, studio_status, pipeline_id, stage_id }]. A status left
+// unmapped is simply absent (the sync skips it), so unmapped = delete the row.
+export async function savePipedriveStageMap(rows, unmapped) {
+  if (rows.length) {
+    const { error } = await supabase
+      .from('pipedrive_stage_map')
+      .upsert(rows.map(r => ({ ...r, updated_at: new Date().toISOString() })), { onConflict: 'product_type,studio_status' });
+    if (error) throw error;
+  }
+  for (const u of unmapped) {
+    const { error } = await supabase
+      .from('pipedrive_stage_map')
+      .delete()
+      .eq('product_type', u.product_type)
+      .eq('studio_status', u.studio_status);
+    if (error) throw error;
+  }
+}
+
+// Latest Pipedrive sync attempt for one design (staff/admin only via RLS; null for anyone
+// else or when nothing has synced yet). Rows are written by the admin_actions trigger, the
+// `pipedrive` edge function and the retry cron - see 20261117020000_pipedrive_sync_log.sql.
+export async function loadLatestPipedriveSync(projectId, productType) {
+  const { data, error } = await supabase
+    .from('pipedrive_sync_log')
+    .select('state, attempts, retryable, last_error, studio_status, updated_at')
+    .eq('project_id', projectId)
+    .eq('product_type', productType)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// Staff "Retry now": re-syncs the design's CURRENT status (the function reads it itself),
+// and records a fresh sync_log row, so repeating it is safe.
+export const pipedriveMoveDeal = (projectId, productType) =>
+  callPipedrive('move-deal', { projectId, productType });
