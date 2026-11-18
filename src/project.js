@@ -11,7 +11,7 @@ import { hydrateFlagStateForProject, buildFlagsPrintZip } from './flags/print-ex
 import { esc } from './dom-utils.js';
 import { calcEffectiveDeadline, leadExtraFor, formatDate } from './intake-shared.js';
 import { confirmPrestigeSend } from './prestige-send-modal.js';
-import { STATUS_LABEL } from './status-labels.js';
+import { STATUS_LABEL, deliveryLineHtml } from './status-labels.js';
 
 const session = await requireAuth();
 const isAdmin = await isStaffOrAdmin(session);
@@ -449,6 +449,8 @@ function fillPrestigeReceived() {
 // irreversible, "this is really happening" step. Flags can still be
 // tweaked and resent after going to print (a client-requested change
 // caught late, a vendor-flagged issue) - see
+    const delivery = deliveryLineHtml(order);
+    if (delivery) lines.push(delivery);
 // 20260915000000_allow_resend_to_print.sql. Hole signs go through a
 // separate, non-automated print process, so there's nothing to resend.
 function renderPrintSection(productType, status, cfg) {

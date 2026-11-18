@@ -910,7 +910,7 @@ export async function sendPrestigeOrder(projectId, projectName, zipBlob, { prepa
 export async function loadLatestPrestigeOrder(projectId, { sentOnly = false, unsentOnly = false } = {}) {
   let q = supabase
     .from('prestige_orders')
-    .select('id, filename, size_bytes, variation_count, flag_count, in_hand_date, created_at, sent_at, design_hash')
+    .select('id, filename, size_bytes, variation_count, flag_count, in_hand_date, created_at, sent_at, design_hash, delivery_status, delivery_detail, delivery_updated_at')
     .eq('project_id', projectId);
   if (sentOnly) q = q.not('sent_at', 'is', null);
   if (unsentOnly) q = q.is('sent_at', null);

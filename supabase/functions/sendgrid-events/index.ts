@@ -22,6 +22,30 @@ const PRESTIGE_KIND = 'prestige-order';
 // SendGrid's temporary failure (it keeps retrying), flagged early so a stuck
 // send isn't a surprise. processed/open/click are ignored as noise.
 const PROBLEM_EVENTS = new Set(['bounce', 'dropped', 'deferred', 'blocked']);
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const STATUS_BY_EVENT: Record<string, string> = {
+  delivered: 'delivered', deferred: 'deferred', bounce: 'bounced', dropped: 'dropped', blocked: 'blocked',
+};
+
+// Mirrors the event onto prestige_orders so the app can show delivered/bounced.
+// `deferred` never overwrites a terminal state (events can arrive out of order).
+async function recordDelivery(e: SgEvent): Promise<void> {
+  const status = STATUS_BY_EVENT[String(e.event)];
+  if (!status || !e.order_id || !/^[0-9a-f-]{36}$/i.test(e.order_id)) return;
+  const detail = status === 'delivered' ? null : `${e.status ?? ''} ${String(e.reason ?? '')}`.trim().slice(0, 1000) || null;
+  const guard = status === 'deferred' ? '&delivery_status=in.(pending,deferred)' : '';
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/prestige_orders?id=eq.${e.order_id}${guard}`, {
+    method: 'PATCH',
+    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify({
+      delivery_status: status, delivery_detail: detail,
+      delivery_updated_at: e.timestamp ? new Date(e.timestamp * 1000).toISOString() : new Date().toISOString(),
+    }),
+  });
+  if (!res.ok) console.error('delivery status update failed', res.status, await res.text());
+}
+
 const TRACKED_EVENTS = new Set([...PROBLEM_EVENTS, 'delivered']);
 
 interface SgEvent {
@@ -32,6 +56,7 @@ interface SgEvent {
   timestamp?: number;
   kind?: string;       // custom_args set in send-prestige-order
   project_id?: string;
+  order_id?: string;
 }
 
 serve(async (req) => {
@@ -50,6 +75,7 @@ serve(async (req) => {
 
   const tracked = events.filter(e => e.kind === PRESTIGE_KIND && TRACKED_EVENTS.has(String(e.event)));
   for (const e of tracked) {
+    await recordDelivery(e);
     const ok = e.event === 'delivered';
     const reason = String(e.reason ?? '').slice(0, 2000);
     await logEmail({

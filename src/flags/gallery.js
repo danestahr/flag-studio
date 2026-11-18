@@ -12,7 +12,7 @@ import { loadAllFlags } from '../svgLoader.js';
 import {
   generateShareToken, getFeedback, supabase,
   loadOrderIntake, loadEventName, sendProofReady, sendPrestigeOrder, loadLatestPrestigeOrder, currentFlagDesignHash, onDesignChanged,
-  submitDesignForReview, adminSendDesignProof, saveFlagVariationQty,
+  submitDesignForReview, adminSendDesignProof, adminMarkDesignSentToPrint, saveFlagVariationQty,
 } from '../supabase.js';
 import {
   getVarFlag, getVarColors, getVarGsTagOpts, sameSidesOf,
@@ -20,7 +20,7 @@ import {
 } from './print-export.js';
 import { confirmPrestigeSend } from '../prestige-send-modal.js';
 import { esc, dl, slug, sanitizeFilename } from '../dom-utils.js';
-import { STATUS_LABEL } from '../status-labels.js';
+import { STATUS_LABEL, deliveryLineHtml } from '../status-labels.js';
 import { renderSidebar, setSidebarProjectName } from '../sidebar.js';
 import { fitSidePanel } from '../canvas-panel.js';
 
@@ -177,6 +177,9 @@ async function loadPrestigeLink() {
     const send = document.getElementById('prestigeSendBtn');
     if (send && !send.disabled) send.innerHTML = `${_prestigeSent ? 'Resend to Prestige Flag' : 'Send to Prestige Flag'} <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>`;
     const note = document.getElementById('prestigeStatus');
+    const dl = deliveryLineHtml(order);
+    const dEl = document.getElementById('prestigeDelivery');
+    if (dEl) dEl.innerHTML = dl || '';
     if (note && !note.textContent && _prestigeSent) {
       note.textContent = `Emailed ${new Date(order.sent_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
     }
@@ -242,6 +245,21 @@ window.sendToPrestige = async function () {
     const { zipBlob, summaryPdf } = await buildFlagsPrintZip(setStatus);
     setStatus('Sending to Prestige…');
     await sendPrestigeOrder(S.projectId, S.projectName || 'Flag Order', zipBlob, { designHash, summaryPdf });
+    // Keep the design status in step with the project overview's send button:
+    // an approved (or already-sent) design becomes/stays sent_to_print.
+    if (['approved', 'sent_to_print'].includes(S.projectStatus)) {
+      try {
+        await adminMarkDesignSentToPrint(S.projectId, 'flags');
+        S.projectStatus = 'sent_to_print';
+        const pill = document.querySelector('#statusSection .status-pill');
+        if (pill) { pill.className = `status-pill status-${S.projectStatus}`; pill.textContent = STATUS_LABEL[S.projectStatus] || S.projectStatus; }
+      } catch (e) {
+        console.error('Prestige email sent but status update failed', e);
+        setStatus('Sent to Prestige Flag, but the status update failed — refresh before resending.');
+        loadPrestigeLink();
+        return;
+      }
+    }
     setStatus('✓ Sent to Prestige Flag!');
     loadPrestigeLink();
     setTimeout(() => setStatus(''), 5000);
@@ -481,6 +499,7 @@ function renderGallerySidebar() {
       <div class="share-section" id="prestigeSection">
         <div class="rc-title">Send to Prestige</div>
         <div id="prestigeStatus" style="font-size:13px;color:var(--gray-400)"></div>
+        <div id="prestigeDelivery" style="font-size:12px"></div>
         <button class="btn sm primary" id="prestigeSendBtn" style="width:100%;justify-content:center" onclick="sendToPrestige()">Send to Prestige Flag <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
         <div class="share-link-box" id="prestigeLinkBox" style="display:none">
           <input class="share-link-input" id="prestigeLinkInput" readonly>

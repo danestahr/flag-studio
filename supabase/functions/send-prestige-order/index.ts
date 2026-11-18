@@ -274,7 +274,7 @@ serve(async (req) => {
         reply_to: { email: FROM_EMAIL, name: FROM_NAME },
         tracking_settings: { click_tracking: { enable: false } },
         // Echoed back on Event Webhook events so sendgrid-events can alert on a bounce.
-        custom_args: { kind: 'prestige-order', project_id: projectId },
+        custom_args: { kind: 'prestige-order', project_id: projectId, order_id: String(orderId) },
         subject,
         ...(summaryBuffer ? {
           attachments: [{
@@ -295,7 +295,7 @@ serve(async (req) => {
       await fetch(`${SUPABASE_URL}/rest/v1/prestige_orders?id=eq.${orderId}`, {
         method: 'PATCH',
         headers: { ...storageHeaders, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-        body: JSON.stringify({ sent_at: new Date().toISOString() }),
+        body: JSON.stringify({ sent_at: new Date().toISOString(), delivery_status: 'pending', delivery_detail: null, delivery_updated_at: new Date().toISOString() }),
       }).catch(err => console.error('sent_at update failed', err));
     }
     if (res.ok) await logEmail({ kind: 'prestige-order', projectId: projectId, recipient: toEmail, ok: true, httpStatus: res.status });
