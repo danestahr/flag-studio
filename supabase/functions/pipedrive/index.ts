@@ -16,6 +16,10 @@
 //                   (step 3 / 5); it may pass `logId` (a pipedrive_sync_log row to record the outcome
 //                   on). Without one - e.g. a staff "Retry now" - a new log row is created.
 //
+// Optional secrets for the "Design Studio Project Link" deal field: PIPEDRIVE_PROJECT_LINK_FIELD
+// (the custom field's API key - a 40-char hash from Pipedrive Settings > Data fields) and APP_URL.
+// When both are set, link-deal writes the project URL to that field and clears it on unlink/relink.
+//
 // Role is re-derived server-side from the caller's JWT (see send-print-sheet-ready);
 // the service-role path is a constant-time match on the project's own service key.
 
@@ -148,6 +152,24 @@ const STATUS_TABLE: Record<ProductType, string> = {
   'hole-signs': 'hole_sign_config',
 };
 
+const PROJECT_LINK_FIELD = Deno.env.get('PIPEDRIVE_PROJECT_LINK_FIELD')?.trim() || undefined;
+const APP_URL = Deno.env.get('APP_URL')?.replace(/\/$/, '');
+
+// Write (or clear, with null) the project URL on a deal. Best-effort: the Studio link itself is
+// already saved, so a Pipedrive hiccup here is reported as a warning rather than failing the link.
+async function setProjectLinkField(dealId: number, projectId: string | null): Promise<string | null> {
+  if (!PROJECT_LINK_FIELD || !APP_URL) return null; // feature not configured
+  try {
+    const value = projectId ? `${APP_URL}/project?project=${projectId}` : null;
+    await pd(`deals/${dealId}`, { method: 'PATCH', body: JSON.stringify({ custom_fields: { [PROJECT_LINK_FIELD]: value } }) });
+    return null;
+  } catch (e) {
+    console.error('project link field update failed', dealId, e);
+    // A deal already gone from Pipedrive has nothing to clear.
+    return e instanceof HttpError && e.status === 404 ? null : 'Linked, but the project link could not be written to the Pipedrive deal.';
+  }
+}
+
 function dealUrl(id: number) {
   return `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/deal/${id}`;
 }
@@ -249,7 +271,29 @@ async function linkDeal(projectId: string, productType: ProductType, dealIdRaw: 
     headers: { Prefer: 'return=minimal' },
     body: JSON.stringify({ [column]: dealId }),
   });
-  return { ok: true, deal };
+
+  // Clear the field on the deal being unlinked / replaced, then set it on the new one.
+  let warning: string | null = null;
+  if (previousDealId && previousDealId !== dealId) warning = await setProjectLinkField(previousDealId, null);
+  if (dealId) warning = (await setProjectLinkField(dealId, projectId)) ?? warning;
+  return { ok: true, deal, ...(warning ? { warning } : {}) };
+}
+
+// Service-role only (fired by the projects BEFORE DELETE trigger). Skips any deal that another
+// project has since been linked to, so deleting an old project can't wipe a live link.
+async function clearLinkField(dealIdsRaw: unknown) {
+  if (!Array.isArray(dealIdsRaw)) throw new HttpError(400, 'Invalid dealIds');
+  const cleared: number[] = [];
+  for (const raw of dealIdsRaw.slice(0, 10)) {
+    const dealId = parseDealId(raw);
+    const inUse = await rest(
+      `projects?or=(pipedrive_flags_deal_id.eq.${dealId},pipedrive_hs_deal_id.eq.${dealId})&select=id&limit=1`,
+    );
+    if (inUse?.length) continue;
+    await setProjectLinkField(dealId, null);
+    cleared.push(dealId);
+  }
+  return { ok: true, cleared };
 }
 
 async function moveDeal(projectId: string, productType: ProductType) {
@@ -365,6 +409,9 @@ serve(async (req) => {
         return json(await getDeal(body.dealId), 200);
       case 'link-deal':
         return json(await linkDeal(parseUuid(body.projectId), parseProductType(body.productType), body.dealId ?? null), 200);
+      case 'clear-link-field':
+        if (!service) return json({ error: 'Forbidden' }, 403);
+        return json(await clearLinkField(body.dealIds), 200);
       case 'move-deal': {
         // Only the trusted service-role path may name a log row.
         const logId = service && body.logId ? parseUuid(body.logId) : null;
