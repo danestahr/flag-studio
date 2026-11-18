@@ -1073,7 +1073,7 @@ async function callPipedrive(action, body = {}) {
 }
 
 export const pipedriveListPipelines = () => callPipedrive('list-pipelines');
-export const pipedriveSearchDeals = (term) => callPipedrive('search-deals', { term });
+export const pipedriveSearchDeals = (term, productType) => callPipedrive('search-deals', { term, productType });
 export const pipedriveGetDeal = (dealId) => callPipedrive('get-deal', { dealId });
 // dealId = null unlinks. productType is 'flags' | 'hole-signs'.
 export const pipedriveLinkDeal = (projectId, productType, dealId) =>

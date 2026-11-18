@@ -5,7 +5,7 @@
 //
 // Actions (POST { action, ... }):
 //   list-pipelines  staff   -> { pipelines: [{ id, name, stages: [{ id, name, order }] }] }
-//   search-deals    staff   { term } -> { deals: [{ id, title, stage_id, status }] }
+//   search-deals    staff   { term, productType } -> (only deals in the pipeline(s) mapped for that product) { deals: [{ id, title, stage_id, status }] }
 //   get-deal        staff   { dealId } -> { deal: { id, title, status, stage_id, url } } (404 if gone)
 //   link-deal       staff   { projectId, productType, dealId | null } -> stores/clears the link
 //   move-deal       staff OR service role   { projectId, productType }
@@ -157,16 +157,39 @@ async function listPipelines() {
   };
 }
 
-async function searchDeals(term: unknown) {
+// Studio only touches deals in the pipeline(s) its status->stage map points at for that product
+// (e.g. the Flags pipeline), so search and linking can't reach deals in other pipelines. Derived
+// from pipedrive_stage_map rather than a separate setting: the pipeline you map Flags statuses to
+// IS the Flags pipeline. Fails closed until the map exists.
+async function allowedPipelines(productType: ProductType): Promise<Set<number>> {
+  const rows = await rest(`pipedrive_stage_map?product_type=eq.${productType}&select=pipeline_id`);
+  const ids = new Set<number>((rows ?? []).map((r: any) => Number(r.pipeline_id)));
+  if (!ids.size) {
+    const label = productType === 'flags' ? 'Flags' : 'Hole Signs';
+    throw new HttpError(409, `Set up the ${label} stage mapping first (Profile > Pipedrive stage mapping) so Studio knows which pipeline to use.`);
+  }
+  return ids;
+}
+
+async function searchDeals(term: unknown, productType: ProductType) {
   if (typeof term !== 'string' || term.trim().length < 2) throw new HttpError(400, 'Search term must be at least 2 characters');
-  const data = await pd(`deals/search?term=${encodeURIComponent(term.trim())}&fields=title&limit=20`);
+  const allowed = await allowedPipelines(productType);
+  const [data, stages] = await Promise.all([
+    // Pipedrive's search has no pipeline filter, so over-fetch and filter here.
+    pd(`deals/search?term=${encodeURIComponent(term.trim())}&fields=title&limit=100`),
+    pd('stages?limit=500'),
+  ]);
+  const pipelineOfStage = new Map<number, number>((stages.data ?? []).map((st: any) => [Number(st.id), Number(st.pipeline_id)]));
   return {
-    deals: (data.data?.items ?? []).map((i: any) => ({
-      id: i.item.id,
-      title: i.item.title,
-      stage_id: i.item.stage?.id ?? null,
-      status: i.item.status ?? null,
-    })),
+    deals: (data.data?.items ?? [])
+      .filter((i: any) => allowed.has(pipelineOfStage.get(Number(i.item.stage?.id)) ?? -1))
+      .slice(0, 20)
+      .map((i: any) => ({
+        id: i.item.id,
+        title: i.item.title,
+        stage_id: i.item.stage?.id ?? null,
+        status: i.item.status ?? null,
+      })),
   };
 }
 
@@ -198,6 +221,9 @@ async function linkDeal(projectId: string, productType: ProductType, dealIdRaw: 
     try {
       const d = await pd(`deals/${dealId}`);
       assertLive(d);
+      if (!(await allowedPipelines(productType)).has(Number(d.data.pipeline_id))) {
+        throw new HttpError(403, `That deal isn't in the ${productType === 'flags' ? 'Flags' : 'Hole Signs'} pipeline.`);
+      }
       deal = { id: d.data.id, title: d.data.title, url: dealUrl(d.data.id) };
     } catch (e) {
       if (e instanceof HttpError && e.status === 404) throw new HttpError(404, 'Deal not found in Pipedrive');
@@ -320,7 +346,7 @@ serve(async (req) => {
       case 'list-pipelines':
         return json(await listPipelines(), 200);
       case 'search-deals':
-        return json(await searchDeals(body.term), 200);
+        return json(await searchDeals(body.term, parseProductType(body.productType)), 200);
       case 'get-deal':
         return json(await getDeal(body.dealId), 200);
       case 'link-deal':

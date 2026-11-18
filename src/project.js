@@ -686,7 +686,7 @@ async function runPipedriveSearch(pt, term) {
   if (term.trim().length < 2) { out.innerHTML = ''; return; }
   out.innerHTML = '<span class="spinner-sm"></span>Searching…';
   try {
-    const { deals } = await pipedriveSearchDeals(term);
+    const { deals } = await pipedriveSearchDeals(term, pt);
     // Drop a stale response if the user kept typing.
     if (document.getElementById(`pdSearch-${pt}`)?.value !== term) return;
     out.innerHTML = deals.length
