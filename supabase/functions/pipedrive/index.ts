@@ -296,6 +296,29 @@ async function clearLinkField(dealIdsRaw: unknown) {
   return { ok: true, cleared };
 }
 
+// Service-role only, one-off: write the project URL onto every already-linked deal. Batched
+// (offset/limit) so a big backlog stays inside the function's time limit; call again with the
+// returned `next` until it is null. Idempotent. Returns the failures instead of aborting.
+async function backfillLinkField(offsetRaw: unknown, limitRaw: unknown) {
+  if (!PROJECT_LINK_FIELD || !APP_URL) throw new HttpError(409, 'PIPEDRIVE_PROJECT_LINK_FIELD / APP_URL not set');
+  const offset = Math.max(0, Number(offsetRaw) || 0);
+  const limit = Math.min(100, Math.max(1, Number(limitRaw) || 25));
+  const rows = await rest(
+    `projects?or=(pipedrive_flags_deal_id.not.is.null,pipedrive_hs_deal_id.not.is.null)` +
+      `&select=id,pipedrive_flags_deal_id,pipedrive_hs_deal_id&order=created_at.asc,id.asc&offset=${offset}&limit=${limit}`,
+  );
+  let updated = 0;
+  const failed: { projectId: string; dealId: number }[] = [];
+  for (const r of rows ?? []) {
+    for (const dealId of [r.pipedrive_flags_deal_id, r.pipedrive_hs_deal_id]) {
+      if (!dealId) continue;
+      if (await setProjectLinkField(Number(dealId), r.id)) failed.push({ projectId: r.id, dealId: Number(dealId) });
+      else updated++;
+    }
+  }
+  return { ok: true, updated, failed, next: (rows?.length ?? 0) === limit ? offset + limit : null };
+}
+
 async function moveDeal(projectId: string, productType: ProductType) {
   const column = DEAL_COLUMN[productType];
   const projects = await rest(`projects?id=eq.${projectId}&select=${column}&limit=1`);
@@ -412,6 +435,9 @@ serve(async (req) => {
       case 'clear-link-field':
         if (!service) return json({ error: 'Forbidden' }, 403);
         return json(await clearLinkField(body.dealIds), 200);
+      case 'backfill-link-field':
+        if (!service) return json({ error: 'Forbidden' }, 403);
+        return json(await backfillLinkField(body.offset, body.limit), 200);
       case 'move-deal': {
         // Only the trusted service-role path may name a log row.
         const logId = service && body.logId ? parseUuid(body.logId) : null;
