@@ -46,12 +46,26 @@ class HttpError extends Error {
 
 // ── Auth ────────────────────────────────────────────────────
 
-function isServiceRole(authHeader: string): boolean {
+// The pg_net trigger / retry cron send the Vault `service_role_key`, which is the legacy
+// service_role JWT. The function's own SUPABASE_SERVICE_ROLE_KEY env can be a different
+// representation of the same key (e.g. an sb_secret_ key), so an exact string match is not
+// enough. Fall back to asking GoTrue: the admin users endpoint only answers for a real
+// service-role credential, so this is verified, not a trusted claim.
+function exactServiceKey(authHeader: string): boolean {
   const token = authHeader.replace(/^Bearer\s+/i, '');
   if (token.length !== SUPABASE_SERVICE_ROLE_KEY.length) return false;
   let diff = 0;
   for (let i = 0; i < token.length; i++) diff |= token.charCodeAt(i) ^ SUPABASE_SERVICE_ROLE_KEY.charCodeAt(i);
   return diff === 0;
+}
+
+async function isServiceRole(authHeader: string): Promise<boolean> {
+  if (exactServiceKey(authHeader)) return true;
+  const token = authHeader.replace(/^Bearer\s+/i, '');
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?per_page=1`, {
+    headers: { apikey: token, Authorization: `Bearer ${token}` },
+  });
+  return res.ok;
 }
 
 async function getCallerRole(authHeader: string): Promise<string | null> {
@@ -335,7 +349,7 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) return json({ error: 'Missing auth' }, 401);
 
-    const service = isServiceRole(authHeader);
+    const service = await isServiceRole(authHeader);
     if (!service) {
       const role = await getCallerRole(authHeader);
       if (role !== 'staff' && role !== 'admin') return json({ error: 'Forbidden' }, 403);
