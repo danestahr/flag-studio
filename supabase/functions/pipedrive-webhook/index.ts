@@ -26,6 +26,7 @@ const PIPEDRIVE_API_TOKEN = Deno.env.get('PIPEDRIVE_API_TOKEN');
 const PIPEDRIVE_DOMAIN = Deno.env.get('PIPEDRIVE_DOMAIN')
   ?.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/\.pipedrive\.com$/i, '') || undefined;
 const WEBHOOK_TOKEN = Deno.env.get('PIPEDRIVE_WEBHOOK_TOKEN');
+const APP_URL = Deno.env.get('APP_URL');
 
 const PRODUCT = 'flags' as const; // flags only for now; config table is keyed for hole-signs later
 
@@ -116,6 +117,41 @@ async function startOrderForCustomer(projectId: string, info: Record<string, any
       body: JSON.stringify({ projectId, step: 2, ...(isLocal ? { testTo: 'dane@danestahr.com' } : {}) }),
     });
     if (!res.ok) { console.error('send-order-started failed', res.status, await res.text()); return `failed_${res.status}`; }
+
+    // Internal "Order started" heads-up to the design team. The order form sends this from the browser
+    // (order.js saveStartedOrder), but a customer arriving via the Step 2 resume link is marked
+    // already-notified there, so for auto-created projects it has to come from here. Best-effort: a
+    // failure must not turn a sent customer email into a failed outcome.
+    try {
+      const nres = await fetch(`${SUPABASE_URL}/functions/v1/send-order-notification`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stage: 'started',
+          contactName: info.contact_name ?? '',
+          contactEmail: info.contact_email,
+          courseName: info.course_name ?? '',
+          eventName: info.event_name ?? '',
+          eventDate: info.event_date,
+          eventUrl: info.registration_url ?? '',
+          shipping: {
+            addressLine1: info.address_line1 ?? '',
+            addressLine2: info.address_line2 ?? '',
+            city: info.city ?? '',
+            stateProvince: info.state_province ?? '',
+            postalCode: info.postal_code ?? '',
+            country: info.country ?? 'US',
+          },
+          projectId,
+          projectUrl: `${APP_URL}/project?project=${projectId}`,
+          ...(isLocal ? { testTo: 'dane@danestahr.com' } : {}),
+        }),
+      });
+      if (!nres.ok) { console.error('send-order-notification failed', nres.status, await nres.text()); return 'sent_admin_failed'; }
+    } catch (e) {
+      console.error('send-order-notification failed', e);
+      return 'sent_admin_failed';
+    }
     return 'sent';
   } catch (e) {
     console.error('startOrderForCustomer failed', e);
