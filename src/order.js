@@ -1912,7 +1912,9 @@ async function resumeOrder(projectId) {
   O.syncStep = false;
   O.betaStep = false;
   O.ackBeta = true;
-  O.step = 3;
+  // ?step=2 (emails for projects created from Pipedrive) reopens at shipping + delivery date so the
+  // customer confirms them; everything else resumes at Step 3 as before.
+  O.step = new URLSearchParams(window.location.search).get('step') === '2' ? 2 : 3;
 }
 
 // ── Init ───────────────────────────────────────────────────

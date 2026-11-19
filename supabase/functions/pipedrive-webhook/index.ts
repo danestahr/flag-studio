@@ -78,6 +78,51 @@ async function rest(path: string, init: RequestInit = {}) {
   return text ? JSON.parse(text) : null;
 }
 
+// Seed order_intakes (unsubmitted, like the order form's "started" state) and send the customer the
+// "order started" email with a Step 2 resume link. Returns a short outcome string for the response/log.
+// order_intakes has NOT NULL address columns, so unknown ones are '' (Step 2 makes the customer fill
+// them in). Without a contact email there is nobody to email, and without a delivery date nothing to
+// resume (event_date is NOT NULL), so those cases are skipped rather than guessed.
+async function startOrderForCustomer(projectId: string, info: Record<string, any>): Promise<string> {
+  try {
+    if (!info.contact_email) return 'skipped_no_contact_email';
+    if (!info.event_date) return 'skipped_no_event_date';
+    await rest('rpc/save_order_intake', {
+      method: 'POST',
+      body: JSON.stringify({
+        p_project_id: projectId,
+        p_finalize: false,
+        p_data: {
+          event_name: info.event_name ?? '',
+          course_name: info.course_name ?? null,
+          event_source_url: info.registration_url ?? null,
+          event_date: info.event_date,
+          contact_name: info.contact_name ?? '',
+          contact_email: info.contact_email,
+          address_line1: info.address_line1 ?? '',
+          address_line2: info.address_line2 ?? null,
+          city: info.city ?? '',
+          state_province: info.state_province ?? '',
+          postal_code: info.postal_code ?? '',
+          country: info.country ?? 'US',
+        },
+      }),
+    });
+    // Never let a local run mail a real address: the override only honors this one test address.
+    const isLocal = /^https?:\/\/(127\.0\.0\.1|localhost|kong|host\.docker\.internal)/.test(SUPABASE_URL);
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/send-order-started`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, step: 2, ...(isLocal ? { testTo: 'dane@danestahr.com' } : {}) }),
+    });
+    if (!res.ok) { console.error('send-order-started failed', res.status, await res.text()); return `failed_${res.status}`; }
+    return 'sent';
+  } catch (e) {
+    console.error('startOrderForCustomer failed', e);
+    return 'failed';
+  }
+}
+
 serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   if (!WEBHOOK_TOKEN || !PIPEDRIVE_API_TOKEN || !PIPEDRIVE_DOMAIN) return json({ error: 'Not configured' }, 500);
@@ -133,8 +178,13 @@ serve(async (req) => {
         });
       } catch (e) { console.error('set-link-field failed', e); }
     }
+    // First creation only: seed the order intake from what we know, then send the customer the
+    // same "your order has been started" email the order form sends, linking to Step 2 so they can
+    // confirm shipping and the delivery date. Best-effort - the project already exists either way.
+    let email: string = 'not_attempted';
+    if (row?.created) email = await startOrderForCustomer(row.project_id, info);
     console.log(`pipedrive-webhook: deal ${dealId} -> project ${row?.project_id} (${row?.created ? 'created' : 'already existed'})`);
-    return json({ ok: true, projectId: row?.project_id ?? null, created: !!row?.created });
+    return json({ ok: true, projectId: row?.project_id ?? null, created: !!row?.created, email });
   } catch (e) {
     // 5xx so Pipedrive retries transient failures (API/DB hiccups).
     console.error('pipedrive-webhook error', e);
