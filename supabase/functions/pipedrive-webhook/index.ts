@@ -194,6 +194,38 @@ async function buildCustomerInfo(deal: any) {
   };
 }
 
+// GolfStatus is the source of truth for event details (name, date, course, shipping address) when
+// the deal carries an event-page URL: reuse the same `sync-event-info` function the customer flow
+// calls. Best-effort - any failure just leaves the Pipedrive-field values in place. The tournament
+// logo it returns is intentionally ignored here (the customer flow uploads/places it client-side).
+async function syncEventInfo(url: string | null): Promise<Record<string, string> | null> {
+  if (!url) return null;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-event-info`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) { console.warn(`sync-event-info ${res.status} for ${url}`); return null; }
+    const e = await res.json();
+    const state = clean(e.courseState, 60);
+    return Object.fromEntries(Object.entries({
+      event_name: clean(e.eventName),
+      event_date: typeof e.eventDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(e.eventDate) ? e.eventDate : null,
+      course_name: clean(e.courseName),
+      address_line1: clean(e.courseAddressLine1),
+      address_line2: clean(e.courseAddressLine2),
+      city: clean(e.courseCity),
+      state_province: state ? REGIONS[state.toLowerCase()] ?? state : null,
+      postal_code: clean(e.coursePostalCode, 20),
+      country: clean(e.courseCountry, 2),
+    }).filter(([, v]) => v));
+  } catch (e) {
+    console.error('sync-event-info failed', e);
+    return null;
+  }
+}
+
 serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
   if (!WEBHOOK_TOKEN || !PIPEDRIVE_API_TOKEN || !PIPEDRIVE_DOMAIN) return json({ error: 'Not configured' }, 500);
@@ -223,7 +255,13 @@ serve(async (req) => {
       return json({ ok: true, skipped: 'not_in_committed_stage' });
     }
 
+    // Repeat change events on an already-created deal: skip the Pipedrive/GolfStatus lookups.
+    const existing = await rest(`projects?pipedrive_flags_deal_id=eq.${dealId}&select=id&limit=1`);
+    if (existing?.length) return json({ ok: true, projectId: existing[0].id, created: false });
+
     const info = await buildCustomerInfo(deal);
+    const synced = await syncEventInfo(info.registration_url);
+    if (synced) Object.assign(info, synced);
     const rows = await rest('rpc/pipedrive_autocreate_project', {
       method: 'POST',
       body: JSON.stringify({
