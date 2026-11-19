@@ -1,7 +1,7 @@
 import './landing.css';
 import './icons.js';
 import { requireAuth, isStaffOrAdmin } from './auth.js';
-import { pipedriveListPipelines, loadPipedriveStageMap, savePipedriveStageMap } from './supabase.js';
+import { pipedriveListPipelines, loadPipedriveStageMap, savePipedriveStageMap, loadPipedriveAutocreateConfig, savePipedriveAutocreateConfig } from './supabase.js';
 import { esc } from './dom-utils.js';
 
 const session = await requireAuth();
@@ -34,6 +34,7 @@ const saveBtn = document.getElementById('pdSaveBtn');
 
 let pipelines = [];
 let saved = []; // rows currently in the DB
+let autocreate = []; // pipedrive_autocreate_config rows
 
 function showError(msg) { errEl.textContent = msg; errEl.style.display = msg ? '' : 'none'; }
 function showNotice(msg) { noticeEl.textContent = msg; noticeEl.style.display = msg ? '' : 'none'; }
@@ -56,8 +57,22 @@ function stageOptions(selected) {
   return `<option value=""${selected ? '' : ' selected'}>Don't move the deal</option>${orphan}${groups}`;
 }
 
+function autocreateSection() {
+  const row = autocreate.find(r => r.product_type === 'flags' && r.enabled);
+  const sel = row ? optVal(row.pipeline_id, row.stage_id) : '';
+  return `
+    <div class="ci-section">
+      <h2 style="font-size:1rem;margin:0 0 .25rem">Auto-create projects</h2>
+      <p style="color:var(--gray-600);font-size:13px;margin:0 0 .75rem">When a flags deal enters this stage, a Studio project is created for it automatically.</p>
+      <div class="ci-row" style="align-items:center">
+        <label class="ci-label" style="flex:1;margin:0" for="pd-autocreate">Committed stage</label>
+        <select class="ci-input" style="flex:1.4" id="pd-autocreate">${stageOptions(sel).replace("Don't move the deal", 'Off - don\'t auto-create')}</select>
+      </div>
+    </div>`;
+}
+
 function render() {
-  sections.innerHTML = PRODUCTS.map(p => `
+  sections.innerHTML = autocreateSection() + PRODUCTS.map(p => `
     <div class="ci-section">
       <h2 style="font-size:1rem;margin:0 0 .75rem">${esc(p.label)}</h2>
       ${STATUSES.map(st => {
@@ -75,7 +90,8 @@ function render() {
 
 async function init() {
   try {
-    const [pl, map] = await Promise.all([pipedriveListPipelines(), loadPipedriveStageMap()]);
+    const [pl, map, ac] = await Promise.all([pipedriveListPipelines(), loadPipedriveStageMap(), loadPipedriveAutocreateConfig()]);
+    autocreate = ac;
     pipelines = pl.pipelines;
     saved = map;
     render();
@@ -89,7 +105,7 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   showError(''); showNotice('');
   const rows = []; const unmapped = [];
-  sections.querySelectorAll('select').forEach(sel => {
+  sections.querySelectorAll('select[data-product]').forEach(sel => {
     const key = { product_type: sel.dataset.product, studio_status: sel.dataset.status };
     if (!sel.value) { unmapped.push(key); return; }
     const [pipeline_id, stage_id] = sel.value.split(':').map(Number);
@@ -99,6 +115,10 @@ form.addEventListener('submit', async (e) => {
   try {
     await savePipedriveStageMap(rows, unmapped);
     saved = rows;
+    const acVal = document.getElementById('pd-autocreate').value;
+    const [acPipeline, acStage] = acVal ? acVal.split(':').map(Number) : [];
+    await savePipedriveAutocreateConfig('flags', acVal ? { pipeline_id: acPipeline, stage_id: acStage } : null);
+    autocreate = acVal ? [{ product_type: 'flags', pipeline_id: acPipeline, stage_id: acStage, enabled: true }] : [];
     showNotice('Saved.');
   } catch (err) {
     showError(`Couldn't save: ${err.message}`);

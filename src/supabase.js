@@ -1107,6 +1107,29 @@ export async function savePipedriveStageMap(rows, unmapped) {
 }
 
 // Latest Pipedrive sync attempt for one design (staff/admin only via RLS; null for anyone
+// Which Pipedrive stage means "Committed" (auto-creates a Studio project). One row per product;
+// absent/disabled = feature off. Staff/admin only via RLS.
+export async function loadPipedriveAutocreateConfig() {
+  const { data, error } = await supabase
+    .from('pipedrive_autocreate_config')
+    .select('product_type, pipeline_id, stage_id, enabled');
+  if (error) throw error;
+  return data;
+}
+
+// stage = { pipeline_id, stage_id } or null (null removes the row = auto-create off).
+export async function savePipedriveAutocreateConfig(productType, stage) {
+  if (!stage) {
+    const { error } = await supabase.from('pipedrive_autocreate_config').delete().eq('product_type', productType);
+    if (error) throw error;
+    return;
+  }
+  const { error } = await supabase
+    .from('pipedrive_autocreate_config')
+    .upsert({ product_type: productType, ...stage, enabled: true, updated_at: new Date().toISOString() }, { onConflict: 'product_type' });
+  if (error) throw error;
+}
+
 // else or when nothing has synced yet). Rows are written by the admin_actions trigger, the
 // `pipedrive` edge function and the retry cron - see 20261117020000_pipedrive_sync_log.sql.
 export async function loadLatestPipedriveSync(projectId, productType) {

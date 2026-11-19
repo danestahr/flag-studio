@@ -419,3 +419,8 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 # declarative_schema_path = "./database"
 # JSON string passed through to pg-delta SQL formatting.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":80,\"commaStyle\":\"trailing\"}"
+
+# Pipedrive can't send a Supabase JWT; auth is a shared secret (PIPEDRIVE_WEBHOOK_TOKEN) sent as
+# the webhook's HTTP Basic auth password. Pinned here so a bulk `supabase functions deploy` can't reset it.
+[functions.pipedrive-webhook]
+verify_jwt = false
