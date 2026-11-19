@@ -2,7 +2,7 @@ import './landing.css';
 import './icons.js';
 import { requireAuth, isStaffOrAdmin } from './auth.js';
 import { loadProject, loadFlagConfig, loadHoleSignConfig, loadOrderIntake,
-         updateProject, deleteProject, upsertCustomerInfo, resendOrderStartedEmail, sendLogoRequestEmail, loadLastEmailSent,
+         updateProject, deleteProject, upsertCustomerInfo,
          submitDesignForReview, adminRequestDesignChanges, adminReopenDesignReview, adminCancelDesignCompletion, adminSendDesignProof, adminMarkDesignSentToPrint,
          sendProofReady, loadLatestEmailFailure, loadLatestChangeNote, loadLatestPrintAction, sendPrestigeOrder, loadLatestPrestigeOrder, currentFlagDesignHash, loadLatestPrestigeDownload, loadLatestPrestigeDownloadError,
          pipedriveSearchDeals, pipedriveGetDeal, pipedriveLinkDeal, loadLatestPipedriveSync, pipedriveMoveDeal } from './supabase.js';
@@ -173,76 +173,10 @@ async function init() {
     }
 
     renderToolCards();
-    renderCustomerEmailActions();
   } catch (err) {
     console.error('Failed to load project', err);
   }
 }
-
-// ── Customer email actions (staff) ─────────────────────────────
-// One action at a time, chosen by the order's state: while the client hasn't submitted their order
-// the useful nudge is the "order started" email again; once it's submitted, the next thing we need
-// from them is logos. Both go to the contact email on the order (shown before sending), and the
-// server re-checks staff role and order state - this only decides what to show.
-const EMAIL_ACTIONS = {
-  'order-started': {
-    label: 'Resend order email', icon: 'fa-envelope',
-    explain: 'Re-sends the "your order has been started" email with the link to finish the order.',
-    send: () => resendOrderStartedEmail(pid),
-  },
-  'logo-request': {
-    label: 'Request logos', icon: 'fa-images',
-    explain: 'Emails the client the link to upload their logos.',
-    send: () => sendLogoRequestEmail(pid),
-  },
-};
-let _emailAction = { kind: null, step: 'idle', message: '' }; // step: idle | confirm | sending
-
-async function renderCustomerEmailActions() {
-  const el = document.getElementById('customerEmailActions');
-  if (!el) return;
-  if (!isAdmin || !_intake?.contact_email) { el.innerHTML = ''; return; }
-  const kind = _intake.submitted_at ? 'logo-request' : 'order-started';
-  const a = EMAIL_ACTIONS[kind];
-  if (_emailAction.kind !== kind) _emailAction = { kind, step: 'idle', message: '' };
-  const muted = t => `<div style="font-size:12px;color:var(--gray-400);margin-top:6px">${t}</div>`;
-
-  if (_emailAction.step === 'idle') {
-    let last = '';
-    try {
-      const row = await loadLastEmailSent(pid, kind);
-      if (row) last = muted(`Last sent ${esc(new Date(row.created_at).toLocaleString())} to ${esc(row.recipient)}`);
-    } catch { /* informational only */ }
-    el.innerHTML = `
-      <button class="btn-secondary" onclick="window.startEmailAction()"><i class="fa-solid ${a.icon}" aria-hidden="true"></i> ${a.label}</button>
-      ${_emailAction.message ? muted(esc(_emailAction.message)) : ''}${last}`;
-  } else if (_emailAction.step === 'confirm') {
-    el.innerHTML = `
-      <div style="font-size:14px;margin-bottom:8px">${esc(a.explain)} Send to <strong>${esc(_intake.contact_email)}</strong>?</div>
-      <button class="btn-secondary" onclick="window.confirmEmailAction()">Send</button>
-      <button class="btn-secondary" onclick="window.cancelEmailAction()">Cancel</button>`;
-  } else {
-    el.innerHTML = '<span class="spinner-sm"></span>Sending…';
-  }
-}
-
-window.startEmailAction = function () { _emailAction.step = 'confirm'; _emailAction.message = ''; renderCustomerEmailActions(); };
-window.cancelEmailAction = function () { _emailAction.step = 'idle'; renderCustomerEmailActions(); };
-window.confirmEmailAction = async function () {
-  const a = EMAIL_ACTIONS[_emailAction.kind];
-  if (!a) return;
-  _emailAction.step = 'sending';
-  renderCustomerEmailActions();
-  try {
-    const { recipient } = await a.send();
-    _emailAction.message = `Sent to ${recipient || _intake.contact_email}.`;
-  } catch (err) {
-    console.error('Customer email failed', err);
-    _emailAction.message = `Couldn't send: ${err.message}`;
-  }
-  _emailAction.step = 'idle';
-  renderCustomerEmailActions();
-};
 
 // ── Tool cards ("Choose a tool") ───────────────────────────────
 // One card per design type, combining the tool launcher with that design's
@@ -1178,7 +1112,6 @@ window.refreshProjectStatus = async function (productType) {
   try {
     await loadProjectData();
     renderToolCards();
-    renderCustomerEmailActions();
     setReviewPanelStatus(productType, 'Updated with the latest design.');
     setTimeout(() => setReviewPanelStatus(productType, ''), 2000);
   } catch (err) {
