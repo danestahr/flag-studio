@@ -740,6 +740,39 @@ async function callEdgeFunction(name, body) {
   return res.json();
 }
 
+// Staff-only sends: forward the real JWT so the edge function can re-derive the caller's role
+// (the plain callEdgeFunction() only sends the anon key). Both return { ok, recipient }.
+async function callStaffEmailFunction(name, body) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Not signed in');
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ ...body, ...TEST_TO }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Email failed (${res.status})`);
+  return data;
+}
+// Re-sends the "your order has been started" email (only possible while the order is unsubmitted).
+export const resendOrderStartedEmail = projectId => callStaffEmailFunction('send-order-started', { projectId, force: true });
+// Emails the customer the public /upload-logos link (only possible once the order is submitted).
+export const sendLogoRequestEmail = projectId => callStaffEmailFunction('send-logo-request', { projectId });
+
+// Most recent successful send of an email kind for a project, or null (staff/admin via RLS).
+export async function loadLastEmailSent(projectId, kind) {
+  const { data, error } = await supabase
+    .from('email_log')
+    .select('created_at, recipient')
+    .eq('project_id', projectId)
+    .eq('kind', kind)
+    .eq('status', 'sent')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  return data?.[0] || null;
+}
+
 // Latest failed send for a project (staff/admin only via RLS; null for anyone
 // else). Rows are written by the send-* edge functions.
 export async function loadLatestEmailFailure(projectId, kind) {

@@ -1,5 +1,6 @@
 import { logEmail } from '../_shared/email-log.ts';
 import { testRedirect } from '../_shared/test-to.ts';
+import { isStaffOrAdminCaller } from '../_shared/caller-role.ts';
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { esc, wrapEmailHtml, ctaButton, linkFallback, PLAIN_TEXT_FOOTER } from '../_shared/email-layout.ts';
 
@@ -80,24 +81,40 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
   try {
-    const { projectId, testTo, step } = await req.json();
+    const { projectId, testTo, step, force } = await req.json();
     // Optional: land on Step 2 (confirm shipping + delivery date) - used for projects we create for
     // the customer from Pipedrive. Only 2 is honored; it just changes the link, never the recipient.
-    const confirmStep = step === 2;
+    let confirmStep = step === 2;
+
+    // Staff "Resend order email": bypasses the once-per-project guard below. The role is re-derived
+    // from the caller's JWT - an anonymous caller (the order form) can never force a send.
+    const forced = force === true;
+    if (forced && !(await isStaffOrAdminCaller(req.headers.get('Authorization')))) {
+      return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403, headers: JSON_HEADERS });
+    }
     if (typeof projectId !== 'string' || !UUID_RE.test(projectId)) {
       return new Response(JSON.stringify({ error: 'Invalid project' }), { status: 400, headers: JSON_HEADERS });
     }
 
-    const [intake] = await rest<{ contact_name: string; contact_email: string; event_name: string; event_date: string; submitted_at: string | null }>(
-      `order_intakes?project_id=eq.${projectId}&select=contact_name,contact_email,event_name,event_date,submitted_at&limit=1`,
+    const [intake] = await rest<{ contact_name: string; contact_email: string; event_name: string; event_date: string; submitted_at: string | null; flag_style: string | null }>(
+      `order_intakes?project_id=eq.${projectId}&select=contact_name,contact_email,event_name,event_date,submitted_at,flag_style&limit=1`,
     );
     // Nothing to resume once it's submitted (or if the intake doesn't exist).
     if (!intake || intake.submitted_at) {
       return new Response(JSON.stringify({ error: 'Invalid project' }), { status: 403, headers: JSON_HEADERS });
     }
 
+    // A resend for a project we created from a Pipedrive deal (and the customer hasn't picked a
+    // design yet) goes back to Step 2, like the first email did.
+    if (forced && !confirmStep && !intake.flag_style) {
+      const [proj] = await rest<{ pipedrive_flags_deal_id: number | null; pipedrive_hs_deal_id: number | null }>(
+        `projects?id=eq.${projectId}&select=pipedrive_flags_deal_id,pipedrive_hs_deal_id&limit=1`,
+      );
+      confirmStep = !!(proj?.pipedrive_flags_deal_id || proj?.pipedrive_hs_deal_id);
+    }
+
     // Send at most once per project, so a replayed call can't spam the customer.
-    const already = await rest<{ id: string }>(`email_log?project_id=eq.${projectId}&kind=eq.${KIND}&status=eq.sent&select=id&limit=1`);
+    const already = forced ? [] : await rest<{ id: string }>(`email_log?project_id=eq.${projectId}&kind=eq.${KIND}&status=eq.sent&select=id&limit=1`);
     if (already.length) {
       return new Response(JSON.stringify({ ok: true, skipped: 'already-sent' }), { status: 200, headers: JSON_HEADERS });
     }
@@ -129,7 +146,7 @@ serve(async (req) => {
     }
 
     await logEmail({ kind: KIND, projectId, recipient: intake.contact_email, ok: true, httpStatus: res.status });
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: JSON_HEADERS });
+    return new Response(JSON.stringify({ ok: true, recipient: testRedirect(testTo, intake.contact_email).to }), { status: 200, headers: JSON_HEADERS });
   } catch (err) {
     console.error(err);
     return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: JSON_HEADERS });
