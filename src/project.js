@@ -703,9 +703,11 @@ async function runPipedriveSearch(pt, term) {
 async function linkPipedriveDeal(pt, dealId) {
   const t = DESIGN_TYPES.find(x => x.productType === pt);
   const out = document.getElementById(`pdResults-${pt}`);
+  let filledFromDeal = false;
   if (out) out.innerHTML = '<span class="spinner-sm"></span>Linking…';
   try {
-    const { deal } = await pipedriveLinkDeal(pid, pt, dealId);
+    const { deal, filled, named } = await pipedriveLinkDeal(pid, pt, dealId);
+    filledFromDeal = filled?.length > 0 || !!named;
     _project[PIPEDRIVE_DEAL_COLUMN[pt]] = dealId;
     if (deal) _dealCache.set(dealId, { deal });
     renderPipedriveRow(t);
@@ -718,6 +720,9 @@ async function linkPipedriveDeal(pt, dealId) {
   // renderPipedriveSync, so they're swallowed here.
   try { await pipedriveMoveDeal(pid, pt); } catch { /* shown below */ }
   renderPipedriveRow(t);
+  // The link pulled event/contact details into the project: reload so the header summary, deadline
+  // and contact info reflect them instead of waiting for a manual refresh.
+  if (filledFromDeal) window.location.reload();
 }
 
 window.startPipedriveSearch = function (pt) {

@@ -117,7 +117,7 @@ serve(async (req) => {
       body: JSON.stringify({
         p_product_type: PRODUCT,
         p_deal_id: dealId,
-        p_name: clean(deal.title),
+        p_name: (info.event_name as string | null) ?? clean(deal.title),
         p_customer_info: info,
       }),
     });

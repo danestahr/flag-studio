@@ -311,7 +311,7 @@ async function createFromDeal(productType: ProductType, dealIdRaw: unknown) {
   const info = await buildCustomerInfoFromDeal(d.data);
   const rows = await rest('rpc/pipedrive_autocreate_project', {
     method: 'POST',
-    body: JSON.stringify({ p_product_type: productType, p_deal_id: dealId, p_name: d.data.title, p_customer_info: info }),
+    body: JSON.stringify({ p_product_type: productType, p_deal_id: dealId, p_name: (info.event_name as string | null) ?? d.data.title, p_customer_info: info }),
   });
   const row = rows?.[0];
   if (!row?.project_id) throw new HttpError(502, 'Could not create the project');
@@ -321,7 +321,7 @@ async function createFromDeal(productType: ProductType, dealIdRaw: unknown) {
 
 async function linkDeal(projectId: string, productType: ProductType, dealIdRaw: unknown) {
   const column = DEAL_COLUMN[productType];
-  const projects = await rest(`projects?id=eq.${projectId}&select=${column},customer_info&limit=1`);
+  const projects = await rest(`projects?id=eq.${projectId}&select=${column},customer_info,name&limit=1`);
   if (!projects?.length) throw new HttpError(400, 'Invalid project');
   const previousDealId: number | null = projects[0][column] ?? null;
 
@@ -359,17 +359,24 @@ async function linkDeal(projectId: string, productType: ProductType, dealIdRaw: 
       }
     } catch (e) { console.error('fill from deal failed', dealId, e); }
   }
+  const named = !!(dealId && deal && !projects[0].name?.trim());
   await rest(`projects?id=eq.${projectId}`, {
     method: 'PATCH',
     headers: { Prefer: 'return=minimal' },
-    body: JSON.stringify({ [column]: dealId, ...(filled.length ? { customer_info: customerInfo } : {}) }),
+    body: JSON.stringify({
+      [column]: dealId,
+      ...(filled.length ? { customer_info: customerInfo } : {}),
+      // A nameless project (e.g. the admin "+ New project" fast-path) is named after the tournament
+      // (deal title only if no tournament name is known), like the webhook does.
+      ...(named ? { name: customerInfo.event_name || deal!.title } : {}),
+    }),
   });
 
   // Clear the field on the deal being unlinked / replaced, then set it on the new one.
   let warning: string | null = null;
   if (previousDealId && previousDealId !== dealId) warning = await setProjectLinkField(previousDealId, null);
   if (dealId) warning = (await setProjectLinkField(dealId, projectId)) ?? warning;
-  return { ok: true, deal, filled, ...(warning ? { warning } : {}) };
+  return { ok: true, deal, filled, named, ...(warning ? { warning } : {}) };
 }
 
 // Service-role only (fired by the projects BEFORE DELETE trigger). Skips any deal that another
