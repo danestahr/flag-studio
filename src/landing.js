@@ -165,7 +165,9 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
       <div class="draft-card-tools">
         ${hasFlags ? `<a class="draft-card-tool configured" href="/flags?project=${p.id}" onclick="event.stopPropagation()"><i class="fa-solid fa-flag" aria-hidden="true"></i> Flags</a>` : ''}
         ${hasHoleSigns ? `<a class="draft-card-tool configured" href="/hole-signs?project=${p.id}" onclick="event.stopPropagation()"><i class="fa-solid fa-signs-post" aria-hidden="true"></i> Hole Signs</a>` : ''}
-        <button type="button" class="draft-card-delete" title="Delete project" onclick="event.stopPropagation();window.openDeleteProjectModal('${p.id}')"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>
+        ${p.pipedrive_flags_deal_id || p.pipedrive_hs_deal_id
+          ? `<button type="button" class="draft-card-delete" title="Linked to a Pipedrive deal - unlink it on the project page before deleting" disabled style="opacity:.35;cursor:not-allowed"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>`
+          : `<button type="button" class="draft-card-delete" title="Delete project" onclick="event.stopPropagation();window.openDeleteProjectModal('${p.id}')"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>`}
       </div>
     </div>`;
   }
@@ -386,7 +388,9 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
       loadPage({ reset: true });
     } catch (err) {
       console.error(err);
-      alert('Could not delete project.');
+      alert(err?.hint === 'pipedrive_linked'
+        ? 'This project is linked to a Pipedrive deal. Unlink it on the project page before deleting.'
+        : 'Could not delete project.');
     } finally {
       deleteConfirmBtn.disabled = false;
       deleteConfirmBtn.textContent = 'Delete';

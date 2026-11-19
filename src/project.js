@@ -896,6 +896,10 @@ const deleteModal = document.getElementById('deleteModal');
 const deleteBtn   = document.getElementById('deleteConfirmBtn');
 
 window.openDeleteModal = function() {
+  if (_project?.pipedrive_flags_deal_id || _project?.pipedrive_hs_deal_id) {
+    alert('This project is linked to a Pipedrive deal. Unlink the deal (Pipedrive section below) before deleting the project.');
+    return;
+  }
   deleteModal.style.display = 'flex';
 };
 
@@ -911,7 +915,9 @@ window.confirmDelete = async function() {
     window.location.href = '/';
   } catch (err) {
     console.error(err);
-    alert('Could not delete project.');
+    alert(err?.hint === 'pipedrive_linked'
+      ? 'This project is linked to a Pipedrive deal. Unlink it before deleting.'
+      : 'Could not delete project.');
     deleteBtn.disabled = false;
     deleteBtn.textContent = 'Delete';
   }
