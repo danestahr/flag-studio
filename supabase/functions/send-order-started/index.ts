@@ -43,14 +43,14 @@ function formatDate(iso: string): string {
   return new Date(+y, +m - 1, +d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
-function buildHtml(p: { name: string; eventName: string; eventDate: string; resumeUrl: string }): string {
+function buildHtml(p: { name: string; eventName: string; eventDate: string; resumeUrl: string; confirmStep?: boolean }): string {
   const body = `<p style="margin:0 0 20px;color:#333;font-size:16px;">Hi ${esc(p.name)},</p>
     <p style="margin:0 0 20px;color:#555;font-size:15px;line-height:1.6;">
       Thanks for starting your order for <strong>${esc(p.eventName)}</strong>${p.eventDate ? `, to be delivered by ${esc(formatDate(p.eventDate))}` : ''}.
       We've saved your event and shipping details, and our team can already see your order.
     </p>
     <p style="margin:0 0 8px;color:#555;font-size:15px;line-height:1.6;">
-      You haven't submitted it yet. Pick up where you left off any time, on any device, using the button below. Your changes are saved to the same order.
+      You haven't submitted it yet. ${p.confirmStep ? 'Next, please confirm your shipping address and delivery date' : 'Pick up where you left off any time, on any device'}, using the button below. Your changes are saved to the same order.
     </p>
     ${ctaButton(esc(p.resumeUrl), 'Continue Your Order')}
     ${linkFallback(esc(p.resumeUrl))}
@@ -60,13 +60,13 @@ function buildHtml(p: { name: string; eventName: string; eventDate: string; resu
   return wrapEmailHtml({ title: 'Your Order Has Been Started', bodyHtml: body });
 }
 
-function buildText(p: { name: string; eventName: string; eventDate: string; resumeUrl: string }): string {
+function buildText(p: { name: string; eventName: string; eventDate: string; resumeUrl: string; confirmStep?: boolean }): string {
   return [
     `Hi ${p.name},`,
     '',
     `Thanks for starting your order for ${p.eventName}${p.eventDate ? `, to be delivered by ${formatDate(p.eventDate)}` : ''}. We've saved your event and shipping details, and our team can already see your order.`,
     '',
-    "You haven't submitted it yet. Pick up where you left off any time, on any device, using the link below. Your changes are saved to the same order.",
+    `You haven't submitted it yet. ${p.confirmStep ? 'Next, please confirm your shipping address and delivery date' : 'Pick up where you left off any time, on any device'}, using the link below. Your changes are saved to the same order.`,
     '',
     `Continue your order: ${p.resumeUrl}`,
     '',
@@ -80,7 +80,10 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
   try {
-    const { projectId, testTo } = await req.json();
+    const { projectId, testTo, step } = await req.json();
+    // Optional: land on Step 2 (confirm shipping + delivery date) - used for projects we create for
+    // the customer from Pipedrive. Only 2 is honored; it just changes the link, never the recipient.
+    const confirmStep = step === 2;
     if (typeof projectId !== 'string' || !UUID_RE.test(projectId)) {
       return new Response(JSON.stringify({ error: 'Invalid project' }), { status: 400, headers: JSON_HEADERS });
     }
@@ -99,8 +102,8 @@ serve(async (req) => {
       return new Response(JSON.stringify({ ok: true, skipped: 'already-sent' }), { status: 200, headers: JSON_HEADERS });
     }
 
-    const resumeUrl = `${APP_URL.replace(/\/$/, '')}/order?resume=${projectId}`;
-    const payload = { name: intake.contact_name, eventName: intake.event_name, eventDate: intake.event_date, resumeUrl };
+    const resumeUrl = `${APP_URL.replace(/\/$/, '')}/order?resume=${projectId}${confirmStep ? '&step=2' : ''}`;
+    const payload = { name: intake.contact_name, eventName: intake.event_name, eventDate: intake.event_date, resumeUrl, confirmStep };
 
     const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',

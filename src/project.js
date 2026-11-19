@@ -703,9 +703,11 @@ async function runPipedriveSearch(pt, term) {
 async function linkPipedriveDeal(pt, dealId) {
   const t = DESIGN_TYPES.find(x => x.productType === pt);
   const out = document.getElementById(`pdResults-${pt}`);
+  let filledFromDeal = false;
   if (out) out.innerHTML = '<span class="spinner-sm"></span>Linking…';
   try {
-    const { deal } = await pipedriveLinkDeal(pid, pt, dealId);
+    const { deal, filled, named } = await pipedriveLinkDeal(pid, pt, dealId);
+    filledFromDeal = filled?.length > 0 || !!named;
     _project[PIPEDRIVE_DEAL_COLUMN[pt]] = dealId;
     if (deal) _dealCache.set(dealId, { deal });
     renderPipedriveRow(t);
@@ -718,6 +720,9 @@ async function linkPipedriveDeal(pt, dealId) {
   // renderPipedriveSync, so they're swallowed here.
   try { await pipedriveMoveDeal(pid, pt); } catch { /* shown below */ }
   renderPipedriveRow(t);
+  // The link pulled event/contact details into the project: reload so the header summary, deadline
+  // and contact info reflect them instead of waiting for a manual refresh.
+  if (filledFromDeal) window.location.reload();
 }
 
 window.startPipedriveSearch = function (pt) {
@@ -891,6 +896,10 @@ const deleteModal = document.getElementById('deleteModal');
 const deleteBtn   = document.getElementById('deleteConfirmBtn');
 
 window.openDeleteModal = function() {
+  if (_project?.pipedrive_flags_deal_id || _project?.pipedrive_hs_deal_id) {
+    alert('This project is linked to a Pipedrive deal. Unlink the deal (Pipedrive section below) before deleting the project.');
+    return;
+  }
   deleteModal.style.display = 'flex';
 };
 
@@ -906,7 +915,9 @@ window.confirmDelete = async function() {
     window.location.href = '/';
   } catch (err) {
     console.error(err);
-    alert('Could not delete project.');
+    alert(err?.hint === 'pipedrive_linked'
+      ? 'This project is linked to a Pipedrive deal. Unlink it before deleting.'
+      : 'Could not delete project.');
     deleteBtn.disabled = false;
     deleteBtn.textContent = 'Delete';
   }

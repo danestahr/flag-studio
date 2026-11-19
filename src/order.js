@@ -1571,6 +1571,20 @@ window.resyncEvent = function () {
 };
 
 window.orderSubmit = async function () {
+  // Re-validate every step, not just the review step: a restored draft, a resume link or a
+  // review-step "Edit" shortcut can land on Step 5 without Steps 1-3 ever having been checked.
+  // Send the customer back to the first step with a problem; returnToReview brings them back here.
+  for (const step of [1, 2, 3]) {
+    const stepErrors = validate(step);
+    if (Object.keys(stepErrors).length) {
+      O.errors = stepErrors;
+      O.returnToReview = true;
+      O.step = step;
+      render();
+      scrollToFirstError();
+      return;
+    }
+  }
   const errors = validate(5);
   if (Object.keys(errors).length) {
     O.errors = errors;
@@ -1912,7 +1926,9 @@ async function resumeOrder(projectId) {
   O.syncStep = false;
   O.betaStep = false;
   O.ackBeta = true;
-  O.step = 3;
+  // ?step=2 (emails for projects created from Pipedrive) reopens at shipping + delivery date so the
+  // customer confirms them; everything else resumes at Step 3 as before.
+  O.step = new URLSearchParams(window.location.search).get('step') === '2' ? 2 : 3;
 }
 
 // ── Init ───────────────────────────────────────────────────

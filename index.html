@@ -22,9 +22,15 @@
 
 <div class="landing-main" id="projectHub" style="display:none">
   <div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin-bottom:.75rem">
+      <input type="search" id="projectSearch" class="project-search" style="flex:1;max-width:420px" placeholder="Search name or email…">
+      <div style="display:flex;align-items:center;gap:.6rem">
+        <button class="btn sm" id="browseTemplatesBtn" style="display:none">Browse templates</button>
+        <button class="btn primary sm" onclick="newProject()">+ New project</button>
+      </div>
+    </div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem">
       <div style="display:flex;align-items:center;gap:.6rem">
-        <input type="search" id="projectSearch" class="project-search" placeholder="Search name or email…">
         <select id="projectProductFilter" class="project-search" style="width:150px">
           <option value="">All products</option>
           <option value="flags">Flags</option>
@@ -42,13 +48,14 @@
           <option value="month">Due this month</option>
         </select>
       </div>
-      <div style="display:flex;align-items:center;gap:.6rem">
-        <button class="btn sm" id="browseTemplatesBtn" style="display:none">Browse templates</button>
-        <button class="btn primary sm" onclick="newProject()">+ New project</button>
+      <div id="viewToggle" style="display:none">
+        <button class="btn sm view-toggle active" id="viewListBtn" type="button"><i class="fa-solid fa-list" aria-hidden="true"></i> List</button>
+        <button class="btn sm view-toggle" id="viewBoardBtn" type="button"><i class="fa-solid fa-table-columns" aria-hidden="true"></i> Board</button>
       </div>
     </div>
     <div id="projectsList"><div class="drafts-empty">Loading…</div></div>
     <div id="loadMoreWrap"></div>
+    <div id="boardRoot" style="display:none"></div>
   </div>
 </div>
 
