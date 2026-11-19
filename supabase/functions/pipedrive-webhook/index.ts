@@ -194,6 +194,21 @@ async function buildCustomerInfo(deal: any) {
   };
 }
 
+// Mon-Fri only (no holidays), n business days before the date. Port of subtractBusinessDays() in
+// src/intake-shared.js - keep in sync. order.js stores the customer's *delivery* date as event_date,
+// defaulting it to two business days before the synced event date; do the same here so
+// auto-created projects match what the order form would have produced.
+function subtractBusinessDays(iso: string, n: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  while (n > 0) {
+    dt.setUTCDate(dt.getUTCDate() - 1);
+    const dow = dt.getUTCDay();
+    if (dow !== 0 && dow !== 6) n--;
+  }
+  return dt.toISOString().slice(0, 10);
+}
+
 // GolfStatus is the source of truth for event details (name, date, course, shipping address) when
 // the deal carries an event-page URL: reuse the same `sync-event-info` function the customer flow
 // calls. Best-effort - any failure just leaves the Pipedrive-field values in place. The tournament
@@ -262,6 +277,11 @@ serve(async (req) => {
     const info = await buildCustomerInfo(deal);
     const synced = await syncEventInfo(info.registration_url);
     if (synced) Object.assign(info, synced);
+    // event_date is the delivery date (see subtractBusinessDays); keep the event's own date alongside.
+    if (info.event_date) {
+      (info as Record<string, unknown>).tournament_date = info.event_date;
+      info.event_date = subtractBusinessDays(info.event_date, 2);
+    }
     const rows = await rest('rpc/pipedrive_autocreate_project', {
       method: 'POST',
       body: JSON.stringify({
