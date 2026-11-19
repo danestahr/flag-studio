@@ -7,6 +7,8 @@
 //   list-pipelines  staff   -> { pipelines: [{ id, name, stages: [{ id, name, order }] }] }
 //   search-deals    staff   { term, productType } -> (only deals in the pipeline(s) mapped for that product) { deals: [{ id, title, stage_id, status }] }
 //   get-deal        staff   { dealId } -> { deal: { id, title, status, stage_id, url } } (404 if gone)
+//   list-board      staff   { productType } -> { pipelineId, stages: [{ id, name, order }], deals: [{ id, title, stage_id, org, person, owner, value, currency, url, ... }] }
+//                   Open deals in the pipeline mapped for that product, for the read-only board view.
 //   link-deal       staff   { projectId, productType, dealId | null } -> stores/clears the link
 //   move-deal       staff OR service role   { projectId, productType }
 //                   Moves the linked deal to the stage mapped to the design's CURRENT status.
@@ -244,10 +246,57 @@ async function getDeal(dealIdRaw: unknown) {
   };
 }
 
+// Read-only board: every open deal in the product's pipeline, plus that pipeline's stages in order.
+// Uses the v1 pipeline-deals endpoint because it inlines org/person/owner names (v2 only returns ids,
+// which would cost one lookup per deal).
+async function listBoard(productType: ProductType) {
+  const allowed = [...(await allowedPipelines(productType))];
+  const pipelineId = allowed[0];
+  const [{ pipelines }] = await Promise.all([listPipelines()]);
+  const pipeline = pipelines.find((p: any) => Number(p.id) === pipelineId);
+  if (!pipeline) throw new HttpError(404, 'Mapped pipeline no longer exists in Pipedrive');
+
+  const deals: any[] = [];
+  let start = 0;
+  for (let page = 0; page < 20; page++) { // hard cap: 20 x 500 deals
+    const res = await fetch(
+      `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/pipelines/${pipelineId}/deals?limit=500&start=${start}`,
+      { headers: { 'x-api-token': PIPEDRIVE_API_TOKEN!, 'Content-Type': 'application/json' } },
+    );
+    if (!res.ok) throw new HttpError(502, `Pipedrive ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    const body = await res.json();
+    deals.push(...(body.data ?? []));
+    const pg = body.additional_data?.pagination;
+    if (!pg?.more_items_in_collection) break;
+    start = pg.next_start;
+  }
+
+  return {
+    pipelineId,
+    pipelineName: pipeline.name,
+    stages: pipeline.stages,
+    deals: deals
+      .filter((d) => d.status === 'open' && !d.is_deleted)
+      .map((d) => ({
+        id: d.id,
+        title: d.title,
+        stage_id: d.stage_id,
+        org: d.org_name ?? d.org_id?.name ?? null,
+        person: d.person_name ?? d.person_id?.name ?? null,
+        owner: d.owner_name ?? d.user_id?.name ?? null,
+        value: d.value ?? 0,
+        currency: d.currency ?? null,
+        next_activity_date: d.next_activity_date ?? null,
+        url: dealUrl(d.id),
+      })),
+  };
+}
+
 async function linkDeal(projectId: string, productType: ProductType, dealIdRaw: unknown) {
   const column = DEAL_COLUMN[productType];
-  const projects = await rest(`projects?id=eq.${projectId}&select=id&limit=1`);
+  const projects = await rest(`projects?id=eq.${projectId}&select=${column}&limit=1`);
   if (!projects?.length) throw new HttpError(400, 'Invalid project');
+  const previousDealId: number | null = projects[0][column] ?? null;
 
   // null clears the link. Otherwise confirm the deal exists in Pipedrive before storing it.
   let deal: { id: number; title: string; url: string } | null = null;
@@ -430,6 +479,8 @@ serve(async (req) => {
         return json(await searchDeals(body.term, parseProductType(body.productType)), 200);
       case 'get-deal':
         return json(await getDeal(body.dealId), 200);
+      case 'list-board':
+        return json(await listBoard(parseProductType(body.productType)), 200);
       case 'link-deal':
         return json(await linkDeal(parseUuid(body.projectId), parseProductType(body.productType), body.dealId ?? null), 200);
       case 'clear-link-field':

@@ -8,6 +8,7 @@ import { esc } from './dom-utils.js';
 import { STATUS_LABEL, STATUS_GROUPS } from './status-labels.js';
 import { calcApprovalDeadline, calcEffectiveDeadline, leadExtraFor, formatDate } from './intake-shared.js';
 import { renderTemplateGallery } from './template-gallery.js';
+import { createBoard } from './board.js';
 
 const PAGE_SIZE = 30;
 
@@ -282,8 +283,49 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     }
   }
 
+  // ── List / Board toggle (staff/admin only) ────────────────
+  const isStaff = role === 'staff' || role === 'admin';
+  const board = isStaff ? createBoard(document.getElementById('boardRoot')) : null;
+  let boardMode = false;
+
+  // Status/deadline filters on the board look at the linked Studio project's design status for the
+  // board's product (the board only ever shows one). A deal with no Studio project has neither a
+  // status nor a deadline, so it's hidden while one of those filters is active.
+  function boardFilter(p) {
+    if (!status && !due) return true;
+    if (!p) return false;
+    if (!matchesDue(p)) return false;
+    const cfg = cfgOf(product === 'hole_signs' ? p.hole_sign_config : p.flag_config);
+    if (status === NOT_STARTED) return !cfg;
+    const group = STATUS_GROUPS[status];
+    return !group || group.statuses.includes(cfg?.status);
+  }
+  board?.setProjectFilter(boardFilter);
+
+  function setView(mode) {
+    boardMode = mode === 'board';
+    document.getElementById('projectHub').classList.toggle('board-wide', boardMode);
+    document.getElementById('projectsList').style.display = boardMode ? 'none' : '';
+    sentinel.style.display = boardMode ? 'none' : '';
+    document.getElementById('boardRoot').style.display = boardMode ? '' : 'none';
+    document.getElementById('viewListBtn').classList.toggle('active', !boardMode);
+    document.getElementById('viewBoardBtn').classList.toggle('active', boardMode);
+    try { localStorage.setItem('fs-projects-view', mode); } catch {}
+    if (boardMode) {
+      board.load(product);
+      board.setSearch(document.getElementById('projectSearch').value);
+    }
+  }
+
+  if (isStaff) {
+    document.getElementById('viewToggle').style.display = 'flex';
+    document.getElementById('viewListBtn').addEventListener('click', () => setView('list'));
+    document.getElementById('viewBoardBtn').addEventListener('click', () => setView('board'));
+  }
+
   let searchDebounce;
   document.getElementById('projectSearch').addEventListener('input', (e) => {
+    if (boardMode) { board.setSearch(e.target.value); return; }
     clearTimeout(searchDebounce);
     searchDebounce = setTimeout(() => {
       query = e.target.value.trim();
@@ -293,16 +335,19 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
 
   document.getElementById('projectDueFilter').addEventListener('change', (e) => {
     due = e.target.value;
+    if (boardMode) { board.setProjectFilter(boardFilter); return; }
     loadPage({ reset: true });
   });
 
   document.getElementById('projectProductFilter').addEventListener('change', (e) => {
     product = e.target.value;
+    if (boardMode) { board.load(product); return; }
     loadPage({ reset: true });
   });
 
   statusFilter.addEventListener('change', (e) => {
     status = e.target.value;
+    if (boardMode) { board.setProjectFilter(boardFilter); return; }
     loadPage({ reset: true });
   });
 
@@ -373,5 +418,10 @@ async function initProjectHub(userId, { openGalleryOnLoad = false } = {}) {
     document.getElementById('projectHub').style.display = '';
   }
   loadPage({ reset: true });
+
+  // Remember the last view per browser.
+  let savedView = null;
+  try { savedView = localStorage.getItem('fs-projects-view'); } catch {}
+  if (isStaff && savedView === 'board') setView('board');
 }
 

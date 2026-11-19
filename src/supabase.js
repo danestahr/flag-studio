@@ -1074,6 +1074,7 @@ async function callPipedrive(action, body = {}) {
 
 export const pipedriveListPipelines = () => callPipedrive('list-pipelines');
 export const pipedriveSearchDeals = (term, productType) => callPipedrive('search-deals', { term, productType });
+export const pipedriveListBoard = (productType) => callPipedrive('list-board', { productType });
 export const pipedriveGetDeal = (dealId) => callPipedrive('get-deal', { dealId });
 // dealId = null unlinks. productType is 'flags' | 'hole-signs'.
 export const pipedriveLinkDeal = (projectId, productType, dealId) =>
@@ -1106,7 +1107,6 @@ export async function savePipedriveStageMap(rows, unmapped) {
   }
 }
 
-// Latest Pipedrive sync attempt for one design (staff/admin only via RLS; null for anyone
 // Which Pipedrive stage means "Committed" (auto-creates a Studio project). One row per product;
 // absent/disabled = feature off. Staff/admin only via RLS.
 export async function loadPipedriveAutocreateConfig() {
@@ -1130,6 +1130,7 @@ export async function savePipedriveAutocreateConfig(productType, stage) {
   if (error) throw error;
 }
 
+// Latest Pipedrive sync attempt for one design (staff/admin only via RLS; null for anyone
 // else or when nothing has synced yet). Rows are written by the admin_actions trigger, the
 // `pipedrive` edge function and the retry cron - see 20261117020000_pipedrive_sync_log.sql.
 export async function loadLatestPipedriveSync(projectId, productType) {
@@ -1149,3 +1150,16 @@ export async function loadLatestPipedriveSync(projectId, productType) {
 // and records a fresh sync_log row, so repeating it is safe.
 export const pipedriveMoveDeal = (projectId, productType) =>
   callPipedrive('move-deal', { projectId, productType });
+
+// Projects linked to a Pipedrive deal, keyed for the board view (staff/admin; RLS lets them read all).
+export async function listPipedriveLinkedProjects(productType) {
+  const col = productType === 'flags' ? 'pipedrive_flags_deal_id' : 'pipedrive_hs_deal_id';
+  // Same shape listProjects() returns, so the landing page's status/deadline filters apply as-is.
+  const { data, error } = await supabase
+    .from('projects')
+    .select(`id, name, customer_info, pipedrive_flags_deal_id, pipedrive_hs_deal_id, order_intakes(event_date, country), flag_config(id, status), hole_sign_config(id, status)`)
+    .not(col, 'is', null)
+    .limit(2000);
+  if (error) throw error;
+  return data;
+}
