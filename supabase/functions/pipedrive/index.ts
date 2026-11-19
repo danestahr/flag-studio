@@ -26,6 +26,7 @@
 // the service-role path is a constant-time match on the project's own service key.
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { buildCustomerInfoFromDeal } from '../_shared/pipedrive-deal-info.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -292,14 +293,41 @@ async function listBoard(productType: ProductType) {
   };
 }
 
+// Staff: create the Studio project for a deal (or return the one already linked), prefilled from the
+// deal. Same idempotent RPC the webhook uses, so a double-click or a webhook race can't duplicate.
+async function createFromDeal(productType: ProductType, dealIdRaw: unknown) {
+  const dealId = parseDealId(dealIdRaw);
+  let d: any;
+  try {
+    d = await pd(`deals/${dealId}`);
+    assertLive(d);
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 404) throw new HttpError(404, 'Deal not found in Pipedrive');
+    throw e;
+  }
+  if (!(await allowedPipelines(productType)).has(Number(d.data.pipeline_id))) {
+    throw new HttpError(403, `That deal isn't in the ${productType === 'flags' ? 'Flags' : 'Hole Signs'} pipeline.`);
+  }
+  const info = await buildCustomerInfoFromDeal(d.data);
+  const rows = await rest('rpc/pipedrive_autocreate_project', {
+    method: 'POST',
+    body: JSON.stringify({ p_product_type: productType, p_deal_id: dealId, p_name: d.data.title, p_customer_info: info }),
+  });
+  const row = rows?.[0];
+  if (!row?.project_id) throw new HttpError(502, 'Could not create the project');
+  const warning = row.created ? await setProjectLinkField(dealId, row.project_id) : null;
+  return { ok: true, projectId: row.project_id, created: !!row.created, ...(warning ? { warning } : {}) };
+}
+
 async function linkDeal(projectId: string, productType: ProductType, dealIdRaw: unknown) {
   const column = DEAL_COLUMN[productType];
-  const projects = await rest(`projects?id=eq.${projectId}&select=${column}&limit=1`);
+  const projects = await rest(`projects?id=eq.${projectId}&select=${column},customer_info&limit=1`);
   if (!projects?.length) throw new HttpError(400, 'Invalid project');
   const previousDealId: number | null = projects[0][column] ?? null;
 
   // null clears the link. Otherwise confirm the deal exists in Pipedrive before storing it.
   let deal: { id: number; title: string; url: string } | null = null;
+  let liveDeal: any = null;
   let dealId: number | null = null;
   if (dealIdRaw !== null) {
     dealId = parseDealId(dealIdRaw);
@@ -310,22 +338,38 @@ async function linkDeal(projectId: string, productType: ProductType, dealIdRaw: 
         throw new HttpError(403, `That deal isn't in the ${productType === 'flags' ? 'Flags' : 'Hole Signs'} pipeline.`);
       }
       deal = { id: d.data.id, title: d.data.title, url: dealUrl(d.data.id) };
+      liveDeal = d.data;
     } catch (e) {
       if (e instanceof HttpError && e.status === 404) throw new HttpError(404, 'Deal not found in Pipedrive');
       throw e;
     }
   }
+  // Linking a deal also pulls in event details the project is missing (never overwrites a value
+  // staff or the customer already entered). Best-effort: the link itself must still succeed.
+  let customerInfo = projects[0].customer_info ?? {};
+  const filled: string[] = [];
+  if (dealId && liveDeal) {
+    try {
+      const fromDeal = await buildCustomerInfoFromDeal(liveDeal);
+      customerInfo = { ...customerInfo };
+      for (const [k, v] of Object.entries(fromDeal)) {
+        if (v === null || v === undefined || v === '') continue;
+        const cur = customerInfo[k];
+        if (cur === undefined || cur === null || cur === '') { customerInfo[k] = v; filled.push(k); }
+      }
+    } catch (e) { console.error('fill from deal failed', dealId, e); }
+  }
   await rest(`projects?id=eq.${projectId}`, {
     method: 'PATCH',
     headers: { Prefer: 'return=minimal' },
-    body: JSON.stringify({ [column]: dealId }),
+    body: JSON.stringify({ [column]: dealId, ...(filled.length ? { customer_info: customerInfo } : {}) }),
   });
 
   // Clear the field on the deal being unlinked / replaced, then set it on the new one.
   let warning: string | null = null;
   if (previousDealId && previousDealId !== dealId) warning = await setProjectLinkField(previousDealId, null);
   if (dealId) warning = (await setProjectLinkField(dealId, projectId)) ?? warning;
-  return { ok: true, deal, ...(warning ? { warning } : {}) };
+  return { ok: true, deal, filled, ...(warning ? { warning } : {}) };
 }
 
 // Service-role only (fired by the projects BEFORE DELETE trigger). Skips any deal that another
@@ -483,6 +527,13 @@ serve(async (req) => {
         return json(await listBoard(parseProductType(body.productType)), 200);
       case 'link-deal':
         return json(await linkDeal(parseUuid(body.projectId), parseProductType(body.productType), body.dealId ?? null), 200);
+      case 'create-from-deal':
+        return json(await createFromDeal(parseProductType(body.productType), body.dealId), 200);
+      case 'set-link-field': {
+        if (!service) return json({ error: 'Forbidden' }, 403);
+        const warning = await setProjectLinkField(parseDealId(body.dealId), parseUuid(body.projectId));
+        return json({ ok: true, ...(warning ? { warning } : {}) }, 200);
+      }
       case 'clear-link-field':
         if (!service) return json({ error: 'Forbidden' }, 403);
         return json(await clearLinkField(body.dealIds), 200);

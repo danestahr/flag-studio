@@ -3,7 +3,7 @@
 // status changes there), so stages Studio doesn't track (Ordered, Shipped...) still show correctly.
 // Deals linked to a Studio project open that project and show its design status; unlinked deals
 // open in Pipedrive.
-import { pipedriveListBoard, listPipedriveLinkedProjects } from './supabase.js';
+import { pipedriveListBoard, listPipedriveLinkedProjects, pipedriveCreateFromDeal } from './supabase.js';
 import { esc } from './dom-utils.js';
 import { STATUS_LABEL } from './status-labels.js';
 
@@ -20,6 +20,7 @@ export function createBoard(root) {
   let links = new Map();  // dealId -> { id, name, status }
   let search = '';
   let generation = 0;
+  let product = 'flags';
   // (project|null) => boolean. Set by the landing page so the status/deadline filters apply;
   // gets null for a deal with no Studio project.
   let projectFilter = () => true;
@@ -35,7 +36,7 @@ export function createBoard(root) {
       <div class="board-card-title">${esc(deal.title)}</div>
       ${deal.org ? `<div class="board-card-meta">${esc(deal.org)}</div>` : ''}
       ${deal.person ? `<div class="board-card-meta">${esc(deal.person)}</div>` : ''}
-      <div class="board-card-foot"><span>${esc(money(deal.value, deal.currency))}</span>${pill}</div>
+      <div class="board-card-foot"><span>${esc(money(deal.value, deal.currency))}</span>${pill}${link ? '' : `<button type="button" class="btn-secondary sm" data-create-deal="${esc(String(deal.id))}">Create project</button>`}</div>
     </a>`;
   }
 
@@ -63,8 +64,26 @@ export function createBoard(root) {
     root.innerHTML = `<div class="board">${columns.join('')}</div>`;
   }
 
+  // Unlinked cards carry a "Create project" button (inside the card's <a>, so it must not navigate).
+  root.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-create-deal]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    btn.disabled = true;
+    btn.textContent = 'Creating…';
+    try {
+      const { projectId } = await pipedriveCreateFromDeal(Number(btn.dataset.createDeal), product);
+      window.location.href = `/project?project=${projectId}`;
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Create project';
+      alert(`Couldn't create the project: ${err.message}`);
+    }
+  });
+
   async function load(productFilterValue) {
-    const product = productFilterValue === 'hole_signs' ? 'hole-signs' : 'flags';
+    product = productFilterValue === 'hole_signs' ? 'hole-signs' : 'flags';
     const mine = ++generation;
     root.innerHTML = '<div class="drafts-empty">Loading board…</div>';
     try {
