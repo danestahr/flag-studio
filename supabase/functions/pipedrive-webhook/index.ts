@@ -27,6 +27,7 @@ const PIPEDRIVE_DOMAIN = Deno.env.get('PIPEDRIVE_DOMAIN')
   ?.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/\.pipedrive\.com$/i, '') || undefined;
 const WEBHOOK_TOKEN = Deno.env.get('PIPEDRIVE_WEBHOOK_TOKEN');
 const APP_URL = Deno.env.get('APP_URL');
+const PROJECT_LINK_FIELD = Deno.env.get('PIPEDRIVE_PROJECT_LINK_FIELD')?.trim() || undefined;
 
 const PRODUCT = 'flags' as const; // flags only for now; config table is keyed for hole-signs later
 
@@ -175,6 +176,18 @@ serve(async (req) => {
     const dealId = Number(body?.data?.id ?? body?.current?.id ?? meta.entity_id ?? meta.id);
     if (!Number.isSafeInteger(dealId) || dealId <= 0) return json({ ok: true, skipped: 'no_deal_id' });
 
+    // Only a deal that actually MOVED INTO the Committed stage (or was created there) creates a project.
+    // Pipedrive's `previous` holds the fields that changed, so edits that leave the stage alone (notes,
+    // owner, our own link-field write-back) are skipped before any lookups. No `previous` at all means
+    // we can't tell (e.g. a manual re-fire), so that falls through to the checks below.
+    if (body?.previous && typeof body.previous === 'object' && meta.action !== 'create') {
+      const prevStage = body.previous.stage_id;
+      const curStage = body?.data?.stage_id ?? body?.current?.stage_id;
+      if (prevStage === undefined || (curStage !== undefined && Number(prevStage) === Number(curStage))) {
+        return json({ ok: true, skipped: 'stage_not_changed' });
+      }
+    }
+
     const cfgRows = await rest(`pipedrive_autocreate_config?product_type=eq.${PRODUCT}&enabled=eq.true&select=pipeline_id,stage_id&limit=1`);
     if (!cfgRows?.length) return json({ ok: true, skipped: 'autocreate_not_configured' });
     const cfg = cfgRows[0];
@@ -189,8 +202,16 @@ serve(async (req) => {
     }
 
     // Repeat change events on an already-created deal: skip the Pipedrive/GolfStatus lookups.
-    const existing = await rest(`projects?pipedrive_flags_deal_id=eq.${dealId}&select=id&limit=1`);
+    // A project already linked to this deal (as its flags OR hole-sign deal) means never create another,
+    // e.g. when a deal is dragged back into Committed by accident.
+    const existing = await rest(`projects?or=(pipedrive_flags_deal_id.eq.${dealId},pipedrive_hs_deal_id.eq.${dealId})&select=id&limit=1`);
     if (existing?.length) return json({ ok: true, projectId: existing[0].id, created: false });
+
+    // The deal's own "Design Studio Project Link" field is set -> a project was made for it already
+    // (even if the DB link is gone), so don't make a second one.
+    if (PROJECT_LINK_FIELD && clean(deal.custom_fields?.[PROJECT_LINK_FIELD])) {
+      return json({ ok: true, skipped: 'deal_already_has_project_link' });
+    }
 
     const info = await buildCustomerInfoFromDeal(deal);
     const rows = await rest('rpc/pipedrive_autocreate_project', {
