@@ -104,3 +104,13 @@ Once a customer submits a design, they can't edit it until staff reviews it. Fla
 - Color inputs always paired: `<input type="color">` swatch + hex text input + optional eyedropper button (see `eyedropperBtn()` in `hs/state.js`)
 - Dirty state tracking: `markDirty()` / `markClean()` gates the save button UI
 - No TypeScript. No build-time type checking.
+
+## Production data safety
+
+The hosted Supabase project (ref `snyxsulasabbpkmzcqvx`) holds real customer data. **Never run a command that can wipe, truncate, or overwrite it.**
+
+- The CLI is intentionally **unlinked** (`supabase unlink`). Do not run `supabase link` on your own initiative; only relink if the user explicitly asks to push to prod.
+- Never run `supabase db reset --linked`, `supabase db push --include-all`, `supabase db remote ...`, or any `--db-url`/`--linked` command that targets the hosted DB without the user explicitly asking for that exact action in the current message.
+- `supabase db reset` (no flags) is local-only and OK, but it wipes local data — say so before running it.
+- Migrations must not contain `DROP TABLE`, `TRUNCATE`, `DROP SCHEMA`, or an unqualified `DELETE FROM`. Anything destructive needs explicit user approval and a backup check first.
+- Never use the Supabase MCP plugin or edge-function/SQL tooling to run write/DDL statements against prod without explicit user approval.
