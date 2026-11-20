@@ -1882,11 +1882,46 @@ async function prefillContactFromSession() {
 // wins — it's newer and may hold logo files the server never saw. Otherwise the
 // form is rebuilt from the saved intake and dropped on Step 3. Logos are only
 // uploaded at final submit, so they have to be re-added on a different device.
+// Fills only what this browser's draft left blank from the saved intake. The draft can be the
+// older copy (e.g. step 3 was completed in another window/device, or never rendered before the tab
+// closed), so it must not silently shadow the server — but anything the customer has entered
+// locally is kept. Skipped when the draft is for a different kind of order (new vs. reuse).
+function fillBlanksFromRow(row) {
+  if (O.designSource !== (row.design_source === 'repeat' ? 'repeat' : 'new')) return;
+  const blank = v => v === '' || v == null;
+  const fillText = (key, val) => { if (blank(O[key]) && !blank(val)) O[key] = val; };
+  fillText('flagStyle', row.flag_style);
+  fillText('designNotes', row.design_notes);
+  fillText('frontDesignNotes', row.front_design_notes);
+  fillText('backDesignNotes', row.back_design_notes);
+  fillText('repeatEventName', row.repeat_event_name);
+  fillText('eventName', row.event_name);
+  fillText('courseName', row.course_name);
+  if (!O.flagQty && row.flag_qty) {
+    O.flagQty = row.flag_qty;
+    O.flagQtyCustom = ![9, 18, 27, 36].includes(row.flag_qty);
+  }
+  // Colors: only replace the untouched White/Black defaults a fresh form starts with.
+  const c = O.flagColors || {};
+  const untouched = c['zone-primary']?.hex === '#FFFFFF' && c['zone-secondary']?.hex === '#111110' && Object.keys(c).length === 2;
+  const zones = (row.flag_colors?.zones || []).filter(z => z.zone && z.zone !== 'zone-border');
+  if (untouched && zones.length) {
+    const colors = {};
+    zones.forEach(z => { colors[z.zone] = { hex: z.hex, name: z.name }; });
+    O.flagColors = colors;
+  }
+}
+
 async function resumeOrder(projectId) {
-  if (O.projectId === projectId) return;
+  const sameDraft = O.projectId === projectId;
   let row = null;
   try { row = await loadOrderIntakeForResume(projectId); }
   catch (err) { console.warn('Could not load order to resume', err); }
+  if (sameDraft) {
+    // This browser already has a draft for the project: keep it, but backfill blanks from the server.
+    if (row) fillBlanksFromRow(row);
+    return;
+  }
   if (!row) {
     O.resumeNotice = 'We couldn’t find an order in progress for that link. It may have already been submitted. Start a new order below, or email design@gsds.space and we’ll help.';
     return;

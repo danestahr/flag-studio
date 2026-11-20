@@ -115,3 +115,37 @@ test('dev-only reset button is not shown to customers', async ({ page }) => {
   await startOnStep1(page);
   await expect(page.locator('#devResetBtn')).toBeHidden();
 });
+
+test('resume link in a window whose draft is stale backfills step 3 from the server', async ({ page }) => {
+  await startOnStep1(page);
+  await completeSteps1and2(page);
+  await page.evaluate(() => { window.selectFlagStyle('plain'); window.selectQty(18); });
+  await page.fill('#f-notes', 'Server has this');
+  await page.getByRole('button', { name: /Continue/ }).click();      // saved to the server
+  const { projectId } = await readDraft(page);
+  await expect.poll(async () => (await serverIntake(page.request, projectId))?.design_notes).toBe('Server has this');
+
+  // Make this browser's draft look like the customer's stale one: same project, step 3 blank.
+  // (Planted via an init script: the old page's pagehide autosave would otherwise overwrite it.)
+  const stale = { ...(await readDraft(page)), step: 3, flagStyle: '', flagQty: 0, designNotes: '' };
+  await page.addInitScript(([k, d]) => localStorage.setItem(k, JSON.stringify(d)), [DRAFT_KEY, stale]);
+  await page.goto(`/order.html?resume=${projectId}`);
+  await expect(page.locator('#f-notes')).toHaveValue('Server has this');
+  await expect(page.locator('.qty-btn.active')).toHaveText('18');
+  await expect(page.locator('.flag-selected-preview')).toBeVisible();
+});
+
+test('resume backfill never overwrites what the draft already has', async ({ page }) => {
+  await startOnStep1(page);
+  await completeSteps1and2(page);
+  await page.evaluate(() => { window.selectFlagStyle('plain'); window.selectQty(18); });
+  await page.fill('#f-notes', 'Server version');
+  await page.getByRole('button', { name: /Continue/ }).click();
+  const { projectId } = await readDraft(page);
+  await expect.poll(async () => (await serverIntake(page.request, projectId))?.design_notes).toBe('Server version');
+  const local = { ...(await readDraft(page)), step: 3, flagQty: 36, designNotes: 'Local version' };
+  await page.addInitScript(([k, d]) => localStorage.setItem(k, JSON.stringify(d)), [DRAFT_KEY, local]);
+  await page.goto(`/order.html?resume=${projectId}`);
+  await expect(page.locator('#f-notes')).toHaveValue('Local version');
+  await expect(page.locator('.qty-btn.active')).toHaveText('36');
+});
