@@ -313,7 +313,9 @@ test.describe('order form', () => {
     await page.addInitScript(([key, dr]) => {
       localStorage.setItem(key, JSON.stringify({
         step: dr.step, ackBeta: true, eventName: 'Date Step Test', courseName: 'Test GC', eventDate: '', country: 'US',
-        contactName: 'A B', contactEmail: 'a@example.com', addressLine1: '1 Main St', city: 'Austin', stateProvince: 'TX', postalCode: '78701', ...dr,
+        contactName: 'A B', contactEmail: 'a@example.com', addressLine1: '1 Main St', city: 'Austin', stateProvince: 'TX', postalCode: '78701',
+        // Valid Step 3 too: orderSubmit re-validates Steps 1-3 before the review-step acknowledgments.
+        flagStyle: 'plain', flagQty: 18, designNotes: 'Test design', ...dr,
       }));
     }, [DRAFT_KEY, { ...draft, step }]);
     await page.goto('/order.html', { waitUntil: 'domcontentloaded' });

@@ -1539,9 +1539,11 @@ window.orderNext = async function () {
     return;
   }
   O.errors = {};
-  // Completing Step 2 creates the project so staff sees the order right away;
-  // later passes through Steps 1-2 just update it.
-  if (O.step === 2 || (O.step === 1 && O.projectId)) await saveStartedOrder();
+  // Completing Step 2 creates the project so staff sees the order right away. After that, every
+  // step save pushes the flag style/colors/qty/notes to the server too — otherwise the "continue
+  // your order" email link (and the design studio) only ever sees what was entered by Step 2.
+  // saveStartedOrder is best-effort, and re-creates the project if the Step 2 save had failed.
+  if (O.step >= 2 || (O.step === 1 && O.projectId)) await saveStartedOrder();
   if (O.returnToReview) {
     O.returnToReview = false;
     O.step = 5;
@@ -1558,6 +1560,8 @@ window.orderBack = function () {
     return;
   }
   O.errors = {};
+  // Don't lose what was entered on the step being left (fire-and-forget; never blocks navigation).
+  if (O.projectId) saveStartedOrder();
   O.step -= 1;
   render();
   window.scrollTo(0, 0);
@@ -1712,8 +1716,9 @@ window.toggleAck = function (which) {
 };
 
 window.selectZoneColor = function (zoneId, hex, name) {
-  const cur = O.flagColors[zoneId];
-  O.flagColors[zoneId] = cur?.hex === hex ? null : { hex, name };
+  // Re-clicking the selected swatch keeps it (just closes the picker) — it used to clear the zone,
+  // which then silently fell back to the studio's default color.
+  O.flagColors[zoneId] = { hex, name };
   O.colorPickerOpen[zoneId] = false;
   render();
 };
@@ -1934,6 +1939,16 @@ async function resumeOrder(projectId) {
 // ── Init ───────────────────────────────────────────────────
 async function init() {
   loadDraft();
+  // Inputs update O in their own listeners (target phase) before the event bubbles here, so this
+  // captures typed text / custom quantity immediately instead of only at the next render().
+  const app = document.getElementById('orderApp');
+  if (app) {
+    app.addEventListener('input', () => { if (!O.submitted) saveDraft(); });
+    app.addEventListener('change', () => { if (!O.submitted) saveDraft(); });
+  }
+  window.addEventListener('pagehide', () => { if (!O.submitted) saveDraft(); });
+  // The reset button wipes the whole draft — only for developers (?dev=1), never customers.
+  if (new URLSearchParams(window.location.search).has('dev')) document.getElementById('devResetBtn')?.removeAttribute('hidden');
   await loadLogoFilesFromDb();
   const resumeId = new URLSearchParams(window.location.search).get('resume');
   if (resumeId && /^[0-9a-f-]{36}$/i.test(resumeId)) await resumeOrder(resumeId);
