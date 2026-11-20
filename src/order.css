@@ -50,6 +50,7 @@ header { background:var(--chrome-bg); padding:0 2.5rem; height:80px; display:fle
 /* Dev-only reset button (order.html) — icon-only, red to flag it as a dev tool */
 .dev-reset-btn { border-color:#c00; color:#c00; background:#fff; }
 .dev-reset-btn:hover { border-color:#a00; }
+.dev-reset-btn[hidden] { display:none; }
 
 /* Buttons */
 .btn { display:inline-flex; align-items:center; gap:6px; padding:0 14px; height:34px; border-radius:8px; border:1.5px solid var(--gray-200); background:var(--white); font-family:inherit; font-size:13px; font-weight:500; color:var(--black); cursor:pointer; transition:border-color .15s, background .15s; }
