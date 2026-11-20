@@ -1500,6 +1500,32 @@ async function persistIntake({ finalize = false } = {}) {
   }
 }
 
+// Debounced autosave of the intake to the server while the customer edits. Without it, step 3 picks
+// only reach the database on Continue/Back, so leaving mid-step (or opening the email link on another
+// device) loses them. Only ever scheduled from a real user edit — never from page load — so merely
+// opening a resume link can't overwrite saved data with a stale local draft. Best-effort, serialized.
+let serverSaveTimer = null, serverSaving = false, serverSavePending = false;
+// delay: discrete picks (clicks) save almost at once; typing waits briefly for a pause between keystrokes.
+function scheduleServerSave(delay = 500) {
+  if (!O.projectId || O.submitted || O.submitting || O.betaStep || O.syncStep) return;
+  clearTimeout(serverSaveTimer);
+  serverSaveTimer = setTimeout(runServerSave, delay);
+}
+async function runServerSave() {
+  serverSaveTimer = null;
+  if (serverSaving) { serverSavePending = true; return; }
+  if (!O.projectId || O.submitted || O.submitting) return;
+  // The row needs valid contact/shipping/date fields (an empty date is rejected), so skip a partial edit of those.
+  if (Object.keys(validate(1)).length || Object.keys(validate(2)).length) return;
+  serverSaving = true;
+  try { await persistIntake(); }
+  catch (err) { console.warn('Autosave to server failed', err); }
+  finally {
+    serverSaving = false;
+    if (serverSavePending) { serverSavePending = false; scheduleServerSave(); }
+  }
+}
+
 // Best-effort: a failure here must never block the customer from moving on —
 // the final submit creates/updates the project regardless.
 async function saveStartedOrder() {
@@ -1598,6 +1624,7 @@ window.orderSubmit = async function () {
   }
   O.errors = {};
   O.submitting = true;
+  clearTimeout(serverSaveTimer);
   render();
 
   try {
@@ -1978,10 +2005,20 @@ async function init() {
   // captures typed text / custom quantity immediately instead of only at the next render().
   const app = document.getElementById('orderApp');
   if (app) {
-    app.addEventListener('input', () => { if (!O.submitted) saveDraft(); });
-    app.addEventListener('change', () => { if (!O.submitted) saveDraft(); });
+    app.addEventListener('input', () => { if (!O.submitted) { saveDraft(); scheduleServerSave(); } });
+    app.addEventListener('change', () => { if (!O.submitted) { saveDraft(); scheduleServerSave(); } });
+    // Picks (style, color, quantity, setup) are button clicks with inline handlers that mutate O first.
+    app.addEventListener('click', () => scheduleServerSave(100));
   }
   window.addEventListener('pagehide', () => { if (!O.submitted) saveDraft(); });
+  // Switching tabs / minimizing / app-switching on a phone: flush any pending edit to the server now,
+  // since that is often the last chance before the tab is closed.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden' || !serverSaveTimer) return;
+    clearTimeout(serverSaveTimer);
+    serverSaveTimer = null;
+    runServerSave();
+  });
   // The reset button wipes the whole draft — only for developers (?dev=1), never customers.
   if (new URLSearchParams(window.location.search).has('dev')) document.getElementById('devResetBtn')?.removeAttribute('hidden');
   await loadLogoFilesFromDb();

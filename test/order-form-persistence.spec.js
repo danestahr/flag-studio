@@ -149,3 +149,36 @@ test('resume backfill never overwrites what the draft already has', async ({ pag
   await expect(page.locator('#f-notes')).toHaveValue('Local version');
   await expect(page.locator('.qty-btn.active')).toHaveText('36');
 });
+
+test('step 3 picks reach the server on their own, without clicking Continue', async ({ page, request }) => {
+  await startOnStep1(page);
+  await completeSteps1and2(page);
+  // The project is created asynchronously when Step 2's Continue is saved; wait for its id.
+  await expect.poll(async () => (await readDraft(page)).projectId).toBeTruthy();
+  const { projectId } = await readDraft(page);
+  await page.evaluate(() => { window.selectFlagStyle('plain'); window.selectQty(27); });
+  await page.fill('#f-notes', 'Autosaved without Continue');
+  // No Continue / Back: the debounced autosave alone must put these on the server.
+  await expect.poll(async () => (await serverIntake(request, projectId))?.design_notes, { timeout: 3000 }).toBe('Autosaved without Continue');   // well under the old 1.5s+ wait
+  const row = await serverIntake(request, projectId);
+  expect(row.flag_style).toBe('plain');
+  expect(row.flag_qty).toBe(27);
+});
+
+test('merely opening a resume link does not write to the server', async ({ page, browser, request }) => {
+  await startOnStep1(page);
+  await completeSteps1and2(page);
+  await page.evaluate(() => { window.selectFlagStyle('plain'); window.selectQty(18); });
+  await page.getByRole('button', { name: /Continue/ }).click();
+  const { projectId } = await readDraft(page);
+  await expect.poll(async () => (await serverIntake(request, projectId))?.flag_qty).toBe(18);
+
+  // A different device with a stale draft for the same project must not clobber the server on load.
+  const ctx = await browser.newContext();
+  const p2 = await ctx.newPage();
+  await p2.addInitScript(([k, d]) => localStorage.setItem(k, JSON.stringify(d)), [DRAFT_KEY, { ...(await readDraft(page)), step: 3, flagQty: 36, flagStyle: '', designNotes: '' }]);
+  await p2.goto(`/order.html?resume=${projectId}`);
+  await p2.waitForTimeout(3500);   // longer than the autosave debounce
+  expect((await serverIntake(request, projectId)).flag_qty).toBe(18);
+  await ctx.close();
+});
