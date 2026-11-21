@@ -1,9 +1,14 @@
 // Pipedrive deal webhook -> auto-create a Studio project when a deal enters the configured
 // "Committed" stage (pipedrive_autocreate_config).
 //
-// Setup (once): in Pipedrive register a webhook (Tools > Webhooks, or POST /api/v1/webhooks)
-//   event: updated.deal   URL: <project>/functions/v1/pipedrive-webhook
+// Setup (once): in Pipedrive register TWO webhooks (Tools > Webhooks, or POST /api/v1/webhooks),
+// both pointing at the same URL with the same auth:
+//   event: updated.deal  (Change) - a deal dragged/moved into Committed
+//   event: added.deal    (Create) - a deal created already in Committed (e.g. copied from another
+//                                    pipeline), which fires no Change event
+//   URL: <project>/functions/v1/pipedrive-webhook
 //   HTTP auth: username `pipedrive`, password <PIPEDRIVE_WEBHOOK_TOKEN>  (sent as a Basic Authorization header)
+// Rotating PIPEDRIVE_WEBHOOK_TOKEN means updating the password on both webhooks.
 // The legacy `?token=` query form is still accepted (and logged) so an existing webhook keeps working
 // until it is re-registered; delete that branch afterwards - URLs end up in logs, headers don't.
 // Secrets: PIPEDRIVE_API_TOKEN, PIPEDRIVE_DOMAIN (shared with `pipedrive`), PIPEDRIVE_WEBHOOK_TOKEN.
